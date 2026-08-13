@@ -146,7 +146,13 @@ the honest version of the guarantee, and it is the one Pharos makes.
 make -C test/host                # 4364 checks, 0 failures
 ```
 
-**Firmware**, with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or newer:
+**Prebuilt firmware** is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases) — a single flashable image built and audited in CI:
+
+```bash
+esptool.py --chip esp32s3 write_flash 0x0 pharos-v1.2.0-esp32s3.bin
+```
+
+**Build it yourself**, with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or newer:
 
 ```bash
 idf.py set-target esp32s3

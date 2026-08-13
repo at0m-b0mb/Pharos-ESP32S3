@@ -1,0 +1,111 @@
+name: release
+
+# Builds the ESP32-S3 firmware on every version tag and attaches a flashable
+# binary to the GitHub release. The binary is produced by the same ESP-IDF the
+# CI build uses, and the transmit-fence and lens-linkage audits run against the
+# linked ELF before anything is published - so a release binary is one that
+# provably cannot transmit and provably contains every lens.
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach (e.g. v1.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build + audit firmware
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - name: Resolve tag
+        id: vars
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.vars.outputs.tag }}
+
+      - name: Build for ESP32-S3
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32s3
+          path: '.'
+
+      - name: Audit the linked ELF (fence + lenses)
+        run: |
+          elf=$(find build -name 'pharos.elf' | head -n1)
+          test -n "$elf" || { echo "no pharos.elf produced"; exit 1; }
+          ./tools/check_tx_fence.sh "$elf"
+          ./tools/check_lenses.sh "$elf"
+
+      - name: Assemble a flashable bundle
+        run: |
+          set -eo pipefail
+          TAG="${{ steps.vars.outputs.tag }}"
+          # Pin to esptool 4.x: the 5.x line changed merge_bin's CLI and default
+          # output format, and this recipe targets the 4.x interface.
+          python -m pip install --quiet "esptool~=4.8"
+          mkdir -p dist
+
+          # Merge bootloader + partition table + app into one image that flashes
+          # at offset 0x0. build/flash_args holds the exact offsets idf.py used.
+          ( cd build && python -m esptool --chip esp32s3 merge_bin \
+              -o "pharos-${TAG}-esp32s3.bin" @flash_args )
+          cp "build/pharos-${TAG}-esp32s3.bin" dist/
+
+          # Also keep the component images, for anyone flashing at offsets.
+          cp build/bootloader/bootloader.bin dist/
+          cp build/partition_table/partition-table.bin dist/
+          cp build/pharos.bin "dist/pharos-app.bin"
+
+          cat > dist/FLASH.md <<EOF
+          # Flashing Pharos ${TAG} to a Waveshare ESP32-S3-Touch-AMOLED-1.75C
+
+          Single-file image (simplest). Install esptool (\`pip install esptool\`),
+          put the board in download mode, then:
+
+              esptool.py --chip esp32s3 write_flash 0x0 pharos-${TAG}-esp32s3.bin
+
+          Component images (if you prefer explicit offsets):
+
+              esptool.py --chip esp32s3 write_flash \\
+                0x0     bootloader.bin \\
+                0x8000  partition-table.bin \\
+                0x10000 pharos-app.bin
+
+          Notes
+          - This build runs with a SIMULATED board (CONFIG_PHAROS_HAS_VENDOR_BSP=n),
+            so the panel is not driven yet - watch the serial console at 115200.
+            Real display bring-up is milestone M1. See docs/HARDWARE.md.
+          - The transmit fence and lens linkage were audited against this exact
+            ELF in CI before it was attached. It cannot transmit; it contains
+            every lens.
+          EOF
+
+          sha256sum dist/* > "dist/SHA256SUMS.txt"
+          ( cd dist && zip -q "pharos-${TAG}-esp32s3.zip" \
+              "pharos-${TAG}-esp32s3.bin" bootloader.bin partition-table.bin \
+              pharos-app.bin FLASH.md SHA256SUMS.txt )
+          ls -l dist
+
+      - name: Attach binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          # The release is created by the maintainer; here we only upload the
+          # built firmware onto it (idempotent - --clobber replaces on re-run).
+          gh release upload "$TAG" \
+            "dist/pharos-${TAG}-esp32s3.bin" \
+            "dist/pharos-${TAG}-esp32s3.zip" \
+            "dist/SHA256SUMS.txt" \
+            --clobber --repo "${{ github.repository }}"
