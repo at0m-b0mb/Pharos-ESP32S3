@@ -1,0 +1,13 @@
+# Pharos partition table for 16MB flash.
+#
+# The "evidence" partition is where session reports and logs are written, kept
+# separate from the app and NVS so a factory reset of settings never touches
+# collected evidence, and so an evidence wipe never risks the firmware. It is
+# the default store because the 1.75C is not confirmed to expose a microSD slot
+# (see components/pharos_bsp/include/board_pins.h).
+#
+# Name       Type  SubType   Offset     Size
+nvs,         data, nvs,      0x9000,    0x6000
+phy_init,    data, phy,      0xf000,    0x1000
+factory,     app,  factory,  0x10000,   0x300000
+evidence,    data, spiffs,   0x310000,  0xC00000

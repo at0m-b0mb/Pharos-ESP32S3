@@ -1,0 +1,59 @@
+<svg width="466" height="466" viewBox="0 0 466 466" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pharos boot splash">
+  <defs>
+    <radialGradient id="bs_field" cx="50%" cy="40%" r="75%">
+      <stop offset="0%" stop-color="#0E2A3C"/>
+      <stop offset="60%" stop-color="#081521"/>
+      <stop offset="100%" stop-color="#03080D"/>
+    </radialGradient>
+    <linearGradient id="bs_tower" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#EAF6FA"/>
+      <stop offset="100%" stop-color="#9FC2D0"/>
+    </linearGradient>
+    <radialGradient id="bs_lamp" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFF0C8"/>
+      <stop offset="45%" stop-color="#FFC24B"/>
+      <stop offset="100%" stop-color="#F09A1A"/>
+    </radialGradient>
+    <filter id="bs_glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- the actual round panel: nothing outside r=233 -->
+  <circle cx="233" cy="233" r="233" fill="url(#bs_field)"/>
+
+  <!-- receive arcs -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M 145 150 A 130 130 0 0 1 321 150" stroke="#1FB6C9" stroke-width="6" opacity="0.85"/>
+    <path d="M 122 176 A 162 162 0 0 1 344 176" stroke="#1FB6C9" stroke-width="4.5" opacity="0.5"/>
+    <path d="M 100 202 A 194 194 0 0 1 366 202" stroke="#1FB6C9" stroke-width="3" opacity="0.28"/>
+  </g>
+
+  <!-- tower -->
+  <g transform="translate(0,-6)">
+    <path d="M 210 296 L 218 196 L 248 196 L 256 296 Z" fill="url(#bs_tower)"/>
+    <path d="M 214 266 L 252 266 L 254 286 L 212 286 Z" fill="#C6392E" opacity="0.92"/>
+    <rect x="212" y="188" width="42" height="11" rx="3" fill="#8FB2C0"/>
+    <rect x="220" y="168" width="26" height="22" rx="4" fill="#0A1C2B" stroke="#8FB2C0" stroke-width="2"/>
+    <circle cx="233" cy="180" r="10" fill="url(#bs_lamp)" filter="url(#bs_glow)"/>
+    <path d="M 221 168 L 233 154 L 245 168 Z" fill="#8FB2C0"/>
+    <path d="M 202 296 L 264 296 L 268 310 L 198 310 Z" fill="#7FA0AE"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="233" y="356" text-anchor="middle"
+        font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace"
+        font-size="46" font-weight="700" letter-spacing="8" fill="#EAF6FA">PHAROS</text>
+  <text x="233" y="384" text-anchor="middle"
+        font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace"
+        font-size="15" letter-spacing="4" fill="#5F93A6">DEFENSIVE RF OBSERVATORY</text>
+
+  <!-- receive-only assurance, on the splash where the operator sees it first.
+       Kept short so it stays inside the round safe area at this radius. -->
+  <g transform="translate(233,408)">
+    <circle cx="-82" cy="-4" r="4.5" fill="#3DDC84"/>
+    <text x="-70" y="1" font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace"
+          font-size="16" letter-spacing="2" fill="#7FA6B5">receive-only &#183; fence clean</text>
+  </g>
+</svg>

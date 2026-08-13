@@ -1,0 +1,20 @@
+# ESP-IDF build output
+/build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Host test artifacts
+/test/host/test_pharos
+/test/host/*.dSYM/
+*.o
+*.gcda
+*.gcno
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+compile_commands.json

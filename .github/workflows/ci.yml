@@ -1,0 +1,54 @@
+name: ci
+
+# Three gates, cheapest first. The host tests and the fence audit need no
+# ESP-IDF and run in seconds; the firmware build is last because it is slow.
+# A red fence fails the whole run - that is the point of the fence.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: host tests (no board)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the pure-C test suite
+        run: make -C test/host CC=gcc
+      - name: Fail if any check failed
+        run: |
+          out=$(make -C test/host CC=gcc 2>&1)
+          echo "$out"
+          echo "$out" | grep -qE '0 failures' || { echo "host tests reported failures"; exit 1; }
+
+  fence:
+    name: transmit fence audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit the receive-only fence
+        run: ./tools/check_tx_fence.sh
+
+  firmware:
+    name: esp-idf build (${{ matrix.idf }})
+    runs-on: ubuntu-latest
+    needs: [ host-tests, fence ]
+    strategy:
+      fail-fast: false
+      matrix:
+        idf: [ "v5.5", "release-v6.0" ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for ESP32-S3
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ matrix.idf }}
+          target: esp32s3
+          path: '.'
+      - name: Re-audit the linked ELF
+        run: |
+          elf=$(find build -name 'pharos.elf' | head -n1 || true)
+          if [ -n "$elf" ]; then ./tools/check_tx_fence.sh "$elf"; fi

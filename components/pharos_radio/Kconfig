@@ -1,0 +1,31 @@
+# Pharos radio - build-time posture
+#
+# These defaults are the transmit fence's mechanism 3 of 4: NimBLE is built
+# observer-only, so the advertising and connection code that a "spam" or
+# "beacon" tool would need is not in the image to be reached.
+#
+# sdkconfig.defaults sets the matching NimBLE options:
+#   CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+#   CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+#   CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+#   CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+
+menu "Pharos radio"
+
+config PHAROS_ENFORCE_RX_ONLY
+    bool "Enforce receive-only transmit fence"
+    default y
+    help
+        Keep this on. It is the reason the project exists. With it on, the
+        build links the --wrap transmit traps and the self-audit lens verifies
+        the fence at boot. Turning it off is not supported and CI rejects it.
+
+config PHAROS_REGION_DEFAULT
+    int "Default regulatory region (0=World 1=FCC 2=ETSI 3=Japan)"
+    default 0
+    range 0 3
+    help
+        The channel plan used until the operator chooses a region in Settings.
+        World (1-13) is the safe default.
+
+endmenu

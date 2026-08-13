@@ -1,0 +1,45 @@
+#ifndef PHAROS_TEST_SUPPORT_H
+#define PHAROS_TEST_SUPPORT_H
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+extern unsigned g_checks, g_fails;
+void banner(const char *s);
+
+#define CHECK(cond, fmt, ...)                                                     \
+    do {                                                                          \
+        g_checks++;                                                               \
+        if (!(cond)) {                                                            \
+            g_fails++;                                                            \
+            printf("  FAIL %s:%d  " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+        }                                                                         \
+    } while (0)
+
+#define CHECK_EQ(a, b) CHECK((long)(a) == (long)(b), "%ld != %ld", (long)(a), (long)(b))
+#define CHECK_NEAR(a, b, tol) \
+    CHECK(fabs((double)(a) - (double)(b)) <= (tol), "%g vs %g", (double)(a), (double)(b))
+
+/* Suites defined in test_engines.c */
+void test_census(void);
+void test_twin(void);
+void test_report(void);
+void test_dial(void);
+
+/* Suites defined in test_privacy.c */
+void test_probe_classify(void);
+void test_probe_grading(void);
+void test_power(void);
+
+/* Suite defined in test_region.c */
+void test_region(void);
+
+/* Suites defined in test_range.c */
+void test_range_determinism(void);
+void test_range_flood(void);
+void test_range_calm_and_roaming(void);
+void test_range_probe_leak(void);
+void test_range_vocabulary(void);
+
+#endif /* PHAROS_TEST_SUPPORT_H */

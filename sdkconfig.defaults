@@ -1,0 +1,44 @@
+# Pharos - build defaults for the Waveshare ESP32-S3-Touch-AMOLED-1.75C
+#
+# The BLE lines are mechanism 3 of 4 of the transmit fence: NimBLE is built
+# observer-only, so the advertising/connection code a "spam" tool would need is
+# not in the image. Do not enable the broadcaster or peripheral roles.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- ESP32-S3R8: 8MB octal PSRAM, 16MB flash ---
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- CPU / performance ---
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+
+# --- Wi-Fi: receive path only. We never start an AP or transmit. ---
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_ESP_WIFI_NVS_ENABLED=y
+
+# --- BLE: observer only (transmit fence, mechanism 3) ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+
+# --- LVGL 9: the round HUD toolkit ---
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_MEM_CUSTOM=y
+
+# --- Pharos ---
+CONFIG_PHAROS_ENFORCE_RX_ONLY=y
+CONFIG_PHAROS_REGION_DEFAULT=0
+
+# --- Log ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

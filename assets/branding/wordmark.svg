@@ -1,0 +1,55 @@
+<svg width="1100" height="320" viewBox="0 0 1100 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pharos wordmark">
+  <defs>
+    <linearGradient id="wm_bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0A1C2B"/>
+      <stop offset="100%" stop-color="#060F18"/>
+    </linearGradient>
+    <linearGradient id="wm_text" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#EAF6FA"/>
+      <stop offset="100%" stop-color="#A9CEDA"/>
+    </linearGradient>
+    <radialGradient id="wm_lamp" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFE7A8"/>
+      <stop offset="50%" stop-color="#FFC24B"/>
+      <stop offset="100%" stop-color="#F09A1A"/>
+    </radialGradient>
+    <filter id="wm_glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1100" height="320" rx="28" fill="url(#wm_bg)"/>
+
+  <!-- compact mark on the left -->
+  <g transform="translate(160,160)">
+    <circle r="118" fill="#0E2A3C" stroke="#12384B" stroke-width="3"/>
+    <g fill="none" stroke-linecap="round">
+      <path d="M -70 -6 A 70 70 0 0 1 70 -6" stroke="#1FB6C9" stroke-width="6" opacity="0.85"/>
+      <path d="M -88 12 A 88 88 0 0 1 88 12" stroke="#1FB6C9" stroke-width="4" opacity="0.5"/>
+      <path d="M -104 30 A 104 104 0 0 1 104 30" stroke="#1FB6C9" stroke-width="2.6" opacity="0.28"/>
+    </g>
+    <g transform="translate(0,10)">
+      <path d="M -22 60 L -15 -34 L 15 -34 L 22 60 Z" fill="#DCEBF1"/>
+      <path d="M -18 34 L 18 34 L 20 52 L -20 52 Z" fill="#C6392E" opacity="0.9"/>
+      <rect x="-16" y="-42" width="32" height="10" rx="2.5" fill="#8FB2C0"/>
+      <rect x="-11" y="-60" width="22" height="20" rx="3" fill="#0A1C2B" stroke="#8FB2C0" stroke-width="1.6"/>
+      <circle cx="0" cy="-50" r="9" fill="url(#wm_lamp)" filter="url(#wm_glow)"/>
+      <path d="M -11 -60 L 0 -72 L 11 -60 Z" fill="#8FB2C0"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="330" y="182" font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace"
+        font-size="120" font-weight="700" letter-spacing="6" fill="url(#wm_text)">PHAROS</text>
+  <!-- the O rendered as a small lamp beacon accent -->
+  <circle cx="742" cy="140" r="10" fill="none" stroke="#1FB6C9" stroke-width="3" opacity="0.7"/>
+
+  <text x="334" y="236" font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace"
+        font-size="30" letter-spacing="7" fill="#5F93A6">DEFENSIVE&#160;&#160;RF&#160;&#160;OBSERVATORY</text>
+  <g transform="translate(336,262)">
+    <circle cx="6" cy="6" r="5" fill="#3DDC84"/>
+    <text x="22" y="14" font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace"
+          font-size="22" letter-spacing="3" fill="#7FA6B5">receive-only &#183; never transmits</text>
+  </g>
+</svg>
