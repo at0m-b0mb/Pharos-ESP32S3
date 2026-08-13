@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://at0m-b0mb.github.io/Pharos-ESP32S3/"><img alt="flash from browser" src="https://img.shields.io/badge/⚡_flash-from_your_browser-1FB6C9"></a>
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
   <img alt="host checks" src="https://img.shields.io/badge/host_checks-4396_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
@@ -145,6 +146,9 @@ the honest version of the guarantee, and it is the one Pharos makes.
 make -C test/host                # 4364 checks, 0 failures
 ```
 
+> [!TIP]
+> **⚡ Flash it from your browser — no toolchain.** Open **[at0m-b0mb.github.io/Pharos-ESP32S3](https://at0m-b0mb.github.io/Pharos-ESP32S3/)** in Chrome or Edge, plug the board in over USB-C, and click Install. The page serves the same audited binary as the release and flashes over Web Serial — nothing is uploaded anywhere.
+
 **Prebuilt firmware** is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases) — a single flashable image built and audited in CI:
 
 ```bash
@@ -211,6 +215,7 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 | [docs/SAFETY.md](docs/SAFETY.md) | Legal & ethical use. Read before switching on. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Milestones M1–M6 and what is proven vs. scaffolded. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | The four rules that are the product, not style. |
+| [⚡ Web flasher](https://at0m-b0mb.github.io/Pharos-ESP32S3/) | Flash from Chrome/Edge over USB — no toolchain. |
 
 ## Status
 

@@ -47,11 +47,22 @@ ceiling-label collision and a home-screen caption overlap along the way.
   geometry, fence, firmware build) versus what is not (board bring-up M1, on-
   device LVGL M2).
 
+### Flash from your browser (new)
+
+A one-click **web installer** at
+[at0m-b0mb.github.io/Pharos-ESP32S3](https://at0m-b0mb.github.io/Pharos-ESP32S3/):
+open it in Chrome or Edge, plug the board in over USB-C, click Install. It flashes
+over Web Serial with no toolchain and nothing uploaded anywhere. A GitHub Pages
+workflow (`.github/workflows/pages.yml`) serves the *same* fence- and
+lens-audited binary the release ships — pulled from the release, never committed
+to git — so the flasher is always the latest verified image.
+
 ### Verification
 
 - **4,396 host checks**, 0 failures
 - Bounds, transmit-fence and lens-linkage audits green
 - **11 lenses**, all verified present in the linked ELF; firmware binary attached
+- Browser flasher live and serving the audited binary same-origin
 
 ## v1.2.0 — 2026-08-13
 
