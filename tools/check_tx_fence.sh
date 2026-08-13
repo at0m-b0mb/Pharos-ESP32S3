@@ -120,16 +120,22 @@ else
 fi
 
 # 6. Optional: audit a linked ELF if one was passed in.
+#
+# Note on what this can and cannot prove. With --wrap, the linker keeps the
+# ORIGINAL transmit symbol defined in the image (it is simply never called -
+# every reference was redirected to __wrap_). So the presence of
+# `esp_wifi_80211_tx` in the ELF is expected and not a breach. The meaningful
+# ELF-level check is the inverse: that our __wrap_ traps are actually linked
+# in, which proves the fence took effect at link time.
 if [ "${1:-}" != "" ] && [ -f "${1:-}" ]; then
   echo
-  echo "[6] linked ELF carries no unwrapped transmit symbol: $1"
+  echo "[6] linked ELF has the wrap traps linked in: $1"
   if command -v nm >/dev/null 2>&1; then
     for sym in "${TX_SYMBOLS[@]}"; do
-      # A defined (T/t) real symbol that is not the __real_ alias is suspicious.
-      if nm "$1" 2>/dev/null | grep -qE "\bT ${sym}$"; then
-        bad "$sym is defined in the ELF outside the wrap"
+      if nm "$1" 2>/dev/null | grep -qE "\b[Tt] __wrap_${sym}$"; then
+        ok "__wrap_${sym} present in the image"
       else
-        ok "$sym not defined unwrapped"
+        bad "__wrap_${sym} MISSING from the image - the fence did not link"
       fi
     done
   else

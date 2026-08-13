@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "main.c"
     INCLUDE_DIRS "."
     REQUIRES
+        nvs_flash
         pharos_core
         pharos_bsp
         pharos_ui

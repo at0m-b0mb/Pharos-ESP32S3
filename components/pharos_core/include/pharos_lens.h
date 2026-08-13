@@ -62,6 +62,12 @@ typedef struct pharos_lens {
     struct pharos_bus *(*ingest)(void);
 } pharos_lens_t;
 
+/* Upper bound on registered lenses. Defined here (not just in the .c) because
+ * the UI sizes its dial-order array with it. */
+#ifndef PHAROS_MAX_LENSES
+#define PHAROS_MAX_LENSES 32
+#endif
+
 /* Registration ------------------------------------------------------- */
 
 void pharos_lens_register(const pharos_lens_t *lens);

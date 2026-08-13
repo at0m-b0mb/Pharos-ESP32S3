@@ -7,7 +7,7 @@
 CONFIG_IDF_TARGET="esp32s3"
 
 # --- ESP32-S3R8: 8MB octal PSRAM, 16MB flash ---
-CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
@@ -32,8 +32,9 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 
 # --- LVGL 9: the round HUD toolkit ---
-CONFIG_LV_COLOR_DEPTH_16=y
-CONFIG_LV_MEM_CUSTOM=y
+# LVGL is configured by the managed component / lv_conf at M2; no Kconfig
+# colour-depth or allocator overrides here, to avoid unknown-symbol warnings
+# before the widget layer exists.
 
 # --- Pharos ---
 CONFIG_PHAROS_ENFORCE_RX_ONLY=y

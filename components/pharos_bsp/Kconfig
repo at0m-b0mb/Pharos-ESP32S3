@@ -1,0 +1,16 @@
+menu "Pharos board"
+
+config PHAROS_HAS_VENDOR_BSP
+    bool "Drive the real Waveshare BSP (enable at hardware bring-up)"
+    default n
+    help
+        Off by default: the firmware builds and links for ESP32-S3 with a
+        simulated board, which is what CI verifies and what lets the runtime
+        be exercised over serial before the panel is driven.
+
+        Turn this on at milestone M1, when you have the board and can confirm
+        the Waveshare component's bsp_* function names against the installed
+        version. Enabling it also requires adding the vendor component to the
+        REQUIRES list in components/pharos_bsp/CMakeLists.txt.
+
+endmenu
