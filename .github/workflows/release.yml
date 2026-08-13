@@ -54,18 +54,24 @@ jobs:
           # Pin to esptool 4.x: the 5.x line changed merge_bin's CLI and default
           # output format, and this recipe targets the 4.x interface.
           python -m pip install --quiet "esptool~=4.8"
-          mkdir -p dist
+
+          # dist/ lives at the workspace root and is owned by the runner user.
+          # build/ is created by the ESP-IDF container as root, so we must write
+          # every output INTO dist/ (absolute path) - esptool writing its merged
+          # image into the root-owned build/ is a permission error.
+          DIST="$PWD/dist"
+          mkdir -p "$DIST"
 
           # Merge bootloader + partition table + app into one image that flashes
-          # at offset 0x0. build/flash_args holds the exact offsets idf.py used.
+          # at offset 0x0. build/flash_args holds the exact offsets idf.py used;
+          # it references paths relative to build/, so run from there.
           ( cd build && python -m esptool --chip esp32s3 merge_bin \
-              -o "pharos-${TAG}-esp32s3.bin" @flash_args )
-          cp "build/pharos-${TAG}-esp32s3.bin" dist/
+              -o "$DIST/pharos-${TAG}-esp32s3.bin" @flash_args )
 
           # Also keep the component images, for anyone flashing at offsets.
-          cp build/bootloader/bootloader.bin dist/
-          cp build/partition_table/partition-table.bin dist/
-          cp build/pharos.bin "dist/pharos-app.bin"
+          cp build/bootloader/bootloader.bin "$DIST/"
+          cp build/partition_table/partition-table.bin "$DIST/"
+          cp build/pharos.bin "$DIST/pharos-app.bin"
 
           cat > dist/FLASH.md <<EOF
           # Flashing Pharos ${TAG} to a Waveshare ESP32-S3-Touch-AMOLED-1.75C
