@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Pharos · defensive RF observatory</title>
+<meta name="description" content="Flash the Pharos receive-only RF observatory firmware to a Waveshare ESP32-S3-Touch-AMOLED-1.75C, straight from your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%230a1c2b'/%3E%3Ccircle cx='16' cy='13' r='3' fill='%23ffc24b'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --void:#04090f; --field:#0b1d2b; --field2:#0e2a3c; --rim:#1e5266;
+    --cyan:#1fb6c9; --cyan-hi:#7febf6; --amber:#ffc24b; --green:#3ddc84;
+    --red:#e8503f; --text:#eaf6fa; --dim:#7fa6b5; --dimmer:#4e7a8c;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:radial-gradient(120% 90% at 50% -10%, #103046 0%, #0a1c2b 45%, #04090f 100%) fixed;
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.55; min-height:100vh;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:48px 22px 72px}
+  header{text-align:center;margin-bottom:8px}
+  .mark{width:132px;height:132px;margin:0 auto 6px;display:block;filter:drop-shadow(0 6px 24px rgba(31,182,201,.25))}
+  h1{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.14em;
+     font-size:2.5rem;margin:.1em 0 .05em}
+  .tagline{color:var(--dim);font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.22em;
+     text-transform:uppercase;font-size:.72rem;margin:0}
+  .rx{display:inline-flex;align-items:center;gap:.5em;margin-top:14px;padding:.35em .9em;
+     border:1px solid #1c4a3a;border-radius:999px;background:#0c2418;color:var(--green);
+     font-size:.82rem;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .rx .d{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+
+  .card{background:linear-gradient(180deg,#0e2a3c 0%,#0b2130 100%);
+     border:1px solid #16384c;border-radius:18px;padding:26px 24px;margin:26px 0;
+     box-shadow:0 10px 40px rgba(0,0,0,.35)}
+
+  .flash{text-align:center}
+  .flash h2{margin:.1em 0 .2em;font-size:1.25rem}
+  .flash p{color:var(--dim);margin:.2em auto 1.1em;max-width:44ch}
+  esp-web-install-button{--esp-tools-button-color:#04121b;--esp-tools-button-text-color:#eaf6fa}
+  .btn{display:inline-flex;align-items:center;gap:.6em;cursor:pointer;
+     background:linear-gradient(180deg,var(--cyan) 0%,#158193 100%);color:#04121b;
+     font-weight:700;font-size:1.02rem;border:0;border-radius:12px;padding:.85em 1.6em;
+     box-shadow:0 6px 22px rgba(31,182,201,.35);transition:transform .08s ease}
+  .btn:hover{transform:translateY(-1px)}
+  .unsupported{display:none;color:var(--amber);font-size:.9rem;margin-top:12px}
+  .browsers{color:var(--dimmer);font-size:.8rem;margin-top:14px}
+
+  .notice{border-left:3px solid var(--amber);background:#1c1608;padding:14px 16px;border-radius:10px;
+     margin:18px 0;color:#f0d9b0;font-size:.92rem}
+  .notice b{color:var(--amber)}
+  .fence{border-left:3px solid var(--green);background:#0c2418;padding:14px 16px;border-radius:10px;
+     margin:18px 0;color:#bfead2;font-size:.92rem}
+
+  h3{font-size:1.02rem;margin:0 0 .5em;letter-spacing:.02em}
+  ol{margin:.2em 0 0;padding-left:1.3em}
+  ol li{margin:.35em 0;color:var(--text)}
+  ol li span{color:var(--dim)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+  .spec{background:#0a1c28;border:1px solid #163244;border-radius:10px;padding:12px 14px}
+  .spec .k{color:var(--dimmer);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em}
+  .spec .v{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92rem}
+  code{background:#08131c;border:1px solid #163244;border-radius:6px;padding:.12em .45em;
+     font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.86em;color:var(--cyan-hi)}
+  a{color:var(--cyan)}
+  footer{text-align:center;color:var(--dimmer);font-size:.82rem;margin-top:34px}
+  .links{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin:10px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <!-- Lighthouse-that-listens mark: receive arcs converge inward. -->
+    <svg class="mark" viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="60" cy="60" r="58" fill="#0e2a3c" stroke="#12384b" stroke-width="2"/>
+      <g fill="none" stroke="#1fb6c9" stroke-linecap="round">
+        <path d="M32 40 A34 34 0 0 1 88 40" stroke-width="3.4" opacity=".9"/>
+        <path d="M25 50 A45 45 0 0 1 95 50" stroke-width="2.4" opacity=".5"/>
+      </g>
+      <g>
+        <path d="M52 92 L55 44 L65 44 L68 92 Z" fill="#dcebf1"/>
+        <path d="M54 76 L66 76 L67 86 L53 86 Z" fill="#c6392e"/>
+        <rect x="53" y="41" width="14" height="5" rx="1.5" fill="#8fb2c0"/>
+        <rect x="55" y="31" width="10" height="10" rx="2" fill="#0a1c2b" stroke="#8fb2c0" stroke-width="1.4"/>
+        <circle cx="60" cy="36" r="4.6" fill="#ffc24b"/>
+        <path d="M55 31 L60 25 L65 31 Z" fill="#8fb2c0"/>
+      </g>
+      <circle cx="60" cy="104" r="2.4" fill="#3ddc84"/>
+    </svg>
+    <h1>PHAROS</h1>
+    <p class="tagline">Defensive&nbsp;RF&nbsp;Observatory</p>
+    <div class="rx"><span class="d"></span>receive-only · it cannot transmit</div>
+  </header>
+
+  <div class="card flash">
+    <h2>Flash it from your browser</h2>
+    <p>Plug the board in over USB-C, click install, pick the serial port. No toolchain, no drivers to hunt down.</p>
+
+    <esp-web-install-button manifest="./manifest.json">
+      <button slot="activate" class="btn">⚡ Install Pharos</button>
+      <span slot="unsupported" class="unsupported">
+        Your browser can't talk to USB serial. Open this page in <b>Chrome</b> or <b>Edge</b> on a desktop.
+      </span>
+      <span slot="not-allowed" class="unsupported">
+        This page must be served over HTTPS to flash. Use the hosted link, not a local file.
+      </span>
+    </esp-web-install-button>
+
+    <div class="browsers">Needs a Chromium browser (Chrome / Edge / Opera) on desktop — the Web Serial API isn't in Safari or Firefox.</div>
+  </div>
+
+  <div class="notice">
+    <b>⚖️ Authorised use only.</b> Pharos is a defensive, <b>receive-only</b> tool — but acting on
+    what it shows you is your responsibility, and even passive monitoring is regulated in some places.
+    Use it only on networks and in engagements you own or are authorised to assess.
+    Read the <a href="https://github.com/at0m-b0mb/Pharos-ESP32S3/blob/main/docs/SAFETY.md">safety &amp; legal notes</a> first.
+  </div>
+
+  <div class="fence">
+    <b>What "receive-only" means here.</b> The firmware you're about to flash cannot transmit a Wi-Fi or
+    BLE frame — that's enforced in the build and verified against this exact binary in CI. It listens,
+    grades what it hears, and is honest about what it can't.
+  </div>
+
+  <div class="card">
+    <h3>What you need</h3>
+    <div class="grid">
+      <div class="spec"><div class="k">Board</div><div class="v">Waveshare ESP32-S3-Touch-AMOLED-1.75C</div></div>
+      <div class="spec"><div class="k">Cable</div><div class="v">USB-C (data, not charge-only)</div></div>
+      <div class="spec"><div class="k">Browser</div><div class="v">Chrome / Edge, desktop</div></div>
+      <div class="spec"><div class="k">Image</div><div class="v">single file, flashed at 0x0</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Steps</h3>
+    <ol>
+      <li>Connect the board to your computer with a USB-C data cable.</li>
+      <li>Click <b>Install Pharos</b> and choose the board's serial port. <span>(If none appears, hold BOOT while plugging in, or install the CP210x/native-USB driver for your OS.)</span></li>
+      <li>Let it erase and write — about a minute. Keep the cable in.</li>
+      <li>It reboots into Pharos. <span>Until hardware bring-up (milestone M1) the panel isn't driven yet — open a serial monitor at <code>115200</code> to watch it run.</span></li>
+    </ol>
+  </div>
+
+  <div class="notice">
+    <b>Heads-up on this build.</b> The hosted binary runs with a <b>simulated board</b>
+    (<code>CONFIG_PHAROS_HAS_VENDOR_BSP=n</code>) — the detection engines, the transmit fence and the
+    logs are all live over serial, but the AMOLED display bring-up is milestone&nbsp;M1. Nothing here has
+    been validated on physical hardware yet.
+  </div>
+
+  <footer>
+    <div class="links">
+      <a href="https://github.com/at0m-b0mb/Pharos-ESP32S3">Source</a>
+      <a href="https://github.com/at0m-b0mb/Pharos-ESP32S3/releases">Releases</a>
+      <a href="https://github.com/at0m-b0mb/Pharos-ESP32S3/blob/main/docs/HARDWARE.md">Hardware</a>
+      <a href="https://github.com/at0m-b0mb/Pharos-ESP32S3/blob/main/README.md">Docs</a>
+    </div>
+    <div>Flashing runs entirely in your browser over Web Serial — nothing is uploaded anywhere.</div>
+    <div>MIT © at0m-b0mb · a lighthouse that listens</div>
+  </footer>
+</div>
+
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+</body>
+</html>

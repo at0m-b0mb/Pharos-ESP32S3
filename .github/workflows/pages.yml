@@ -1,0 +1,69 @@
+name: pages
+
+# Publishes the browser flasher to GitHub Pages and puts the AUDITED release
+# firmware next to it (same-origin, so no CORS). Nothing binary is committed to
+# git - the workflow pulls the .bin from the release the release.yml workflow
+# already built and fence/lens-audited, and serves it under a stable path the
+# manifest points at.
+
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v1.3.0)"
+        required: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: vars
+        run: echo "tag=${{ github.event.inputs.tag || github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble the site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+          TAG="${{ steps.vars.outputs.tag }}"
+          mkdir -p _site/firmware
+
+          # The flasher page + manifest.
+          cp docs/flasher/index.html _site/index.html
+          cp docs/flasher/manifest.json _site/manifest.json
+          # A logo for the tab/card, straight from the repo's branding.
+          cp assets/branding/logo.png _site/logo.png || true
+
+          # The audited firmware, under the stable path the manifest references.
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --pattern '*-esp32s3.bin' --output _site/firmware/pharos-esp32s3.bin --clobber
+
+          # Reflect the real version in the manifest (cosmetic in the flasher UI).
+          VER="${TAG#v}"
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VER}\"/" _site/manifest.json
+
+          ls -lR _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
