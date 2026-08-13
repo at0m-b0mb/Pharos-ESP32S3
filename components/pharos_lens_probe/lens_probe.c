@@ -11,6 +11,7 @@
  */
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -27,9 +28,9 @@ static const char *TAG = "lens.probe";
 
 #define PROBE_RING 512
 
-static pharos_event_t s_slots[PROBE_RING];
+EXT_RAM_BSS_ATTR static pharos_event_t s_slots[PROBE_RING];
 static pharos_bus_t s_bus;
-static pp_engine_t s_engine;
+EXT_RAM_BSS_ATTR static pp_engine_t s_engine;
 static SemaphoreHandle_t s_lock;
 
 static bool probe_mount(void)

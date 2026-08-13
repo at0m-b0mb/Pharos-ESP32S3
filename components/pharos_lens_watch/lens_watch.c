@@ -12,6 +12,7 @@
  */
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -27,9 +28,9 @@ static const char *TAG = "lens.watch";
 
 #define WATCH_RING 1024 /* a flood is exactly when the ring matters */
 
-static pharos_event_t s_slots[WATCH_RING];
+EXT_RAM_BSS_ATTR static pharos_event_t s_slots[WATCH_RING];
 static pharos_bus_t s_bus;
-static pw_engine_t s_engine;
+EXT_RAM_BSS_ATTR static pw_engine_t s_engine;
 static pw_verdict_t s_verdict;
 static SemaphoreHandle_t s_lock;
 static bool s_camp_requested;

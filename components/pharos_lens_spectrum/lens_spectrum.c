@@ -11,6 +11,7 @@
  */
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -24,7 +25,7 @@
 #define SPEC_RING 512
 #define SPEC_HISTORY 64 /* waterfall rows */
 
-static pharos_event_t s_slots[SPEC_RING];
+EXT_RAM_BSS_ATTR static pharos_event_t s_slots[SPEC_RING];
 static pharos_bus_t s_bus;
 static SemaphoreHandle_t s_lock;
 
@@ -36,7 +37,7 @@ typedef struct {
 } spec_cell_t;
 
 static spec_cell_t s_now[PHAROS_CHAN_MAX + 1];
-static uint8_t s_waterfall[SPEC_HISTORY][PHAROS_CHAN_MAX + 1]; /* busy 0..255 */
+EXT_RAM_BSS_ATTR static uint8_t s_waterfall[SPEC_HISTORY][PHAROS_CHAN_MAX + 1]; /* busy 0..255 */
 static uint8_t s_row;
 
 static bool spectrum_mount(void)

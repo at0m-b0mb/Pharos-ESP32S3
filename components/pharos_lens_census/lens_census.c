@@ -12,6 +12,7 @@
  */
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -30,11 +31,11 @@ static const char *TAG = "lens.census";
 #define CENSUS_RING 512
 #define CENSUS_MAX_AP 64
 
-static pharos_event_t s_slots[CENSUS_RING];
+EXT_RAM_BSS_ATTR static pharos_event_t s_slots[CENSUS_RING];
 static pharos_bus_t s_bus;
 
-static pc_ap_t s_aps[CENSUS_MAX_AP];
-static pc_verdict_t s_grades[CENSUS_MAX_AP];
+EXT_RAM_BSS_ATTR static pc_ap_t s_aps[CENSUS_MAX_AP];
+EXT_RAM_BSS_ATTR static pc_verdict_t s_grades[CENSUS_MAX_AP];
 static unsigned s_n_aps;
 static SemaphoreHandle_t s_lock;
 

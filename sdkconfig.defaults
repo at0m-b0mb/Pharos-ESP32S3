@@ -10,6 +10,12 @@ CONFIG_IDF_TARGET="esp32s3"
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+# Let large lens buffers (the event rings and engine tables) live in the 8 MB
+# PSRAM instead of internal SRAM. Every lens owns a static ring + engine state,
+# and although only one runs at a time they all coexist in .bss - together far
+# too much for internal DRAM. EXT_RAM_BSS_ATTR (see the lens sources) moves them
+# to PSRAM; this option is what permits it.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_PARTITION_TABLE_CUSTOM=y

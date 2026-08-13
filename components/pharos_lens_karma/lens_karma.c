@@ -14,6 +14,7 @@
  */
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -30,9 +31,9 @@ static const char *TAG = "lens.karma";
 
 #define KARMA_RING 512
 
-static pharos_event_t s_slots[KARMA_RING];
+EXT_RAM_BSS_ATTR static pharos_event_t s_slots[KARMA_RING];
 static pharos_bus_t s_bus;
-static pk_engine_t s_engine;
+EXT_RAM_BSS_ATTR static pk_engine_t s_engine;
 static pk_verdict_t s_verdict;
 static SemaphoreHandle_t s_lock;
 
