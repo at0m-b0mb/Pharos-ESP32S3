@@ -3,10 +3,10 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES pharos_core pharos_engine pharos_radio
     PRIV_REQUIRES esp_timer
-)
 
-# Lenses register through constructor attributes, so nothing else in the
-# project references this translation unit. Force the whole archive in or the
-# linker will discard the registration.
-target_link_libraries(${COMPONENT_LIB} INTERFACE
-    "-Wl,--whole-archive" ${COMPONENT_LIB} "-Wl,--no-whole-archive")
+    # A lens registers itself from a constructor, so nothing in the project
+    # holds a reference to this translation unit. WHOLE_ARCHIVE is what stops
+    # the linker discarding it - without it the component compiles, links
+    # clean, and the device boots with the lens simply absent.
+    WHOLE_ARCHIVE
+)

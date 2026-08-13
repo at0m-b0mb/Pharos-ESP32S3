@@ -1,5 +1,79 @@
 # Changelog
 
+## v1.1.0 — 2026-08-13
+
+Three genuinely new capabilities, one important bug caught, and the UI made
+visible — all still without a single transmitted frame.
+
+### KARMA / MANA rogue-AP detection (new engine + lens)
+
+Catches the attack that pairs with Probe: a rogue radio that listens for the
+network names phones shout, and answers "yes, that's me" to every one.
+
+The signal is that an honest access point *announces* what it carries, in
+beacons, continuously — a KARMA responder cannot, because it does not know
+which names to advertise until somebody asks. So the engine scores the gap
+between "names this radio answered for" and "names it ever announced on its
+own", across three families (breadth, absence, echo).
+
+The false positive it exists to defeat: a corporate AP carrying guest, staff,
+IoT and voice networks answers for four SSIDs too — and beacons all four. It
+scores **zero**, by construction, and there is a test for exactly that estate.
+An alarm requires the ABSENCE family specifically.
+
+### Tamper-evident evidence chain (new)
+
+Chain of custody for an engagement, on a £40 board. Every committed record is
+hash-linked to the one before it with a vendored, NIST-vector-tested SHA-256:
+
+    H(n) = SHA-256( H(n-1) || seq || t_us || kind || payload )
+
+Modification, deletion, insertion and reordering are each caught, and each has
+a test. Honest about its limit: this is **integrity, not authorship** — a device
+you can disassemble cannot keep a signing key from its owner. Publish the head
+digest somewhere you do not control and you have a witnessed timestamp, which
+is the guarantee that actually holds.
+
+### Virtual Pharos — the round HUD, rendered from the real code
+
+`tools/render` links the actual `pharos_round`/`pharos_dial` geometry and the
+actual detection engines, plays a `pharos_range` scenario through them, and
+emits a display list that `rasterize.py` turns into PNGs. These are not
+mock-ups; the numbers on screen are engine output.
+
+The headline image is the camped/hopping pair generated from **one identical
+event stream**: `FLOOD LIKELY 88` on the left, `SUSPICIOUS 60` on the right,
+with the ceiling tick and the dimmed "denied" arc showing precisely what the
+observation quality cost. The project's thesis, drawn by the project's code.
+
+`make -C tools/render check` bounds-checks every primitive against the panel's
+safe radius and now runs in CI, so "does the UI fit on a circle" is a test
+result. It immediately earned its keep, catching three real layout bugs:
+off-axis dial labels measured with the on-axis fitter, spectrum bars that could
+exceed the glass, and census cards sized from their midline rather than their
+worst corner.
+
+### Fixed: lenses were being discarded at link time
+
+The firmware built clean, produced a valid image, and would have booted with
+**zero lenses**. `INTERFACE --whole-archive` on the component library is not
+enough in ESP-IDF's link model; because a lens registers only from a
+constructor, nothing referenced its translation unit and the linker dropped it.
+
+Fixed with the `WHOLE_ARCHIVE` argument to `idf_component_register`, and made
+un-regressable by `tools/check_lenses.sh`, which verifies the declaration in
+every lens component *and* greps the linked ELF for every lens id. Also added
+three engine sources (`power`, `probe`, `range`) that were missing from the
+component's build list — the same class of bug, spotted while fixing this one.
+
+### Verification
+
+- **4298 host checks**, no board required: `make -C test/host`
+- Round-screen bounds check: `make -C tools/render check`
+- Transmit fence audit: `tools/check_tx_fence.sh`
+- Lens linkage audit: `tools/check_lenses.sh`
+- CI runs all four, plus ESP-IDF builds against v5.5 and v6.0
+
 ## v1.0.0 — 2026-08-12
 
 First release. The judgement layer is complete and tested; the display layer

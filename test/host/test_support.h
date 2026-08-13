@@ -42,4 +42,9 @@ void test_range_calm_and_roaming(void);
 void test_range_probe_leak(void);
 void test_range_vocabulary(void);
 
+/* Suites defined in test_chain.c */
+void test_sha256(void);
+void test_chain(void);
+void test_karma(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */

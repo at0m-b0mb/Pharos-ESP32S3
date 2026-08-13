@@ -1,11 +1,21 @@
 # Deliberately free of ESP-IDF dependencies beyond pharos_core's headers:
 # every file here also compiles under test/host/Makefile with a plain cc, and
 # every line of it is exercised there before it reaches a radio.
+#
+# Keep this list in step with test/host/Makefile. A source present in one and
+# missing from the other is the classic way for a firmware link to break long
+# after the host tests went green.
 idf_component_register(
     SRCS
         "pharos_census.c"
+        "pharos_chain.c"
         "pharos_dot11.c"
+        "pharos_karma.c"
+        "pharos_power.c"
+        "pharos_probe.c"
+        "pharos_range.c"
         "pharos_report.c"
+        "pharos_sha256.c"
         "pharos_twin.c"
         "pharos_watch.c"
     INCLUDE_DIRS "include"

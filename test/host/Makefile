@@ -23,15 +23,19 @@ SRCS := \
   test_privacy.c \
   test_region.c \
   test_range.c \
+  test_chain.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \
   $(ROOT)/components/pharos_engine/pharos_census.c \
+  $(ROOT)/components/pharos_engine/pharos_chain.c \
   $(ROOT)/components/pharos_engine/pharos_dot11.c \
+  $(ROOT)/components/pharos_engine/pharos_karma.c \
   $(ROOT)/components/pharos_engine/pharos_power.c \
   $(ROOT)/components/pharos_engine/pharos_probe.c \
   $(ROOT)/components/pharos_engine/pharos_range.c \
   $(ROOT)/components/pharos_engine/pharos_report.c \
+  $(ROOT)/components/pharos_engine/pharos_sha256.c \
   $(ROOT)/components/pharos_engine/pharos_twin.c \
   $(ROOT)/components/pharos_engine/pharos_watch.c \
   $(ROOT)/components/pharos_ui/pharos_dial.c \

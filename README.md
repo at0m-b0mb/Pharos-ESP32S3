@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
-  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4139_passing-1FB6C9">
+  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4298_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
   <img alt="idf" src="https://img.shields.io/badge/ESP--IDF-5.5%20%7C%206.0-444">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -39,7 +39,39 @@ Most hobby RF tools answer "is there an attack?" with a confident yes/no. Pharos
 
 So every verdict Pharos produces carries a **confidence ceiling** derived from how much of the channel it actually heard. A deauth flood reads `FLOOD LIKELY` when you camp on its channel and only `SUSPICIOUS` when you keep hopping — the same traffic, a different honesty. There is no band named "safe". Absence of evidence on a receiver that hears 7% of the air is not evidence of absence, and the firmware never pretends otherwise.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,139 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,298 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+
+## What it looks like
+
+Every screenshot below is **generated from the firmware's own code** — the real
+`pharos_round`/`pharos_dial` geometry, driven by the real detection engines, fed
+by the real training scenarios. Nothing here is a mock-up drawn in a design tool.
+
+<p align="center">
+  <img src="assets/screens/watch_camped.png" width="46%" alt="Watch, camped: FLOOD LIKELY">
+  <img src="assets/screens/watch_hopping.png" width="46%" alt="Watch, hopping: SUSPICIOUS">
+</p>
+
+**This pair is the whole argument.** Identical event stream, both sides. Camped
+on the channel, the Watch engine reaches `FLOOD LIKELY` at 88. Hopping across
+1–13, the same evidence tops out at `SUSPICIOUS` — the red `CEIL 60` tick is the
+hard stop, and the dim arc past it is the score that was **earned and then taken
+away** because a receiver hearing 7% of a channel is not entitled to claim it.
+
+<p align="center">
+  <img src="assets/screens/lamp_room.png" width="31%" alt="The Lamp Room dial">
+  <img src="assets/screens/census.png" width="31%" alt="Census: posture grades">
+  <img src="assets/screens/karma.png" width="31%" alt="Karma: impersonation watch">
+</p>
+
+Regenerate them yourself — and note that the generator **bounds-checks every
+primitive against the panel's safe radius**, so "does the UI fit on a circle" is
+a CI result rather than an opinion:
+
+```bash
+make -C tools/render        # writes assets/screens/*.png
+make -C tools/render check  # asserts nothing escapes the glass
+```
 
 ## The lenses
 
@@ -51,6 +83,7 @@ A **lens** is one tool. The dial is built from whatever lenses are compiled in; 
 | **Watch** | 🔵 detect | Grades deauthentication / disassociation floods across three evidence families, with a confidence ceiling. The headliner. |
 | **Census** | 🔵 audit | Grades every nearby network A+…F on what it would take to break in — auth, 802.11w, cipher, WPS. |
 | **Twin** | 🔵 detect | Finds the rogue AP wearing a name that belongs to someone else — and scores BSSID multiplicity at *zero*, because roaming is not an attack. |
+| **Karma** | 🔵 detect | Catches the rogue AP that answers to *any* name a passing phone asks for — while scoring a legitimate multi-SSID deployment at zero. |
 | **Probe** | 🟣 recon | Shows a room what its phones broadcast about their owners, and defeats MAC randomisation to prove the point. Awareness-session gold. |
 | **Range** | 🔴🔵 train | Plays synthesised attacks through the **real** detection engines so you can learn to read the gauge. Holds no radio at all. |
 | **System** | ⚙️ audit | Battery, region, and live proof the transmit fence is clean. |
@@ -72,12 +105,32 @@ The **System** lens reads the fence's own status and shows it on screen. A devic
 ./tools/check_tx_fence.sh        # → FENCE INTACT - receive-only posture verified.
 ```
 
+## Evidence you can defend
+
+A report anyone can edit afterwards is a note, not evidence. Every record Pharos
+commits is hash-linked to the one before it:
+
+```
+H(n) = SHA-256( H(n-1) || seq || t_us || kind || payload )
+```
+
+Modification, deletion, insertion and reordering are all caught by
+`phc_verify` — each has a test. Addresses are redacted **at write time** (OUI-only
+or salted-hash), never at export, so a full MAC that was never written cannot
+leak from a partition image or a crash dump.
+
+What it deliberately does *not* claim: this is **integrity, not authorship**. A
+device you can disassemble cannot keep a signing key from its owner. Publish the
+head digest somewhere you don't control — a ticket, a message to the client at
+the end of the walk — and you have a timestamp someone else witnessed. That is
+the honest version of the guarantee, and it is the one Pharos makes.
+
 ## Build & run
 
 **The engines and UI geometry build and test with no board at all** — do this first, it is fast and catches the most:
 
 ```bash
-make -C test/host                # 4139 checks, 0 failures
+make -C test/host                # 4298 checks, 0 failures
 ```
 
 **Firmware**, with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or newer:
@@ -122,7 +175,7 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-**v1.0.0** — the judgement layer is complete and tested (4,139 host checks); the display layer is scaffolded against tested geometry. **No hardware validation yet:** the pin map, BSP bring-up and LVGL rendering are milestones M1–M2, and every unproven constant is marked `VERIFY`. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+**v1.1.0** — the judgement layer is complete and tested (4,298 host checks); the display layer is scaffolded against tested geometry. **No hardware validation yet:** the pin map, BSP bring-up and LVGL rendering are milestones M1–M2, and every unproven constant is marked `VERIFY`. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 

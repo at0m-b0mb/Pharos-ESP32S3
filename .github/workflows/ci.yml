@@ -18,6 +18,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run the pure-C test suite
         run: make -C test/host CC=gcc
+      - name: Round-screen bounds check (no primitive escapes the glass)
+        run: make -C tools/render check CC=gcc
+
       - name: Fail if any check failed
         run: |
           out=$(make -C test/host CC=gcc 2>&1)
@@ -31,6 +34,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Audit the receive-only fence
         run: ./tools/check_tx_fence.sh
+
+      - name: Audit lens linkage (source side)
+        run: ./tools/check_lenses.sh
 
   firmware:
     name: esp-idf build (${{ matrix.idf }})
@@ -50,5 +56,10 @@ jobs:
           path: '.'
       - name: Re-audit the linked ELF
         run: |
-          elf=$(find build -name 'pharos.elf' | head -n1 || true)
-          if [ -n "$elf" ]; then ./tools/check_tx_fence.sh "$elf"; fi
+          elf=$(find build -name 'pharos.elf' | head -n1)
+          test -n "$elf" || { echo "no pharos.elf produced"; exit 1; }
+          ./tools/check_tx_fence.sh "$elf"
+          # The important one: prove every lens actually survived the link.
+          # A lens registers from a constructor, so the linker will happily
+          # discard it and still produce a clean, empty-feeling firmware.
+          ./tools/check_lenses.sh "$elf"

@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "lens_probe.c"
+    SRCS "lens_karma.c"
     INCLUDE_DIRS "."
     REQUIRES pharos_core pharos_engine pharos_radio
     PRIV_REQUIRES esp_timer

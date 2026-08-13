@@ -600,6 +600,9 @@ int main(void)
     test_range_calm_and_roaming();
     test_range_probe_leak();
     test_range_vocabulary();
+    test_sha256();
+    test_chain();
+    test_karma();
 
     printf("\n%u checks, %u failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

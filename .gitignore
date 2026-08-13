@@ -18,3 +18,7 @@ dependencies.lock
 .idea/
 *.swp
 compile_commands.json
+
+# Renderer binary (the PNGs it writes are committed)
+/tools/render/pharos_render
+/tools/render/*.dSYM/
