@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
-  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4364_passing-1FB6C9">
+  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4396_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
   <img alt="idf" src="https://img.shields.io/badge/ESP--IDF-5.5%20%7C%206.0-444">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -39,7 +39,7 @@ Most hobby RF tools answer "is there an attack?" with a confident yes/no. Pharos
 
 So every verdict Pharos produces carries a **confidence ceiling** derived from how much of the channel it actually heard. A deauth flood reads `FLOOD LIKELY` when you camp on its channel and only `SUSPICIOUS` when you keep hopping — the same traffic, a different honesty. There is no band named "safe". Absence of evidence on a receiver that hears 7% of the air is not evidence of absence, and the firmware never pretends otherwise.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,364 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,396 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
 
 ## What it looks like
 
@@ -59,9 +59,7 @@ hard stop, and the dim arc past it is the score that was **earned and then taken
 away** because a receiver hearing 7% of a channel is not entitled to claim it.
 
 <p align="center">
-  <img src="assets/screens/lamp_room.png" width="31%" alt="The Lamp Room dial">
-  <img src="assets/screens/census.png" width="31%" alt="Census: posture grades">
-  <img src="assets/screens/karma.png" width="31%" alt="Karma: impersonation watch">
+  <img src="assets/branding/gallery.png" width="100%" alt="Pharos screen gallery">
 </p>
 
 Regenerate them yourself — and note that the generator **bounds-checks every
@@ -85,6 +83,7 @@ A **lens** is one tool. The dial is built from whatever lenses are compiled in; 
 | **Twin** | 🔵 detect | Finds the rogue AP wearing a name that belongs to someone else — and scores BSSID multiplicity at *zero*, because roaming is not an attack. |
 | **Karma** | 🔵 detect | Catches the rogue AP that answers to *any* name a passing phone asks for — while scoring a legitimate multi-SSID deployment at zero. |
 | **Mirage** | 🔵 detect | Detects the beacon/SSID-spam flood that fills every phone's network list — the exact attack the ESP32 world is famous for — while scoring a dense city as *busy, not hostile*. |
+| **Locate** | 🔵 hunt | Once a source is flagged, walk toward it: a smoothed RSSI *hotter / colder / here* game. Finds a transmitter without becoming one. |
 | **Probe** | 🟣 recon | Shows a room what its phones broadcast about their owners, and defeats MAC randomisation to prove the point. Awareness-session gold. |
 | **Range** | 🔴🔵 train | Plays synthesised attacks through the **real** detection engines so you can learn to read the gauge. Holds no radio at all. |
 | **Footprint** | 🔴 train | The red team's mirror: grades how *detectable* an attack is, names the family that gives it away, and tells you whether a hopping defender would even notice. Receive-only OPSEC. |
@@ -163,20 +162,41 @@ The board driver, LVGL, and the panel init come from Waveshare's managed BSP com
 
 ## Architecture at a glance
 
-```
-   radio (RX only) ──▶ lock-free ingest ring ──▶ analytics core
-        │                  (drop-count feeds            │
-   capability gate          the confidence ceiling)     ▼
-   + transmit fence                            pure C engines ── host-tested
-                                                  │  watch · census · twin
-   round-screen UI ◀── snapshot ◀────────────────┘  probe · range · report
-   (dial built from the lens registry)
+Two cores, split by role. The radio side has a hard real-time budget and does the minimum; everything that *reasons* runs on the other core, in pure C, against copied data — which is why all of it is testable on a laptop.
+
+```mermaid
+flowchart LR
+  subgraph C0["core 0 · protocol / RX"]
+    direction TB
+    RX["Wi-Fi promiscuous RX<br/>· BLE observer ·"]
+    FENCE{{"transmit fence<br/>❌ cannot transmit"}}
+    CAP["capability gate<br/>(lens declares its powers)"]
+    RX --> CAP
+    FENCE -. guards .- RX
+  end
+
+  RING["lock-free ingest ring<br/>drop-count → confidence ceiling"]
+
+  subgraph C1["core 1 · analytics — pure C, host-tested"]
+    direction TB
+    ENG["detection engines<br/>watch · census · twin · karma<br/>mirage · probe · locate · opsec<br/>flood · range · power · region"]
+    EVID["evidence<br/>report · redact-at-write<br/>sha256 + tamper-evident chain"]
+    ENG --> EVID
+  end
+
+  UI["round-screen HUD<br/>Lamp Room dial · evidence gauge<br/>built from the lens registry"]
+  AUDIT(["CI audits<br/>fence · lenses · bounds · 4,396 checks"])
+
+  CAP -->|"frame summaries"| RING --> ENG
+  ENG -->|"verdict snapshot"| UI
+  AUDIT -. verifies .-> FENCE
+  AUDIT -. verifies .-> ENG
 ```
 
-- **`components/pharos_engine/`** — the judgement. Pure C: no ESP-IDF, no allocation, no floating point. All of it host-tested.
-- **`components/pharos_radio/`** — the only component that touches the radio, and the transmit fence around it.
-- **`components/pharos_ui/`** — round-screen geometry, the Lamp Room dial, the evidence gauge. Tested as maths before it is drawn.
-- **`components/pharos_lens_*/`** — one tool each, self-registering.
+- **`components/pharos_engine/`** — the judgement. Pure C11, no ESP-IDF, no allocation, no floating point in scored paths. Every detector, the evidence chain, and the round-screen maths live here, and every line of it is host-tested.
+- **`components/pharos_radio/`** — the only component that touches the radio, and the four-mechanism [transmit fence](#the-transmit-fence) around it.
+- **`components/pharos_ui/`** — round-screen geometry, the Lamp Room dial, the evidence gauge — tested as maths before a pixel is drawn — plus the "Virtual Pharos" renderer that produces the screenshots above.
+- **`components/pharos_lens_*/`** — one tool each, self-registering via a constructor; `main.c` names none of them.
 
 Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -194,7 +214,21 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-**v1.1.0** — the judgement layer is complete and tested (4,364 host checks); the display layer is scaffolded against tested geometry. **No hardware validation yet:** the pin map, BSP bring-up and LVGL rendering are milestones M1–M2, and every unproven constant is marked `VERIFY`. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+**v1.3.0 — the thinking is done and proven; the hardware bring-up is not.**
+
+| Layer | State | Detail |
+|---|---|---|
+| **Detection & evidence engines** | ✅ complete, **4,396 host checks, 0 failures** | 13 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
+| **Round-screen geometry & Virtual HUD** | ✅ complete & tested | layout maths host-tested; every screen rendered from the real code and bounds-checked in CI |
+| **Transmit fence** | ✅ enforced & audited | 4 mechanisms, verified against the linked ELF on every build |
+| **Firmware build** | ✅ green on ESP-IDF v5.5 + v6.0 | a **flashable binary is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases)** |
+| **Board bring-up (display, touch, IMU, PMU)** | 🧱 milestone **M1** | runs on a *simulated* board today; pin map carries `VERIFY` markers |
+| **On-device LVGL rendering** | 🧱 milestone **M2** | the geometry is done and *visible* in the renderer; the on-panel widgets are not wired |
+
+> [!NOTE]
+> **No hardware validation yet.** The engines and UI are proven in software; nothing has been confirmed against a physical board. Treat every hardware claim as unverified until M1 closes. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+
+**11 lenses** · **13 engines** · receive-only, enforced · MIT.
 
 ## License
 

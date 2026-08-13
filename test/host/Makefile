@@ -25,6 +25,7 @@ SRCS := \
   test_range.c \
   test_chain.c \
   test_redteam.c \
+  test_locate.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \
@@ -33,6 +34,7 @@ SRCS := \
   $(ROOT)/components/pharos_engine/pharos_dot11.c \
   $(ROOT)/components/pharos_engine/pharos_flood.c \
   $(ROOT)/components/pharos_engine/pharos_karma.c \
+  $(ROOT)/components/pharos_engine/pharos_locate.c \
   $(ROOT)/components/pharos_engine/pharos_power.c \
   $(ROOT)/components/pharos_engine/pharos_opsec.c \
   $(ROOT)/components/pharos_engine/pharos_probe.c \

@@ -26,6 +26,7 @@
 #include "pharos_dial.h"
 #include "pharos_flood.h"
 #include "pharos_karma.h"
+#include "pharos_locate.h"
 #include "pharos_opsec.h"
 #include "pharos_range.h"
 #include "pharos_round.h"
@@ -154,6 +155,52 @@ static void text(int x, int y, int size, char anchor, const char *col, const cha
     emit("TEXT %d %d %d %c %s %s", x, y, size, anchor, col, s);
 }
 
+/* ---- glow / gradient variants ---------------------------------------
+ * These emit the same bounds-checked geometry, but tag it to also bloom (the
+ * rasteriser blurs and screens the glow layer) or, for arcs, to fill with a
+ * colour gradient. This is the whole of the "nicer" finish - the layout is
+ * unchanged and still bounds-checked. */
+
+static void glowtext(int x, int y, int size, char anchor, const char *col, const char *s)
+{
+    const int w = (int)((long)size * 3 * (long)strlen(s) / 5);
+    int x0 = x, x1 = x;
+    if (anchor == 'c') { x0 = x - w / 2; x1 = x + w / 2; }
+    else if (anchor == 'l') { x1 = x + w; }
+    else { x0 = x - w; }
+    bound((float)x0, (float)y, "glowtext");
+    bound((float)x1, (float)y, "glowtext");
+    emit("GLOWTEXT %d %d %d %c %s %s", x, y, size, anchor, col, s);
+}
+
+static void glowdot(int cx, int cy, int r, const char *col)
+{
+    bound((float)cx, (float)cy, "glowdot");
+    emit("GLOWDOT %d %d %d %s", cx, cy, r, col);
+}
+
+static void glowline(int x1, int y1, int x2, int y2, int w, const char *col)
+{
+    bound((float)x1, (float)y1, "glowline");
+    bound((float)x2, (float)y2, "glowline");
+    emit("GLOWLINE %d %d %d %d %d %s", x1, y1, x2, y2, w, col);
+}
+
+static void glowarc(int cx, int cy, int r, int w, float a0, float sweep, const char *col)
+{
+    if (sweep <= 0.05f) return;
+    emit("GLOWARC %d %d %d %d %.3f %.3f %s", cx, cy, r, w, (double)a0, (double)sweep, col);
+}
+
+/* Gradient arc: fills from col0 at the start to col1 at the end of the sweep. */
+static void garc(int cx, int cy, int r, int w, float a0, float sweep,
+                 const char *col0, const char *col1)
+{
+    if (sweep <= 0.05f) return;
+    emit("GARC %d %d %d %d %.3f %.3f %s %s", cx, cy, r, w, (double)a0, (double)sweep,
+         col0, col1);
+}
+
 /* Largest type size at which a run of `nchars` centred on (px,py) keeps BOTH
  * ends inside radius r.
  *
@@ -239,13 +286,15 @@ static void rim_ticks(void)
     }
 }
 
-/* Battery / posture arc on the rim, plus the permanent receive-only dot. */
+/* Battery / posture arc on the rim, plus the permanent receive-only dot.
+ * The band arc glows so the device's current state reads at a glance from the
+ * bezel alone; the green dot is the always-on "receive-only" tell. */
 static void rim_status(int battery_pct, const char *band_col)
 {
     arc(PR_CX, PR_CY, PR_SAFE_R - 12, 4, 200.0f,
         160.0f * (float)battery_pct / 100.0f, C_DIMMER);
-    arc(PR_CX, PR_CY, PR_SAFE_R - 12, 4, 20.0f, 60.0f, band_col);
-    dot(PR_CX, PR_CY + PR_RIM_R - 40, 4, C_GREEN);
+    glowarc(PR_CX, PR_CY, PR_SAFE_R - 12, 4, 20.0f, 60.0f, band_col);
+    glowdot(PR_CX, PR_CY + PR_RIM_R - 40, 4, C_GREEN);
 }
 
 static const char *band_colour(int score)
@@ -357,45 +406,47 @@ static void screen_watch(const char *name, const pw_verdict_t *v, const char *mo
     pd_gauge_t g;
     pd_gauge_layout(comps, 4, v->score, v->ceiling, A0, SWEEP, &g);
 
-    /* Track. */
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, A0, SWEEP, C_VOID);
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, A0, SWEEP, "#0F2231");
+    /* Recessed track: two tones give the groove a little depth. */
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, A0, SWEEP, "#08131C");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 12, A0, SWEEP, "#12283A");
 
-    /* Component arcs; denied ones dimmed so the operator can see what the
-     * observation quality cost them. */
-    static const char *fam_col[4] = { C_CYAN, C_CYAN_HI, C_AMBER, C_DIMMER };
+    /* Component arcs. Earned families glow (gradient toward the band colour);
+     * denied ones stay dim, so the operator sees what observation quality cost
+     * them without it competing for attention. */
+    static const char *fam_col[4] = { C_CYAN, C_CYAN_HI, C_AMBER, C_ORANGE };
     unsigned fam = 0;
     for (unsigned i = 0; i < g.n_arcs; i++) {
         const pd_arc_t *a = &g.arcs[i];
-        arc(PR_CX, PR_CY, PR_RING_R - 8, 14, a->start_deg, a->sweep_deg,
-            a->denied ? C_DENIED : fam_col[fam % 4]);
-        if (!a->denied) fam++;
+        if (a->denied) {
+            arc(PR_CX, PR_CY, PR_RING_R - 8, 14, a->start_deg, a->sweep_deg, C_DENIED);
+        } else {
+            garc(PR_CX, PR_CY, PR_RING_R - 8, 14, a->start_deg, a->sweep_deg,
+                 fam_col[fam % 4], col);
+            fam++;
+        }
     }
 
     /* The ceiling tick: a hard stop the score may not pass. Its label goes
      * *inside* the gauge ring - outside, it would sit among the rim ticks and
      * fight the bezel for attention at exactly the angles it matters most. */
     {
-        pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 2), g.ceiling_deg);
-        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 24), g.ceiling_deg);
-        line(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
-        pr_point_t lp = pr_polar((int16_t)(PR_RING_R - 42), g.ceiling_deg);
-        char buf[24];
-        snprintf(buf, sizeof(buf), "CEIL %u", v->ceiling);
-        const int size = fit_text_at(lp.x, lp.y, (unsigned)strlen(buf), PR_SAFE_R - 6, 14);
-        if (size) {
-            text(lp.x, lp.y, size, 'c', C_RED, buf);
-        }
+        /* The ceiling is a glowing red tick on the arc; its number goes in the
+         * stats line below rather than floating free, where it used to collide
+         * with the dwell readout at high ceilings. */
+        pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 3), g.ceiling_deg);
+        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 22), g.ceiling_deg);
+        glowline(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
     }
 
-    /* Core: score and band. */
+    /* Core: score and band. The big number blooms - it is the one thing the
+     * eye should land on first. */
     disc(PR_CX, PR_CY, PR_CORE_R + 4, C_VOID);
     {
         char buf[16];
         snprintf(buf, sizeof(buf), "%u", v->score);
-        text(PR_CX, PR_CY - 12, 64, 'c', col, buf);
+        glowtext(PR_CX, PR_CY - 12, 64, 'c', col, buf);
     }
-    text(PR_CX, PR_CY + 30, 20, 'c', col, pw_band_name(v->band));
+    glowtext(PR_CX, PR_CY + 30, 20, 'c', col, pw_band_name(v->band));
     text(PR_CX, PR_CY - 54, 14, 'c', C_DIMMER, "DEAUTH WATCH");
 
     /* Below the core: the mode that produced this reading. */
@@ -406,15 +457,19 @@ static void screen_watch(const char *name, const pw_verdict_t *v, const char *mo
     }
     {
         char buf[64];
-        snprintf(buf, sizeof(buf), "%u.%u/s  %u obs", v->est_per_s_x100 / 100,
-                 (v->est_per_s_x100 / 10) % 10, v->observed);
+        snprintf(buf, sizeof(buf), "%u.%u/s  %u obs  ceil %u", v->est_per_s_x100 / 100,
+                 (v->est_per_s_x100 / 10) % 10, v->observed, v->ceiling);
         text(PR_CX, PR_CY + 102, 14, 'c', C_DIMMER, buf);
     }
 
-    /* Families as three pips: filled when that family fired. */
+    /* Families as three pips: a fired family glows, an unlit one is a hole. */
     for (unsigned i = 0; i < 3; i++) {
         const int x = PR_CX - 26 + (int)i * 26;
-        dot(x, PR_CY + 124, 6, (v->families & (1u << i)) ? col : C_DENIED);
+        if (v->families & (1u << i)) {
+            glowdot(x, PR_CY + 124, 6, col);
+        } else {
+            dot(x, PR_CY + 124, 6, C_DENIED);
+        }
     }
 
     /* The HUD carries a one-line summary; the engine's full advice text lives
@@ -482,18 +537,23 @@ static void screen_karma(const pk_verdict_t *v)
     pd_gauge_t g;
     pd_gauge_layout(comps, 3, v->score, v->ceiling, A0, SWEEP, &g);
 
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, A0, SWEEP, "#0F2231");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, A0, SWEEP, "#08131C");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 12, A0, SWEEP, "#12283A");
     static const char *fam_col[3] = { C_CYAN, C_AMBER, C_CYAN_HI };
     unsigned fam = 0;
     for (unsigned i = 0; i < g.n_arcs; i++) {
-        arc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg,
-            g.arcs[i].denied ? C_DENIED : fam_col[fam % 3]);
-        if (!g.arcs[i].denied) fam++;
+        if (g.arcs[i].denied) {
+            arc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg, C_DENIED);
+        } else {
+            garc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg,
+                 fam_col[fam % 3], col);
+            fam++;
+        }
     }
     {
         pr_point_t t0 = pr_polar(PR_RING_R + 4, g.ceiling_deg);
         pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 22), g.ceiling_deg);
-        line(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
+        glowline(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
     }
 
     disc(PR_CX, PR_CY, PR_CORE_R + 4, C_VOID);
@@ -501,9 +561,9 @@ static void screen_karma(const pk_verdict_t *v)
     {
         char buf[16];
         snprintf(buf, sizeof(buf), "%u", v->score);
-        text(PR_CX, PR_CY - 14, 64, 'c', col, buf);
+        glowtext(PR_CX, PR_CY - 14, 64, 'c', col, buf);
     }
-    text(PR_CX, PR_CY + 28, 20, 'c', col, pk_band_name(v->band));
+    glowtext(PR_CX, PR_CY + 28, 20, 'c', col, pk_band_name(v->band));
     {
         char buf[64];
         snprintf(buf, sizeof(buf), "%u names, %u never announced",
@@ -546,7 +606,10 @@ static void screen_spectrum(void)
         pr_point_t base = pr_polar((int16_t)base_r, a);
         pr_point_t tip = pr_polar((int16_t)(base_r + len), a);
         const char *col = busy[c] > 200 ? C_RED : busy[c] > 130 ? C_AMBER : C_CYAN;
-        line(base.x, base.y, tip.x, tip.y, 9, col);
+        /* Dim stub for the whole bar, bright glowing tip for the live level -
+         * the waterfall reads as lit energy rather than flat paint. */
+        line(base.x, base.y, tip.x, tip.y, 9, "#123244");
+        glowline(base.x, base.y, tip.x, tip.y, 7, col);
 
         if (c == 0 || c == 5 || c == 10 || c == 12) {
             char lbl[4];
@@ -642,18 +705,23 @@ static void screen_mirage(const pf_verdict_t *v)
     pd_gauge_t g;
     pd_gauge_layout(comps, 3, v->score, v->ceiling, A0, SWEEP, &g);
 
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, A0, SWEEP, "#0F2231");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, A0, SWEEP, "#08131C");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 12, A0, SWEEP, "#12283A");
     static const char *fam_col[3] = { C_CYAN, C_AMBER, C_CYAN_HI };
     unsigned fam = 0;
     for (unsigned i = 0; i < g.n_arcs; i++) {
-        arc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg,
-            g.arcs[i].denied ? C_DENIED : fam_col[fam % 3]);
-        if (!g.arcs[i].denied) fam++;
+        if (g.arcs[i].denied) {
+            arc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg, C_DENIED);
+        } else {
+            garc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg,
+                 fam_col[fam % 3], col);
+            fam++;
+        }
     }
     {
         pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 2), g.ceiling_deg);
         pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 24), g.ceiling_deg);
-        line(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
+        glowline(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
     }
 
     disc(PR_CX, PR_CY, PR_CORE_R + 4, C_VOID);
@@ -661,9 +729,9 @@ static void screen_mirage(const pf_verdict_t *v)
     {
         char buf[16];
         snprintf(buf, sizeof(buf), "%u", v->score);
-        text(PR_CX, PR_CY - 14, 64, 'c', col, buf);
+        glowtext(PR_CX, PR_CY - 14, 64, 'c', col, buf);
     }
-    text(PR_CX, PR_CY + 28, 20, 'c', col, pf_band_name(v->band));
+    glowtext(PR_CX, PR_CY + 28, 20, 'c', col, pf_band_name(v->band));
     {
         char buf[48];
         snprintf(buf, sizeof(buf), "%u names  %u.%u new/min", v->distinct_ssids,
@@ -676,8 +744,9 @@ static void screen_mirage(const pf_verdict_t *v)
         text(PR_CX, PR_CY + 104, 14, 'c', C_DIMMER, buf);
     }
     for (unsigned i = 0; i < 3; i++) {
-        dot(PR_CX - 26 + (int)i * 26, PR_CY + 128, 6,
-            (v->families & (1u << i)) ? col : C_DENIED);
+        const int x = PR_CX - 26 + (int)i * 26;
+        if (v->families & (1u << i)) glowdot(x, PR_CY + 128, 6, col);
+        else dot(x, PR_CY + 128, 6, C_DENIED);
     }
     rim_status(72, col);
 }
@@ -716,23 +785,27 @@ static void screen_footprint(const po_report_t *r)
 
     /* Two facing arcs: camped (what a still defender sees) vs hopping (what a
      * moving one sees). The gap between them IS the OPSEC insight. */
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 180.0f, 150.0f, "#0F2231");
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 30.0f, 150.0f, "#0F2231");
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 180.0f, 150.0f * (float)r->camped_score / 100.0f, C_RED);
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 30.0f, 150.0f * (float)r->hopping_score / 100.0f, C_CYAN);
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, 180.0f, 150.0f, "#08131C");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, 30.0f, 150.0f, "#08131C");
+    /* Camped (what a still defender sees) glows loud; hopping (what a moving
+     * one sees) is calmer. The gap between them IS the OPSEC insight. */
+    garc(PR_CX, PR_CY, PR_RING_R - 8, 14, 180.0f, 150.0f * (float)r->camped_score / 100.0f,
+         C_ORANGE, C_RED);
+    glowarc(PR_CX, PR_CY, PR_RING_R - 8, 14, 30.0f, 150.0f * (float)r->hopping_score / 100.0f,
+            C_CYAN);
 
     /* One legend line in the open gap at the top, between the two arcs, rather
      * than side labels that would collide with the thick arcs at 9 and 3. */
     {
-        dot(PR_CX - 78, PR_CY - 150, 5, C_RED);
+        glowdot(PR_CX - 78, PR_CY - 150, 5, C_RED);
         text(PR_CX - 40, PR_CY - 150, 14, 'c', C_RED, "CAMPED");
-        dot(PR_CX + 12, PR_CY - 150, 5, C_CYAN);
+        glowdot(PR_CX + 12, PR_CY - 150, 5, C_CYAN);
         text(PR_CX + 52, PR_CY - 150, 14, 'c', C_CYAN, "HOPPING");
     }
 
     disc(PR_CX, PR_CY, PR_CORE_R + 6, C_VOID);
     text(PR_CX, PR_CY - 56, 14, 'c', C_DIMMER, "FOOTPRINT");
-    text(PR_CX, PR_CY - 20, 44, 'c', col, po_grade_name(r->grade));
+    glowtext(PR_CX, PR_CY - 20, 44, 'c', col, po_grade_name(r->grade));
     {
         char buf[32];
         snprintf(buf, sizeof(buf), "%u vs %u", r->camped_score, r->hopping_score);
@@ -784,6 +857,107 @@ static void footprint_screen(void)
             rep.hopping_score, rep.invisible_to_hoppers);
 }
 
+/* ---- screen: Locate (RSSI hotter/colder finder) ---------------------- */
+
+static void screen_locate(const pl_verdict_t *v)
+{
+    screen("locate");
+    panel_base();
+    rim_ticks();
+
+    const char *col = (v->trend == PL_TREND_HOTTER || v->trend == PL_TREND_HERE) ? C_AMBER
+                    : (v->trend == PL_TREND_COLDER) ? C_CYAN : C_DIM;
+    const char *hot = (v->trend == PL_TREND_HERE) ? C_RED : C_AMBER;
+
+    /* A closeness ring that fills clockwise from 12 - the whole circle is the
+     * "hotter/colder" dial. Cool (cyan) at the far end, hot (red) as it fills. */
+    const float SWEEP = 330.0f, A0 = 0.0f;
+    arc(PR_CX, PR_CY, PR_RING_R - 4, 18, A0, SWEEP, "#08131C");
+    arc(PR_CX, PR_CY, PR_RING_R - 4, 14, A0, SWEEP, "#12283A");
+    garc(PR_CX, PR_CY, PR_RING_R - 4, 14, A0, SWEEP * (float)v->closeness / 100.0f,
+         C_CYAN, hot);
+
+    /* A peak marker: how close you have been, so you know if you are losing it. */
+    {
+        const float pk = SWEEP * (float)((v->rssi_peak + 90) * 100 / 60) / 100.0f;
+        pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 3), pk > 0 ? pk : 0.5f);
+        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 26), pk > 0 ? pk : 0.5f);
+        glowline(t0.x, t0.y, t1.x, t1.y, 3, C_GREEN);
+    }
+
+    disc(PR_CX, PR_CY, PR_CORE_R + 6, C_VOID);
+    text(PR_CX, PR_CY - 56, 14, 'c', C_DIMMER, "LOCATE");
+    glowtext(PR_CX, PR_CY - 16, 44, 'c', col, pl_trend_name(v->trend));
+    {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%u%% close", v->closeness);
+        text(PR_CX, PR_CY + 20, 20, 'c', C_TEXT, buf);
+    }
+    {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d dBm  peak %d", v->rssi_smoothed, v->rssi_peak);
+        text(PR_CX, PR_CY + 46, 14, 'c', C_DIMMER, buf);
+    }
+    wrap(120, 14, C_DIM, v->headline, 2);
+    /* Confidence lives on the rim battery-style; the green rx dot stays. */
+    rim_status(v->confidence, col);
+}
+
+static void locate_screen(void)
+{
+    /* Simulate a walk toward the transmitter, feeding the real engine. */
+    static const uint8_t target[6] = { 0x02, 0x66, 0x6E, 0x00, 0x00, 0x02 };
+    pl_engine_t e;
+    pl_reset(&e, target);
+    uint64_t t = 1000000;
+    for (int i = 0; i < 44; i++) {
+        int r = -84 + (int)(46.0 * i / 43.0);   /* -84 dBm up to about -38 */
+        pl_observe(&e, target, (int8_t)r, t);
+        t += 200000;
+    }
+    pl_verdict_t v;
+    pl_evaluate(&e, &v);
+    screen_locate(&v);
+    fprintf(stderr, "  locate: %s close=%u%% rssi=%d peak=%d\n",
+            pl_trend_name(v.trend), v.closeness, v.rssi_smoothed, v.rssi_peak);
+}
+
+/* ---- screen: Home overview ------------------------------------------- */
+
+static void screen_home(void)
+{
+    screen("home");
+    panel_base();
+    rim_ticks();
+
+    /* A quiet "all watches nominal" home face: the lighthouse identity, the
+     * clock, the posture, and a ring of small state pips - one per observing
+     * lens - so a glance tells you the estate is calm. */
+    const char *lens[6] = { "SPECTRUM", "WATCH", "CENSUS", "TWIN", "KARMA", "MIRAGE" };
+    const char *pip[6]  = { C_CYAN, C_GREEN, C_AMBER, C_GREEN, C_GREEN, C_GREEN };
+
+    /* Ring of lens pips around the ring zone. */
+    for (unsigned i = 0; i < 6; i++) {
+        const float a = 30.0f + 300.0f * (float)i / 5.0f;
+        pr_point_t p = pr_polar((int16_t)(PR_RING_R - 6), a);
+        glowdot(p.x, p.y, 6, pip[i]);
+        pr_point_t lp = pr_polar((int16_t)(PR_RING_R - 34), a);
+        const int size = fit_text_at(lp.x, lp.y, (unsigned)strlen(lens[i]), PR_SAFE_R - 8, 14);
+        if (size) text(lp.x, lp.y, size, 'c', C_DIMMER, lens[i]);
+    }
+
+    disc(PR_CX, PR_CY, PR_CORE_R + 10, C_VOID);
+    ring(PR_CX, PR_CY, PR_CORE_R + 10, 1, C_RIM);
+    text(PR_CX, PR_CY - 46, 14, 'c', C_DIMMER, "PHAROS");
+    glowtext(PR_CX, PR_CY - 8, 52, 'c', C_TEXT, "20:47");
+    text(PR_CX, PR_CY + 30, 14, 'c', C_GREEN, "all quiet");
+    text(PR_CX, PR_CY + 50, 14, 'c', C_DIMMER, "6 watches armed");
+
+    /* The permanent receive-only tell is the green dot the rim already draws;
+     * no caption needed (it would collide with the lower lens pips). */
+    rim_status(82, C_GREEN);
+}
+
 int main(int argc, char **argv)
 {
     const bool check_only = (argc > 1 && strcmp(argv[1], "--check") == 0);
@@ -792,11 +966,13 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    screen_home();
     screen_lamp_room();
     watch_pair();
     screen_census();
     karma_screen();
     mirage_screen();
+    locate_screen();
     footprint_screen();
     screen_spectrum();
 

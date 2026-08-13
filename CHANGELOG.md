@@ -1,5 +1,58 @@
 # Changelog
 
+## v1.3.0 — 2026-08-13
+
+A visual-design pass on the whole HUD, plus a new blue-team hunt tool — and the
+README architecture and status rewritten to match.
+
+### Locate — walk to a flagged transmitter (new engine + lens)
+
+Once Watch, Karma or Mirage names a suspect, the next question is physical:
+where is it? Locate answers the only honest way a single antenna can — a
+hotter/colder game. It camps on the target's channel and turns its smoothed
+RSSI into a *closeness* and a *trend* (WARMER / COLDER / STEADY / HERE), then
+walks the operator in. Receive-only: it finds a transmitter without becoming
+one.
+
+Two honesty constraints, both tested: RSSI is **not distance** (multipath and
+bodies move it 20 dB without a step), so it reports relative closeness, never
+metres; and the trend only flips after several consistent samples, so the
+needle is calm rather than chasing jitter. A simulated walk-in must read WARMER
+then HERE, a walk-out COLDER, and a noisy hold must stay STEADY.
+
+### A proper UI/UX pass
+
+The Virtual Pharos renderer — still generating every pixel from the real
+geometry and engines — grew a real finish:
+
+- **Bloom.** Bright elements (the score, the band, lit family pips, the status
+  rim) are blurred and screened back, the lift an OLED panel actually has.
+- **Gradient gauges.** The evidence arcs fill with a colour gradient toward the
+  band colour, so a verdict reads as lit energy rather than flat paint.
+- **Depth & chrome.** Recessed gauge tracks, a glowing status rim that shows
+  the device's state from the bezel alone, sharper 4× anti-aliasing.
+- **Two new screens.** A **Home** watch-face (clock, posture, a pip per armed
+  watch) and the **Locate** finder.
+- **A device gallery.** `assets/branding/gallery.png` composites every screen
+  into bezelled device frames for the README — built by `tools/render/gallery.py`.
+
+All of it still passes the bounds check — which caught, and made me fix, a
+ceiling-label collision and a home-screen caption overlap along the way.
+
+### README
+
+- **Architecture** is now a rendered mermaid diagram of the two-core,
+  receive-only flow.
+- **Status** is an honest layer-by-layer table: what is proven (engines, UI
+  geometry, fence, firmware build) versus what is not (board bring-up M1, on-
+  device LVGL M2).
+
+### Verification
+
+- **4,396 host checks**, 0 failures
+- Bounds, transmit-fence and lens-linkage audits green
+- **11 lenses**, all verified present in the linked ELF; firmware binary attached
+
 ## v1.2.0 — 2026-08-13
 
 More red-team value, all of it still receive-only. Two new detection engines,

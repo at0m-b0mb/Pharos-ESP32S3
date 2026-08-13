@@ -51,4 +51,7 @@ void test_karma(void);
 void test_flood(void);
 void test_opsec(void);
 
+/* Suite defined in test_locate.c */
+void test_locate(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */

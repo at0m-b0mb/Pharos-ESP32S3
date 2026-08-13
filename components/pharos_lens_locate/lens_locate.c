@@ -1,0 +1,147 @@
+/* Pharos lens: Locate - walk toward a flagged transmitter
+ *
+ * The follow-up to a detection. When Watch, Karma or Mirage names a suspect,
+ * the operator hands that BSSID to Locate, which camps on its channel and
+ * plays a hotter/colder game from the suspect's own RSSI. It is the physical
+ * half of an investigation - and, being receive-only, it finds a transmitter
+ * without ever becoming one.
+ *
+ * Judgement is in pharos_locate.c, pure and host-tested. This file feeds the
+ * engine the RSSI of frames from the target and hands the UI a snapshot. The
+ * target is set by the operator via pharos_lens_locate_set_target(); with no
+ * target the lens listens and says so.
+ */
+#include <string.h>
+
+#include "esp_attr.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+#include "pharos_bus.h"
+#include "pharos_dot11.h"
+#include "pharos_lens.h"
+#include "pharos_locate.h"
+#include "pharos_radio.h"
+
+static const char *TAG = "lens.locate";
+
+#define LOCATE_RING 256
+
+EXT_RAM_BSS_ATTR static pharos_event_t s_slots[LOCATE_RING];
+static pharos_bus_t s_bus;
+static pl_engine_t s_engine;
+static pl_verdict_t s_verdict;
+static uint8_t s_target[6];
+static bool s_has_target;
+static uint8_t s_channel;
+static SemaphoreHandle_t s_lock;
+
+static bool locate_mount(void)
+{
+    pl_reset(&s_engine, s_has_target ? s_target : NULL);
+    memset(&s_verdict, 0, sizeof(s_verdict));
+    if (!s_lock) {
+        s_lock = xSemaphoreCreateMutex();
+    }
+    return s_lock && pharos_bus_init(&s_bus, s_slots, LOCATE_RING);
+}
+
+static bool locate_start(void)
+{
+    /* Camp on the target's channel: a hotter/colder game is meaningless while
+     * hopping, because most samples would be of a channel the target is not
+     * on. If no channel is known yet, survey until the target is seen. */
+    pharos_scan_plan_t plan = s_channel ? pharos_scan_plan_camp(s_channel)
+                                        : pharos_scan_plan_survey();
+    plan.want_mgmt = true;
+    plan.want_data = true; /* more frames from the target = a smoother needle */
+    return pharos_radio_rx_start(&plan, &s_bus);
+}
+
+static void locate_stop(void) { pharos_radio_rx_stop(); }
+
+static void locate_event(const pharos_event_t *ev)
+{
+    if (!ev || ev->type != PHAROS_EV_DOT11 || !s_has_target) {
+        return;
+    }
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return;
+    }
+    /* Feed transmitter-address RSSI to the engine; it ignores anything that is
+     * not the target. */
+    pl_observe(&s_engine, ev->u.dot11.a2, ev->u.dot11.rssi, ev->t_us);
+    xSemaphoreGive(s_lock);
+}
+
+static void locate_tick(uint32_t dt_ms)
+{
+    (void)dt_ms;
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return;
+    }
+    pl_verdict_t v;
+    pl_evaluate(&s_engine, &v);
+    if (v.trend != s_verdict.trend) {
+        ESP_LOGI(TAG, "%s  rssi=%d peak=%d close=%u%% conf=%u%%",
+                 pl_trend_name(v.trend), v.rssi_smoothed, v.rssi_peak,
+                 v.closeness, v.confidence);
+    }
+    s_verdict = v;
+    xSemaphoreGive(s_lock);
+}
+
+/* Hand Locate a suspect (typically from another lens' verdict) and the channel
+ * it was seen on. Re-arms the engine. */
+void pharos_lens_locate_set_target(const uint8_t bssid[6], uint8_t channel)
+{
+    if (!bssid) {
+        return;
+    }
+    memcpy(s_target, bssid, 6);
+    s_has_target = true;
+    s_channel = channel;
+    if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
+        pl_reset(&s_engine, s_target);
+        xSemaphoreGive(s_lock);
+    }
+    /* If we are the active lens, re-camp on the new channel. */
+    if (pharos_lens_active() && strcmp(pharos_lens_active()->id, "wifi.locate") == 0) {
+        pharos_radio_rx_stop();
+        locate_start();
+    }
+    ESP_LOGI(TAG, "target %02X:%02X:%02X:%02X:%02X:%02X ch%u",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], channel);
+}
+
+bool pharos_lens_locate_snapshot(pl_verdict_t *out)
+{
+    if (!out || !s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return false;
+    }
+    *out = s_verdict;
+    xSemaphoreGive(s_lock);
+    return true;
+}
+
+static struct pharos_bus *locate_ingest(void) { return &s_bus; }
+
+static const pharos_lens_t k_locate = {
+    .id = "wifi.locate",
+    .name = "Locate",
+    .summary = "Walk toward a flagged transmitter - hotter, colder, here",
+    .glyph = "compass",
+    .kind = PHAROS_LENS_ANALYSE,
+    .caps = PHAROS_CAP_WIFI_RX | PHAROS_CAP_WIFI_CHAN,
+    .budget_ma = 130,
+    .on_mount = locate_mount,
+    .on_start = locate_start,
+    .on_stop = locate_stop,
+    .on_tick = locate_tick,
+    .on_event = locate_event,
+    .ingest = locate_ingest,
+};
+
+PHAROS_LENS_REGISTER(&k_locate);

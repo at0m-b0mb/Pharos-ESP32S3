@@ -20,6 +20,7 @@ SRCS := \
   $(ROOT)/components/pharos_engine/pharos_census.c \
   $(ROOT)/components/pharos_engine/pharos_flood.c \
   $(ROOT)/components/pharos_engine/pharos_karma.c \
+  $(ROOT)/components/pharos_engine/pharos_locate.c \
   $(ROOT)/components/pharos_engine/pharos_opsec.c \
   $(ROOT)/components/pharos_engine/pharos_range.c \
   $(ROOT)/components/pharos_engine/pharos_twin.c \
@@ -30,14 +31,17 @@ SRCS := \
 BIN := pharos_render
 OUT := $(ROOT)/assets/screens
 
-.PHONY: all render check clean
-all: render
+.PHONY: all render gallery check clean
+all: render gallery
 
 $(BIN): $(SRCS)
 	$(CC) $(CFLAGS) $(INCLUDES) $(SRCS) -lm -o $@
 
 render: $(BIN)
 	./$(BIN) | python3 rasterize.py $(OUT)
+
+gallery: render
+	python3 gallery.py $(OUT) $(ROOT)/assets/branding/gallery.png
 
 check: $(BIN)
 	./$(BIN) --check

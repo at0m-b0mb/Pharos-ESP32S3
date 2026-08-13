@@ -12,6 +12,7 @@ idf_component_register(
         "pharos_dot11.c"
         "pharos_flood.c"
         "pharos_karma.c"
+        "pharos_locate.c"
         "pharos_opsec.c"
         "pharos_power.c"
         "pharos_probe.c"
