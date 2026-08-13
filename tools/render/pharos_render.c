@@ -24,7 +24,9 @@
 
 #include "pharos_census.h"
 #include "pharos_dial.h"
+#include "pharos_flood.h"
 #include "pharos_karma.h"
+#include "pharos_opsec.h"
 #include "pharos_range.h"
 #include "pharos_round.h"
 #include "pharos_twin.h"
@@ -263,8 +265,9 @@ static void screen_lamp_room(void)
 {
     static const dial_item_t items[] = {
         { "SPECTRUM", "observe" }, { "WATCH", "observe" }, { "CENSUS", "observe" },
-        { "TWIN", "observe" },     { "KARMA", "observe" }, { "PROBE", "observe" },
-        { "RANGE", "train" },      { "SYSTEM", "system" },
+        { "TWIN", "observe" },     { "KARMA", "observe" }, { "MIRAGE", "observe" },
+        { "PROBE", "observe" },    { "RANGE", "train" },   { "FOOTPRINT", "train" },
+        { "SYSTEM", "system" },
     };
     const unsigned n = sizeof(items) / sizeof(items[0]);
 
@@ -625,6 +628,162 @@ static void karma_screen(void)
     fprintf(stderr, "  karma: %u/%u %s\n", v.score, v.ceiling, pk_band_name(v.band));
 }
 
+/* ---- screen: Mirage (beacon flood) ----------------------------------- */
+
+static void screen_mirage(const pf_verdict_t *v)
+{
+    screen("mirage");
+    panel_base();
+    rim_ticks();
+
+    const char *col = band_colour(v->score);
+    const float A0 = 225.0f, SWEEP = 270.0f;
+    const uint8_t comps[3] = { v->c_volume, v->c_ephemeral, v->c_synthetic };
+    pd_gauge_t g;
+    pd_gauge_layout(comps, 3, v->score, v->ceiling, A0, SWEEP, &g);
+
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, A0, SWEEP, "#0F2231");
+    static const char *fam_col[3] = { C_CYAN, C_AMBER, C_CYAN_HI };
+    unsigned fam = 0;
+    for (unsigned i = 0; i < g.n_arcs; i++) {
+        arc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg,
+            g.arcs[i].denied ? C_DENIED : fam_col[fam % 3]);
+        if (!g.arcs[i].denied) fam++;
+    }
+    {
+        pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 2), g.ceiling_deg);
+        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 24), g.ceiling_deg);
+        line(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
+    }
+
+    disc(PR_CX, PR_CY, PR_CORE_R + 4, C_VOID);
+    text(PR_CX, PR_CY - 58, 14, 'c', C_DIMMER, "BEACON FLOOD");
+    {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%u", v->score);
+        text(PR_CX, PR_CY - 14, 64, 'c', col, buf);
+    }
+    text(PR_CX, PR_CY + 28, 20, 'c', col, pf_band_name(v->band));
+    {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%u names  %u.%u new/min", v->distinct_ssids,
+                 v->new_per_min_x10 / 10, v->new_per_min_x10 % 10);
+        text(PR_CX, PR_CY + 84, 14, 'c', C_DIM, buf);
+    }
+    {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%u%% on software radios", v->synthetic_permil / 10);
+        text(PR_CX, PR_CY + 104, 14, 'c', C_DIMMER, buf);
+    }
+    for (unsigned i = 0; i < 3; i++) {
+        dot(PR_CX - 26 + (int)i * 26, PR_CY + 128, 6,
+            (v->families & (1u << i)) ? col : C_DENIED);
+    }
+    rim_status(72, col);
+}
+
+static void mirage_screen(void)
+{
+    pf_engine_t e;
+    pf_reset(&e);
+    static const char *const words[] = { "Free", "Guest", "WiFi", "Net", "Fast",
+                                         "Home", "Fibre", "5G", "Cafe", "Pub" };
+    for (unsigned i = 0; i < 300; i++) {
+        uint8_t b[6] = { 0x02, 0xAB, 0xCD, (uint8_t)(i >> 8), (uint8_t)i, 0x01 };
+        char name[24];
+        snprintf(name, sizeof(name), "%s_%s_%03u", words[i % 10], words[(i / 10) % 10], i);
+        const uint64_t t = 5000000ull + i * 20000ull;
+        pf_observe(&e, b, name, (uint8_t)strlen(name), t);
+        pf_observe(&e, b, name, (uint8_t)strlen(name), t + 500);
+    }
+    pf_context_t camped = { .dwell_permil = 1000, .bus_yield_permil = 1000, .window_ms = 12000 };
+    pf_verdict_t v;
+    pf_evaluate(&e, &camped, &v);
+    screen_mirage(&v);
+    fprintf(stderr, "  mirage: %u/%u %s\n", v.score, v.ceiling, pf_band_name(v.band));
+}
+
+/* ---- screen: Footprint (OPSEC) --------------------------------------- */
+
+static void screen_footprint(const po_report_t *r)
+{
+    screen("footprint");
+    panel_base();
+    rim_ticks();
+
+    const char *col = (r->grade >= PO_GRADE_LOUD) ? C_RED
+                    : (r->grade == PO_GRADE_FAINT) ? C_AMBER : C_GREEN;
+
+    /* Two facing arcs: camped (what a still defender sees) vs hopping (what a
+     * moving one sees). The gap between them IS the OPSEC insight. */
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 180.0f, 150.0f, "#0F2231");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 30.0f, 150.0f, "#0F2231");
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 180.0f, 150.0f * (float)r->camped_score / 100.0f, C_RED);
+    arc(PR_CX, PR_CY, PR_RING_R - 8, 14, 30.0f, 150.0f * (float)r->hopping_score / 100.0f, C_CYAN);
+
+    /* One legend line in the open gap at the top, between the two arcs, rather
+     * than side labels that would collide with the thick arcs at 9 and 3. */
+    {
+        dot(PR_CX - 78, PR_CY - 150, 5, C_RED);
+        text(PR_CX - 40, PR_CY - 150, 14, 'c', C_RED, "CAMPED");
+        dot(PR_CX + 12, PR_CY - 150, 5, C_CYAN);
+        text(PR_CX + 52, PR_CY - 150, 14, 'c', C_CYAN, "HOPPING");
+    }
+
+    disc(PR_CX, PR_CY, PR_CORE_R + 6, C_VOID);
+    text(PR_CX, PR_CY - 56, 14, 'c', C_DIMMER, "FOOTPRINT");
+    text(PR_CX, PR_CY - 20, 44, 'c', col, po_grade_name(r->grade));
+    {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%u vs %u", r->camped_score, r->hopping_score);
+        text(PR_CX, PR_CY + 16, 24, 'c', C_TEXT, buf);
+    }
+    {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "tell: %s", r->tell_name);
+        text(PR_CX, PR_CY + 44, 14, 'c', C_DIM, buf);
+    }
+
+    if (r->invisible_to_hoppers) {
+        wrap(120, 14, C_AMBER, "Loud when watched - a hopping defender misses it", 2);
+    } else {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "stealth gap %u pts", r->stealth_gap);
+        text(PR_CX, PR_CY + 132, 14, 'c', C_DIMMER, buf);
+    }
+    rim_status(74, col);
+}
+
+static void footprint_screen(void)
+{
+    pr_range_t r;
+    pr_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.scenario = PR_SCENARIO_DEAUTH_FLOOD;
+    cfg.seed = 0xF007;
+    cfg.intensity = 800;
+    pr_range_init(&r, &cfg);
+    pw_engine_t eng;
+    pw_reset(&eng);
+    pharos_event_t ev;
+    uint64_t last = 0;
+    while (pr_range_next(&r, &ev)) {
+        pw_observe(&eng, &ev.u.dot11, ev.t_us);
+        last = ev.t_us;
+    }
+    pw_context_t c = { .dwell_permil = 1000, .bus_yield_permil = 1000, .window_ms = 12000 };
+    pw_context_t h = { .dwell_permil = 71, .bus_yield_permil = 1000, .window_ms = 12000 };
+    pw_verdict_t vc, vh;
+    pw_evaluate(&eng, last, &c, &vc);
+    pw_evaluate(&eng, last, &h, &vh);
+    po_report_t rep;
+    po_assess(&vc, &vh, &rep);
+    screen_footprint(&rep);
+    fprintf(stderr, "  footprint: %s  tell=%s  %u vs %u  hoppers-miss=%d\n",
+            po_grade_name(rep.grade), rep.tell_name, rep.camped_score,
+            rep.hopping_score, rep.invisible_to_hoppers);
+}
+
 int main(int argc, char **argv)
 {
     const bool check_only = (argc > 1 && strcmp(argv[1], "--check") == 0);
@@ -637,6 +796,8 @@ int main(int argc, char **argv)
     watch_pair();
     screen_census();
     karma_screen();
+    mirage_screen();
+    footprint_screen();
     screen_spectrum();
 
     if (g_violations) {

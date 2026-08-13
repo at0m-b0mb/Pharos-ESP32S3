@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
-  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4298_passing-1FB6C9">
+  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4364_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
   <img alt="idf" src="https://img.shields.io/badge/ESP--IDF-5.5%20%7C%206.0-444">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -39,7 +39,7 @@ Most hobby RF tools answer "is there an attack?" with a confident yes/no. Pharos
 
 So every verdict Pharos produces carries a **confidence ceiling** derived from how much of the channel it actually heard. A deauth flood reads `FLOOD LIKELY` when you camp on its channel and only `SUSPICIOUS` when you keep hopping — the same traffic, a different honesty. There is no band named "safe". Absence of evidence on a receiver that hears 7% of the air is not evidence of absence, and the firmware never pretends otherwise.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,298 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,364 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
 
 ## What it looks like
 
@@ -84,11 +84,24 @@ A **lens** is one tool. The dial is built from whatever lenses are compiled in; 
 | **Census** | 🔵 audit | Grades every nearby network A+…F on what it would take to break in — auth, 802.11w, cipher, WPS. |
 | **Twin** | 🔵 detect | Finds the rogue AP wearing a name that belongs to someone else — and scores BSSID multiplicity at *zero*, because roaming is not an attack. |
 | **Karma** | 🔵 detect | Catches the rogue AP that answers to *any* name a passing phone asks for — while scoring a legitimate multi-SSID deployment at zero. |
+| **Mirage** | 🔵 detect | Detects the beacon/SSID-spam flood that fills every phone's network list — the exact attack the ESP32 world is famous for — while scoring a dense city as *busy, not hostile*. |
 | **Probe** | 🟣 recon | Shows a room what its phones broadcast about their owners, and defeats MAC randomisation to prove the point. Awareness-session gold. |
 | **Range** | 🔴🔵 train | Plays synthesised attacks through the **real** detection engines so you can learn to read the gauge. Holds no radio at all. |
+| **Footprint** | 🔴 train | The red team's mirror: grades how *detectable* an attack is, names the family that gives it away, and tells you whether a hopping defender would even notice. Receive-only OPSEC. |
 | **System** | ⚙️ audit | Battery, region, and live proof the transmit fence is clean. |
 
 Red, blue, and purple all run on the **same engines**. The Range doesn't simulate a detector — it drives the actual one, so what you learn on it is exactly what you see in the field. See [docs/REDBLUE.md](docs/REDBLUE.md) for how Pharos serves each side.
+
+### For red teams: know your own signature
+
+Pharos will not transmit — that's the whole point, and it's why it can go into rooms offensive tools can't. What it gives a red-teamer instead is arguably more valuable: **OPSEC insight**. The **Footprint** lens grades any attack from the defender's side of the glass, against a camped defender *and* a hopping one:
+
+<p align="center">
+  <img src="assets/screens/footprint.png" width="46%" alt="Footprint: OPSEC detectability">
+  <img src="assets/screens/mirage.png" width="46%" alt="Mirage: beacon-flood detection">
+</p>
+
+Left: a broadcast deauth flood reads **BLARING** to a camped defender (88) but only 60 to a hopping one — the dominant tell is *frame rate*, and the takeaway is stated plainly: *loud when watched, a hopping defender misses it*. Right: **Mirage** catching a 300-name beacon flood at **FLOOD LIKELY**, while a dense-city rooftop of 60 real networks scores *busy, not hostile*.
 
 ## The transmit fence
 
@@ -130,7 +143,7 @@ the honest version of the guarantee, and it is the one Pharos makes.
 **The engines and UI geometry build and test with no board at all** — do this first, it is fast and catches the most:
 
 ```bash
-make -C test/host                # 4298 checks, 0 failures
+make -C test/host                # 4364 checks, 0 failures
 ```
 
 **Firmware**, with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or newer:
@@ -175,7 +188,7 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-**v1.1.0** — the judgement layer is complete and tested (4,298 host checks); the display layer is scaffolded against tested geometry. **No hardware validation yet:** the pin map, BSP bring-up and LVGL rendering are milestones M1–M2, and every unproven constant is marked `VERIFY`. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+**v1.1.0** — the judgement layer is complete and tested (4,364 host checks); the display layer is scaffolded against tested geometry. **No hardware validation yet:** the pin map, BSP bring-up and LVGL rendering are milestones M1–M2, and every unproven constant is marked `VERIFY`. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 

@@ -603,6 +603,8 @@ int main(void)
     test_sha256();
     test_chain();
     test_karma();
+    test_flood();
+    test_opsec();
 
     printf("\n%u checks, %u failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

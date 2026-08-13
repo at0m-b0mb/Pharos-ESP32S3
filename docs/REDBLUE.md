@@ -95,6 +95,26 @@ them you cannot hide.
   giveaway: an open member of a protected SSID is the shape that gets you
   caught. That is a red-team lesson delivered by a blue-team tool.
 
+### The Footprint lens — know your own signature
+
+The **Footprint** lens is the red team's mirror, and the honest way a
+receive-only tool earns its place in an operator's kit. Pick an attack; it
+grades that attack with the *real* Watch engine against two defenders — one
+camped on the channel, one hopping across the band — and tells you:
+
+- a **detectability grade** (GHOST / FAINT / LOUD / BLARING),
+- the **dominant tell**: the single piece of evidence carrying your score
+  (broadcast targeting, spoofed identity, frame rate, reason-code monoculture),
+- the **stealth gap**: how many points a defender loses by hopping instead of
+  camping, and
+- the operationally decisive line — **would a hopping defender even notice?**
+
+A red team that internalises "a broadcast deauth lights three families instantly,
+but a hopping defender caps at SUSPICIOUS" understands the engagement better than
+one that just fires. That is tradecraft, taught defensively, without a frame
+transmitted. And it is the same arithmetic the blue side is running — because it
+is the same engine.
+
 If you need to actually transmit for an authorised engagement, Pharos is not
 that tool and will not become it — use dedicated, clearly-labelled offensive
 kit, inside your rules of engagement. Pharos' refusal to transmit is the feature

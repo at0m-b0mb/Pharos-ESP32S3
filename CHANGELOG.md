@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.2.0 — 2026-08-13
+
+More red-team value, all of it still receive-only. Two new detection engines,
+a red-team OPSEC tool, and two more screens rendered from the real code.
+
+### Mirage — beacon-flood / SSID-spam detection (new engine + lens)
+
+Detects the attack the ESP32 world is most known for: a radio inventing
+hundreds of fabricated network names to spam every phone's Wi-Fi list.
+Evil-M5Project ships that attack; Pharos is its inverse and now *detects* it,
+passively, without transmitting a frame.
+
+Three families — VOLUME (new names per second), EPHEMERAL (names heard once
+then gone), SYNTHETIC (software BSSIDs sharing a prefix). The false positive it
+exists to defeat is a genuinely dense city: 60 real networks from real vendors
+that *persist*. VOLUME alone is capped below the alarm band, so a busy rooftop
+reads BUSY, not FLOOD — there is a test that stands in a simulated city and
+insists on it. Same confidence ceiling as everything else: hopping cannot alarm.
+
+### Footprint — the red team's OPSEC mirror (new engine + lens)
+
+The honest way a receive-only tool serves a red team. Pick an attack; Footprint
+grades it with the *real* Watch engine against two defenders — one camped, one
+hopping — and reports how detectable you are:
+
+- a grade: GHOST / FAINT / LOUD / BLARING,
+- the **dominant tell** — the single piece of evidence carrying your score,
+- the **stealth gap** — what a defender loses by hopping instead of camping, and
+- the decisive line: **would a hopping defender even notice?**
+
+Understanding your own signature is tradecraft, and this teaches it defensively,
+from the watchtower's side, without a transmitted frame. Its guidance explains
+*detectability* and never coaches evasion — there is a test that greps for it.
+
+### Two more screens, from the real engines
+
+`tools/render` now draws Mirage and Footprint too, driven by the actual
+detection code. The Footprint screen shows the camped-vs-hopping arcs side by
+side — the OPSEC insight made visual. All ten lenses now appear on the rendered
+Lamp Room dial, and the bounds check still passes (it caught, and I fixed, the
+side-label collisions on the new screen).
+
+### Verification
+
+- **4364 host checks**, no board required: `make -C test/host`
+- Round-screen bounds check, transmit-fence audit, lens-linkage audit
+- CI runs all four plus ESP-IDF builds against v5.5 and v6.0
+- **10 lenses**, all verified present in the linked ELF
+
 ## v1.1.0 — 2026-08-13
 
 Three genuinely new capabilities, one important bug caught, and the UI made

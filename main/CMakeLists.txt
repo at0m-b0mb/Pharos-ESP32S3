@@ -15,6 +15,8 @@ idf_component_register(
         pharos_lens_watch
         pharos_lens_probe
         pharos_lens_karma
+        pharos_lens_mirage
         pharos_lens_range
+        pharos_lens_footprint
         pharos_lens_system
 )

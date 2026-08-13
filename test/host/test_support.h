@@ -47,4 +47,8 @@ void test_sha256(void);
 void test_chain(void);
 void test_karma(void);
 
+/* Suites defined in test_redteam.c */
+void test_flood(void);
+void test_opsec(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */
