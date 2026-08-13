@@ -26,7 +26,12 @@ static void feed(pp_engine_t *e, const uint8_t *addr, const char *const *ssids,
                  uint16_t *seq, uint32_t fp)
 {
     for (unsigned i = 0; ssids[i]; i++) {
-        pp_probe_t p = mk_probe(addr, ssids[i], (*seq)++, fp, 1000000ull * (*seq));
+        /* Read the sequence number once, then advance it: reading *seq twice
+         * in one expression (once bumped, once for the timestamp) is a
+         * sequence-point UB that gcc rightly rejects even though clang allows
+         * it. Separate statements, defined behaviour. */
+        const uint16_t s = (*seq)++;
+        pp_probe_t p = mk_probe(addr, ssids[i], s, fp, 1000000ull * s);
         pp_observe(e, &p);
     }
 }
