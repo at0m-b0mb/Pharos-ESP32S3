@@ -38,6 +38,9 @@ jobs:
       - name: Audit lens linkage (source side)
         run: ./tools/check_lenses.sh
 
+      - name: Audit source wiring (firmware and host builds agree)
+        run: ./tools/check_sources.sh
+
   firmware:
     name: esp-idf build (${{ matrix.idf }})
     runs-on: ubuntu-latest

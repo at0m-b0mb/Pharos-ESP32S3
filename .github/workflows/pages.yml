@@ -51,9 +51,39 @@ jobs:
           # A logo for the tab/card, straight from the repo's branding.
           cp assets/branding/logo.png _site/logo.png || true
 
+          # Wait for the firmware asset to exist.
+          #
+          # This job and the release build both fire on the same
+          # "release published" event, so on a fresh release the .bin is not
+          # attached yet - the firmware takes several minutes to compile. The
+          # first attempt at v1.4.0 failed exactly this way and left the flasher
+          # serving the PREVIOUS release's binary, which is the worst possible
+          # outcome: a page that looks fine and installs the wrong firmware.
+          # So: poll, with a ceiling, and fail loudly rather than publish stale.
+          deadline=$(( SECONDS + 900 ))   # 15 minutes
+          until gh release view "$TAG" --repo "${{ github.repository }}" \
+                  --json assets --jq '.assets[].name' 2>/dev/null \
+                | grep -q -- '-esp32s3\.bin'; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::no *-esp32s3.bin on release $TAG after 15 minutes;" \
+                   "refusing to publish the flasher with a stale binary"
+              exit 1
+            fi
+            echo "waiting for the firmware asset on $TAG ..."
+            sleep 20
+          done
+
           # The audited firmware, under the stable path the manifest references.
           gh release download "$TAG" --repo "${{ github.repository }}" \
             --pattern '*-esp32s3.bin' --output _site/firmware/pharos-esp32s3.bin --clobber
+
+          # Never ship an empty or truncated image to the flasher.
+          size=$(stat -c%s _site/firmware/pharos-esp32s3.bin)
+          echo "firmware: ${size} bytes"
+          if [ "$size" -lt 200000 ]; then
+            echo "::error::firmware looks truncated (${size} bytes)"
+            exit 1
+          fi
 
           # Reflect the real version in the manifest (cosmetic in the flasher UI).
           VER="${TAG#v}"

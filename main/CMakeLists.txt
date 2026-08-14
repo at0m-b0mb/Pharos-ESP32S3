@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c"
+    SRCS "main.c" "console_glue.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash

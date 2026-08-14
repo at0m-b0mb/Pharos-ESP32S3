@@ -9,6 +9,7 @@ idf_component_register(
     SRCS
         "pharos_census.c"
         "pharos_chain.c"
+        "pharos_console.c"
         "pharos_dot11.c"
         "pharos_flood.c"
         "pharos_karma.c"

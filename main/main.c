@@ -29,8 +29,9 @@
 
 static const char *TAG = "pharos";
 
-/* Forward decls from the system lens. */
+/* Forward decls from the system lens and the console glue. */
 bool pharos_lens_system_fence_ok(void);
+void pharos_console_start(void);
 
 static void banner(const pharos_bsp_status_t *bsp)
 {
@@ -93,6 +94,11 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "transmit fence clean - receive-only confirmed");
     }
+
+    /* The serial command console: a receive-only REPL on the USB port, so the
+     * device is usable before the touch dial lands. Started before the UI takes
+     * the main loop. */
+    pharos_console_start();
 
     /* The UI owns the main loop from here: it builds the dial from the
      * registry, dispatches touch, ticks the active lens, and drains the

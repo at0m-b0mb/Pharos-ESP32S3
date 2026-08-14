@@ -99,18 +99,48 @@ void pharos_console_run(const char *line)
     fflush(stdout);
 }
 
+/* Read a line by polling getchar().
+ *
+ * Deliberately NOT fgets(stdin): with ESP-IDF's default VFS the stdin stream is
+ * non-blocking, so fgets returns immediately with EOF and a naive loop either
+ * spins at 100% or never sees input at all. Accumulating characters and
+ * yielding when the buffer is dry is the behaviour that actually works over
+ * both UART and USB-CDC, and it lets us handle backspace properly. */
 static void console_task(void *arg)
 {
     (void)arg;
     char line[PC_MAX_LINE];
+    size_t len = 0;
+
     fputs("\nPharos console - type 'help'. Receive-only; nothing here transmits.\n"
           "pharos> ", stdout);
     fflush(stdout);
+
     for (;;) {
-        if (fgets(line, sizeof(line), stdin)) {
+        const int c = getchar();
+        if (c == EOF) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (c == '\r' || c == '\n') {
+            fputc('\n', stdout);
+            line[len] = '\0';
             pharos_console_run(line);
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(50));
+            len = 0;
+            continue;
+        }
+        if (c == 0x7F || c == '\b') { /* DEL / backspace */
+            if (len) {
+                len--;
+                fputs("\b \b", stdout);
+                fflush(stdout);
+            }
+            continue;
+        }
+        if (c >= 0x20 && c < 0x7F && len < sizeof(line) - 1) {
+            line[len++] = (char)c;
+            fputc(c, stdout); /* local echo */
+            fflush(stdout);
         }
     }
 }
