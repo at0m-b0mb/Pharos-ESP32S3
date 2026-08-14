@@ -93,59 +93,138 @@ void pharos_ui_aegis_ack(void)
     ESP_LOGI(TAG, "aegis: latch acknowledged; watch restarts clean");
 }
 
-/* ---- navigation -----------------------------------------------------
+/* ---- navigation ------------------------------------------------------
  *
- * The dial order is the same one build_dial() computes, so tapping through the
- * lenses walks them in the order they appear on screen. Kept as an index into
- * the registry rather than a copy, so adding a lens needs no change here. */
+ * THE RULE, learned the hard way: the touch callback runs on LVGL's task,
+ * holding LVGL's lock and using LVGL's stack. Activating a lens tears down and
+ * restarts the Wi-Fi driver, which needs far more stack than that task has -
+ * and re-enters the display lock. Doing it there overflowed the stack and
+ * rebooted the board on every lens change; that shipped in v1.8.0.
+ *
+ * So the callback records an intent and returns. The UI task, which owns the
+ * lens lifecycle already, performs it on the next tick. */
+typedef enum { VIEW_BROWSE = 0, VIEW_LIVE } view_t;
+
 static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
 static unsigned s_order_n;
 static unsigned s_cursor;
+static view_t s_view = VIEW_BROWSE;
+static volatile int s_nav_pending = -1; /* pharos_nav_t, or -1 for none */
 
-static bool launchable_fwd(const pharos_lens_t *l);
-
-static void nav_to(unsigned idx)
+static void on_nav(pharos_nav_t what)
 {
+    s_nav_pending = (int)what; /* record only - see the note above */
+}
+
+/* Colour a lens by which team it serves, so the browser is readable at a
+ * glance rather than uniformly cyan. */
+static uint32_t lens_rgb(const pharos_lens_t *l)
+{
+    if (!l) return 0x1FB6C9;
+    switch (l->kind) {
+    case PHAROS_LENS_TRAIN:  return 0xE8A33F; /* amber: training      */
+    case PHAROS_LENS_SYSTEM: return 0x7FA6B5; /* slate: housekeeping  */
+    case PHAROS_LENS_ANALYSE:return 0xB07FE8; /* violet: analysis     */
+    case PHAROS_LENS_OBSERVE:
+    default:                 return 0x1FB6C9; /* cyan: listening      */
+    }
+}
+
+static const char *lens_team(const pharos_lens_t *l)
+{
+    if (!l) return "";
+    switch (l->kind) {
+    case PHAROS_LENS_TRAIN:   return "train";
+    case PHAROS_LENS_SYSTEM:  return "system";
+    case PHAROS_LENS_ANALYSE: return "analyse";
+    case PHAROS_LENS_OBSERVE:
+    default:                  return "watch";
+    }
+}
+
+static bool lens_launchable(const pharos_lens_t *l);
+
+/* Paint the browse card for wherever the cursor is. */
+static void paint_browse(void)
+{
+    if (!s_order_n || !pharos_bsp_display_lock(30)) {
+        return;
+    }
+    pharos_hud_create();
+    const pharos_lens_t *l = s_order[s_cursor % s_order_n];
+    pharos_hud_browse(l ? l->name : "", l ? l->summary : "", lens_team(l),
+                      s_cursor % s_order_n, s_order_n, lens_rgb(l));
+    pharos_bsp_display_unlock();
+}
+
+/* Run the pending intent. Called from the UI task only. */
+static void nav_apply(void)
+{
+    const int want = s_nav_pending;
+    if (want < 0) {
+        return;
+    }
+    s_nav_pending = -1;
     if (!s_order_n) {
         return;
     }
-    for (unsigned tries = 0; tries < s_order_n; tries++) {
-        const pharos_lens_t *l = s_order[idx % s_order_n];
-        if (l && launchable_fwd(l) && pharos_lens_activate(l->id)) {
-            s_cursor = idx % s_order_n;
-            ESP_LOGI(TAG, "nav -> %s", l->id);
-            if (pharos_bsp_display_lock(50)) {
-                pharos_hud_toast(l->name);
+
+    switch ((pharos_nav_t)want) {
+    case PHAROS_NAV_NEXT:
+        s_cursor = (s_cursor + 1u) % s_order_n;
+        break;
+    case PHAROS_NAV_PREV:
+        s_cursor = (s_cursor + s_order_n - 1u) % s_order_n;
+        break;
+    case PHAROS_NAV_SELECT: {
+        if (s_view == VIEW_LIVE) {
+            return; /* already running; the centre does nothing here */
+        }
+        const pharos_lens_t *l = s_order[s_cursor % s_order_n];
+        if (!l) {
+            return;
+        }
+        if (!lens_launchable(l)) {
+            if (pharos_bsp_display_lock(30)) {
+                pharos_hud_toast("radio locked");
                 pharos_bsp_display_unlock();
             }
             return;
         }
-        idx++;
+        if (pharos_lens_activate(l->id)) {
+            s_view = VIEW_LIVE;
+            ESP_LOGI(TAG, "started %s", l->id);
+        } else {
+            ESP_LOGW(TAG, "could not start %s", l->id);
+            if (pharos_bsp_display_lock(30)) {
+                pharos_hud_toast("would not start");
+                pharos_bsp_display_unlock();
+            }
+        }
+        return;
     }
-}
-
-static void on_nav(pharos_nav_t what)
-{
-    switch (what) {
-    case PHAROS_NAV_NEXT: nav_to(s_cursor + 1); break;
-    case PHAROS_NAV_PREV: nav_to(s_cursor + s_order_n - 1); break;
     case PHAROS_NAV_HOME:
     default:
         pharos_lens_deactivate();
-        ESP_LOGI(TAG, "nav -> home (stopped)");
-        if (pharos_bsp_display_lock(50)) {
-            pharos_hud_toast("stopped");
-            pharos_bsp_display_unlock();
-        }
-        break;
+        s_view = VIEW_BROWSE;
+        ESP_LOGI(TAG, "stopped; back to browse");
+        paint_browse();
+        return;
     }
+
+    /* NEXT/PREV: stepping the list stops whatever is running, so the reading
+     * on screen always belongs to the lens named above it. */
+    if (s_view == VIEW_LIVE) {
+        pharos_lens_deactivate();
+        s_view = VIEW_BROWSE;
+    }
+    paint_browse();
 }
 
 /* The board exposes no user buttons (BSP_CAPS_BUTTONS is 0); the two on the
- * side are RESET and BOOT. BOOT is GPIO0 and is readable, so it becomes a
- * physical "next lens" - useful when a glove, a dead touch controller or a
- * pocket makes the screen impractical. Polled, because it shares its pin with
- * the bootloader strap and an interrupt here is not worth the care. */
+ * side are RESET and BOOT. BOOT is GPIO0 and readable, so it becomes a
+ * physical control - useful with gloves, in a pocket, or if the touch
+ * controller is dead, which is a real case on this board. */
 #define PHAROS_BOOT_GPIO 0
 
 static void boot_button_init(void)
@@ -172,8 +251,14 @@ static void boot_button_poll(uint32_t dt_ms)
         return;
     }
     if (was_down) {
-        /* Released: long press goes home, short press advances. */
-        on_nav(held_ms >= 800u ? PHAROS_NAV_HOME : PHAROS_NAV_NEXT);
+        /* Hold goes back; a short press advances in browse, and starts what is
+         * under the cursor when you are already looking at it. */
+        if (held_ms >= 800u) {
+            s_nav_pending = (int)PHAROS_NAV_HOME;
+        } else {
+            s_nav_pending = (int)(s_view == VIEW_BROWSE ? PHAROS_NAV_SELECT
+                                                        : PHAROS_NAV_NEXT);
+        }
         was_down = false;
         held_ms = 0;
     }
@@ -213,9 +298,6 @@ static void analytics_task(void *arg)
 
 /* Is a lens safe to auto-launch given the fence state? A lens that holds any
  * radio capability is gated behind a clean fence. */
-static bool lens_launchable(const pharos_lens_t *l);
-static bool launchable_fwd(const pharos_lens_t *l) { return lens_launchable(l); }
-
 static bool lens_launchable(const pharos_lens_t *l)
 {
     if (s_fence_ok) {
@@ -236,6 +318,9 @@ static uint32_t s_paints, s_paint_misses;
 
 static void paint(const pharos_lens_t *active)
 {
+    if (s_view == VIEW_BROWSE) {
+        return; /* the browse card is painted when the cursor moves */
+    }
     if (!pharos_bsp_display_lock(30)) {
         /* Counted, not ignored: a paint that never lands is exactly what a
          * black screen looks like from in here, and the heartbeat below
@@ -342,23 +427,20 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     /* Default landing lens: Spectrum if the fence is clean (you look before
      * you judge), otherwise the System panel so the operator sees why radio
      * is locked. */
-    const char *landing = s_fence_ok ? "wifi.spectrum" : "sys.audit";
-    if (!pharos_lens_activate(landing)) {
-        ESP_LOGE(TAG, "could not activate landing lens %s", landing);
-    }
-    for (unsigned i = 0; i < s_order_n; i++) {
-        if (s_order[i] && strcmp(s_order[i]->id, landing) == 0) {
-            s_cursor = i;
-            break;
-        }
-    }
+    /* Land in BROWSE rather than straight into a lens: the first thing the
+     * operator should see is what this tool does, not a number with no
+     * explanation attached. */
+    s_view = VIEW_BROWSE;
+    s_cursor = 0;
 
     /* Put the identity on the panel immediately, so the operator sees the
      * device is alive long before a lens has anything to say. */
     if (pharos_bsp_display_lock(200)) {
-        pharos_hud_splash("v1.8.0", s_fence_ok);
+        pharos_hud_splash("v1.9.0", s_fence_ok);
         pharos_bsp_display_unlock();
     }
+    vTaskDelay(pdMS_TO_TICKS(1500)); /* let the identity be read */
+    paint_browse();
 
     uint64_t last_us = (uint64_t)esp_timer_get_time();
     uint32_t heartbeat = 0;
@@ -377,6 +459,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         aegis_pump(active, dt_ms);
 
         boot_button_poll(dt_ms);
+        nav_apply();
 
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here
          * is push fresh text/values in under its lock; a short timeout means a
