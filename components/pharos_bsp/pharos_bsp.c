@@ -127,6 +127,10 @@ static const char *TAG = "bsp";
 
 static pharos_bsp_status_t s_last;
 
+/* Defined below, next to the rest of the rotation handling; called from
+ * pharos_bsp_init() once the panel is confirmed up. */
+static void rotation_restore(void);
+
 bool pharos_bsp_init(pharos_bsp_status_t *out)
 {
     pharos_bsp_status_t st;
