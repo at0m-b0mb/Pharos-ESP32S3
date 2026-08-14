@@ -3,6 +3,11 @@
  * Only compiled with a real panel; with the vendor BSP off these become
  * no-ops so the firmware still builds and runs headless.
  */
+/* sdkconfig.h FIRST - see the long note in pharos_bsp.c. The #if below tests
+ * CONFIG_PHAROS_HAS_VENDOR_BSP, and without this the macro is undefined at
+ * that point and the whole HUD compiles to no-ops. */
+#include "sdkconfig.h"
+
 #include "pharos_hud.h"
 
 #if !defined(PHAROS_HOST) && defined(CONFIG_PHAROS_HAS_VENDOR_BSP)

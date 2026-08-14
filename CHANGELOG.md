@@ -1,5 +1,52 @@
 # Changelog
 
+## v1.7.1 — 2026-08-14
+
+### Fixed: the black screen. The actual, embarrassing cause.
+
+Every display fix from v1.4.0 to v1.7.0 was written into a branch **that was
+never compiled**.
+
+`pharos_bsp.c` chooses between the real panel and a simulated board with:
+
+```c
+#elif !defined(CONFIG_PHAROS_HAS_VENDOR_BSP)
+```
+
+ESP-IDF does **not** force-include `sdkconfig.h`. A translation unit only sees
+`CONFIG_*` macros once something has included it — and in this file every ESP
+header was included *inside* the branches, i.e. **after** the test had already
+been evaluated. So at that moment the macro was undefined, `!defined(...)` was
+true, and the **simulated board path was compiled every single time**.
+
+`sdkconfig.defaults` said `=y`. The build honoured it everywhere except the one
+file where it mattered. The firmware compiled cleanly, linked cleanly, passed
+the fence and lens audits, booted happily, ran all sixteen lenses — and never
+once touched the panel. `pharos_hud.c` had the identical bug, which is why the
+HUD was never built either.
+
+The device's own diagnostics are what finally caught it:
+
+```
+W (534) bsp: vendor BSP disabled - simulated board, screen will stay dark
+     ui: active: wifi.spectrum painted=0 missed=348 hud=0
+   diag: display : not attempted (vendor BSP off)
+```
+
+The fix is one `#include "sdkconfig.h"` at the top of each file.
+
+### And a guard, because this class of bug has now cost days
+
+`tools/check_display.sh` runs in CI and on every release build. It asserts two
+things: that `sdkconfig.h` is included **before** any preprocessor test of a
+`CONFIG_` macro, and that the linked ELF contains the real bring-up while
+**not** containing the simulated path's fingerprint. A release that would boot
+to a black screen now fails the build instead of shipping.
+
+This is the same disease as the lens-linkage bug guarded by `check_lenses.sh`:
+code that compiles, links, tests green, and is silently absent from the running
+firmware. It gets the same cure — an audit against the actual artefact.
+
 ## v1.7.0 — 2026-08-14
 
 **The display fixed at its actual source, a real CLI, and the Bluetooth radio

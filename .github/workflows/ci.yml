@@ -38,6 +38,9 @@ jobs:
       - name: Audit lens linkage (source side)
         run: ./tools/check_lenses.sh
 
+      - name: Audit the display path (source side)
+        run: ./tools/check_display.sh
+
       - name: Audit source wiring (firmware and host builds agree)
         run: ./tools/check_sources.sh
 
@@ -66,3 +69,4 @@ jobs:
           # A lens registers from a constructor, so the linker will happily
           # discard it and still produce a clean, empty-feeling firmware.
           ./tools/check_lenses.sh "$elf"
+          ./tools/check_display.sh "$elf"

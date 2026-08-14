@@ -40,12 +40,14 @@ jobs:
           target: esp32s3
           path: '.'
 
-      - name: Audit the linked ELF (fence + lenses)
+      - name: Audit the linked ELF (fence + lenses + display)
         run: |
           elf=$(find build -name 'pharos.elf' | head -n1)
           test -n "$elf" || { echo "no pharos.elf produced"; exit 1; }
           ./tools/check_tx_fence.sh "$elf"
           ./tools/check_lenses.sh "$elf"
+          # A release that boots to a black screen is worse than no release.
+          ./tools/check_display.sh "$elf"
 
       - name: Assemble a flashable bundle
         run: |

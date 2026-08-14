@@ -21,6 +21,21 @@
  * below is the single place that is expressed, so the rest of the firmware
  * never has to know whose mutex it is.
  */
+/* sdkconfig.h FIRST, and this is not a style preference.
+ *
+ * The #if chain below tests CONFIG_PHAROS_HAS_VENDOR_BSP. ESP-IDF does not
+ * force-include sdkconfig.h; a translation unit only sees CONFIG_* macros once
+ * something has included it. Every ESP header in this file is included INSIDE
+ * one of the branches - i.e. after the test has already been evaluated - so
+ * without this line the macro is undefined at that moment, !defined() is true,
+ * and the SIMULATED board path is compiled regardless of what sdkconfig says.
+ *
+ * That is exactly what shipped from v1.4.0 to v1.7.0: the flag was set to y,
+ * the build honoured it everywhere except here, and the panel was never
+ * touched. tools/check_display.sh now fails the build if the simulated path
+ * ends up in a release image. */
+#include "sdkconfig.h"
+
 #include "pharos_bsp.h"
 
 #include "board_pins.h"
