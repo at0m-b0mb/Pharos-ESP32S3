@@ -194,6 +194,35 @@ static void cmd_squall(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out
     run_scan(ops, "wifi.squall", argc - 1, argv + 1, out);
 }
 
+/* Vigil: the BLE tracker watch. `vigil mine` marks the current tag as your
+ * own - your earbuds are supposed to follow you. */
+static void cmd_vigil(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
+{
+    if (argc >= 2 && strcmp(argv[1], "mine") == 0) {
+        if (!ops->mark_known) {
+            need_ops(out, (const void *)ops->mark_known, "mine");
+            return;
+        }
+        pc_println(out, ops->mark_known()
+                            ? "marked as yours - excluded from now on"
+                            : "nothing to mark yet");
+        return;
+    }
+    if (argc >= 2) {
+        pc_printf(out, "usage: %s\n", pc_find("vigil")->usage);
+        return;
+    }
+    if (!ops->activate_lens || !ops->activate_lens("ble.vigil")) {
+        pc_println(out, "could not start Vigil");
+        return;
+    }
+    pc_println(out, "vigil: watching for trackers. Carry it as you move - a tag");
+    pc_println(out, "       that follows you between places is the finding.");
+    if (ops->status_line) {
+        ops->status_line(out);
+    }
+}
+
 /* Aegis: the accumulated picture. `aegis ack` clears the latch once the
  * operator has seen it - the device never forgets a finding on its own. */
 static void cmd_aegis(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
@@ -382,6 +411,7 @@ static const pc_cmd_t k_cmds[] = {
     { "sentinel", "sentinel [adopt]",                "what changed since your site baseline",  PC_CAT_SCAN,     0, 1, cmd_sentinel },
     { "harvest",  "harvest",                         "catch handshake/PMKID collection",       PC_CAT_SCAN,     0, 0, cmd_harvest },
     { "squall",   "squall [camp <ch>|survey]",       "busy, broken, or jammed?",               PC_CAT_SCAN,     0, 2, cmd_squall },
+    { "vigil",    "vigil [mine]",                    "is a tracker travelling with you?",      PC_CAT_SCAN,     0, 1, cmd_vigil },
     { "aegis",    "aegis [ack]",                     "the whole picture: every finding so far",PC_CAT_ANALYSE,  0, 1, cmd_aegis },
     { "locate",   "locate <bssid>",                  "walk to a transmitter (hotter/colder)",  PC_CAT_ANALYSE,  1, 1, cmd_locate },
     { "footprint","footprint [scenario]",            "how detectable is an attack? (OPSEC)",   PC_CAT_ANALYSE,  0, 1, cmd_footprint },

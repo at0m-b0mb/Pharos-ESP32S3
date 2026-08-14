@@ -25,6 +25,7 @@ idf_component_register(
         "pharos_sha256.c"
         "pharos_squall.c"
         "pharos_twin.c"
+        "pharos_vigil.c"
         "pharos_watch.c"
     INCLUDE_DIRS "include"
     REQUIRES pharos_core

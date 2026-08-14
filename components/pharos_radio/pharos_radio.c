@@ -25,6 +25,12 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+/* NimBLE, compiled observer-only (see this component's Kconfig). The scan is
+ * additionally PASSIVE, so this radio never emits a SCAN_REQ. */
+#include "host/ble_gap.h"
+#include "host/ble_hs.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
 #endif
 
 static const char *TAG = "radio";
@@ -350,14 +356,119 @@ void pharos_radio_rx_stop(void) { s.running = false; s.bus = NULL; }
 /* BLE observer is a M4 milestone; the entry points exist so lenses can be
  * written against them, and refuse cleanly until the NimBLE observer glue
  * lands. Refusing is the honest behaviour, not a stub that pretends. */
+/* ---- BLE observer ---------------------------------------------------
+ *
+ * PASSIVE scanning, and that word is load-bearing.
+ *
+ * An ACTIVE BLE scan transmits: for every advertisement it hears it sends a
+ * SCAN_REQ back to ask for the scan response. That is a radio transmission,
+ * it is attributable to this device, and it would break the single promise
+ * the whole project is built on. ble_gap_disc_params.passive = 1 is therefore
+ * not a tuning choice - it is the fence, expressed in the one place BLE could
+ * otherwise emit. Pharos hears advertisements and never answers them.
+ *
+ * NimBLE is additionally compiled observer-only (see Kconfig), so the
+ * advertising, peripheral and central code is not in the image at all. This
+ * is the belt to that's braces. */
+#if !defined(PHAROS_HOST)
+
+static pharos_bus_t *s_ble_bus;
+static bool s_ble_running;
+
+static int ble_gap_event(struct ble_gap_event *event, void *arg)
+{
+    (void)arg;
+    if (!event || event->type != BLE_GAP_EVENT_DISC || !s_ble_bus) {
+        return 0;
+    }
+    const struct ble_gap_disc_desc *d = &event->disc;
+
+    pharos_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.t_us = (uint64_t)esp_timer_get_time();
+    ev.type = PHAROS_EV_BLE_ADV;
+    memcpy(ev.u.ble.addr, d->addr.val, 6);
+    ev.u.ble.addr_type = d->addr.type;
+    ev.u.ble.adv_type = d->event_type;
+    ev.u.ble.rssi = (int8_t)d->rssi;
+    uint8_t n = d->length_data;
+    if (n > PHAROS_BLE_ADV_MAX) {
+        n = PHAROS_BLE_ADV_MAX;
+    }
+    ev.u.ble.data_len = n;
+    if (n && d->data) {
+        memcpy(ev.u.ble.data, d->data, n);
+    }
+
+    s.stats.ble_reports++;
+    pharos_bus_push(s_ble_bus, &ev);
+    return 0;
+}
+
+static void ble_on_sync(void)
+{
+    struct ble_gap_disc_params p;
+    memset(&p, 0, sizeof(p));
+    p.passive = 1;           /* THE FENCE: never send SCAN_REQ. See above. */
+    p.filter_duplicates = 0; /* we want repeats: persistence is the signal */
+    p.itvl = 0x0060;         /* ~60 ms */
+    p.window = 0x0030;       /* ~30 ms - a 50% duty listen              */
+    const int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p,
+                                ble_gap_event, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
+    } else {
+        ESP_LOGI(TAG, "ble observer up (passive - transmits nothing)");
+    }
+}
+
+static void ble_host_task(void *param)
+{
+    (void)param;
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+#endif /* !PHAROS_HOST */
+
 bool pharos_radio_ble_scan_start(pharos_bus_t *bus)
 {
-    (void)bus;
     if (!(pharos_lens_active_caps() & PHAROS_CAP_BLE_SCAN)) {
         return false;
     }
-    ESP_LOGW(TAG, "ble observer not yet wired (milestone M4)");
+#if defined(PHAROS_HOST)
+    (void)bus;
     return false;
+#else
+    if (!bus) {
+        return false;
+    }
+    s_ble_bus = bus;
+    if (s_ble_running) {
+        return true;
+    }
+    const esp_err_t err = nimble_port_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nimble_port_init failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    ble_hs_cfg.sync_cb = ble_on_sync;
+    nimble_port_freertos_init(ble_host_task);
+    s_ble_running = true;
+    return true;
+#endif
 }
 
-void pharos_radio_ble_scan_stop(void) {}
+void pharos_radio_ble_scan_stop(void)
+{
+#if !defined(PHAROS_HOST)
+    if (!s_ble_running) {
+        return;
+    }
+    ble_gap_disc_cancel();
+    s_ble_bus = NULL;
+    /* The NimBLE host stays up: tearing the controller down and back up costs
+     * seconds and this lens is switched in and out constantly. Cancelling the
+     * scan is what actually stops the radio listening. */
+    ESP_LOGI(TAG, "ble observer stopped");
+#endif
+}

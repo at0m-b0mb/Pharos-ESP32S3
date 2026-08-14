@@ -1,5 +1,96 @@
 # Changelog
 
+## v1.7.0 — 2026-08-14
+
+**The display fixed at its actual source, a real CLI, and the Bluetooth radio
+finally doing something.**
+
+### Fixed: the screen, properly this time
+
+v1.5.0 fixed a genuine bug (the LVGL lock's `esp_err_t` read as a `bool`) but
+the panel stayed black, so the diagnosis was incomplete. Reading Waveshare's
+BSP source gives the real answer. `bsp_display_start_with_config()` runs five
+steps in order:
+
+1. `esp_lv_adapter_init()`
+2. `bsp_display_lcd_init()` — **registers the LVGL display**
+3. `bsp_display_indev_init()` — touch (CST9217, over I2C)
+4. `bsp_display_brightness_init()` — backlight on
+5. `esp_lv_adapter_start()` — starts the LVGL flush task
+
+Step 3 aborts the whole function with `return NULL`. But step 2 has **already**
+registered the display with LVGL. So `lv_display_get_default()` cheerfully
+answers *"yes, there is a display"* while brightness was never initialised (on
+an AMOLED, brightness **is** emission) and the flush task never started — every
+`lv_*` call still succeeds, because it only mutates objects in RAM.
+
+Pharos called `bsp_display_start()` and **discarded the return value**, then
+asked LVGL whether a display existed. That question cannot distinguish "fully
+up" from "aborted after step 2" — which is exactly the failure in front of us.
+
+Now the return value is read. If it is NULL but the panel registered, Pharos
+finishes the two skipped steps itself: **a working screen with dead touch beats
+a black screen**, and this device is driven from the console anyway.
+
+Diagnosis is no longer guesswork:
+- the UI heartbeat reports `painted= missed= hud=`, so even a truncated log tail
+  shows whether pixels are reaching the panel;
+- **`diag`** reports display result, size, touch, lock, HUD, heap, radio, fence;
+- **`screen test`** pushes a pattern to prove the pixel path end to end.
+
+### New: a real CLI
+
+The old console polled `getchar()` in a loop — no editing, no history, and
+transport behaviour that differs between UART and USB-Serial-JTAG. It is now
+built on ESP-IDF's `esp_console` REPL, with every command from the host-tested
+table registered automatically, so tab completion and `help` reflect the real
+thing rather than a copy that can drift.
+
+The console is also moved to **USB-Serial-JTAG**. This board has one USB-C
+socket wired to the ESP32-S3's native USB, not a UART bridge; with IDF's
+default (console on UART0) log output still reached the port via the *secondary*
+console — which is why logs were visible — but **stdin did not**, so the CLI was
+unreachable over the only cable the board has.
+
+### New lens: **Vigil** — is an item tracker travelling with you?
+
+The Bluetooth radio has been idle since v1.0. This is what it is for.
+
+Seeing a tracker means nothing — a café at lunchtime contains a dozen, all in
+other people's bags. What matters is whether one is still with you **after you
+have moved**. Pharos has no GPS, so movement is inferred from the world
+changing: a **locale** is the set of audible access points, and when that set
+turns over substantially, you are somewhere else. A tag present across several
+locales is travelling with you.
+
+Address rotation does not defeat this, and the reason is worth stating: Find My
+devices rotate every ~15 minutes *while their owner is nearby*, but hold an
+address far longer once **separated** from the owner — and a tracker planted on
+somebody is by definition separated. The case that matters is the one that
+stays addressable. Vigil says plainly that it undercounts rotating tags rather
+than pretending otherwise.
+
+What it refuses to do:
+
+- **Never says you are safe**, or that no tracker is present. A receiver that
+  hears one radio at a time for a few minutes cannot support that sentence, and
+  for this subject a false reassurance is worse than no answer.
+- **Never claims intent.** A tag travelling with you may be yours, a friend's,
+  or in a parcel you are carrying. "Travelling with you" is a fact; "why" is a
+  human's job. The advice checks those explanations first, then points at real
+  options — making the tag play a sound, the serial number, the police.
+- **Your own devices are excluded**, not fudged: `vigil mine` marks one known.
+- Without a second locale the score is **capped below any alarm**, and a single
+  move is capped below the top band, because you and a stranger can walk the
+  same way once.
+
+The BLE scan is **passive**, and that word is load-bearing: an *active* scan
+answers every advertisement with a `SCAN_REQ`, which is a transmission. That
+would break the one promise the project is built on, so `passive = 1` is now
+audited by `check_tx_fence.sh` as a sixth fence mechanism.
+
+**5,164 host checks, 0 failures.**
+
 ## v1.6.0 — 2026-08-14
 
 ### New lens: **Squall** — busy, broken, or being denied

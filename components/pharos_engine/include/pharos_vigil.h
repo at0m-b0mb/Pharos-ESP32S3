@@ -1,0 +1,170 @@
+/* Pharos - Vigil: is a tracker travelling with you?
+ *
+ * Pure C. The ESP32-S3's Bluetooth radio has sat idle in this firmware since
+ * v1.0; this is what it is for. An item tracker - AirTag, Tile, SmartTag -
+ * costs a few pounds, fits in a coat lining or a wheel arch, and reports its
+ * position to a global crowd-sourced network. It is the cheapest surveillance
+ * device ever mass-produced, and the person it is used against is usually the
+ * last to know.
+ *
+ * THE HARD PART is not seeing trackers. Trackers are everywhere - a café at
+ * lunchtime has a dozen, all of them minding their own business in other
+ * people's bags. Seeing one means nothing. What matters is whether one is
+ * still with you after you have MOVED, and that is a different question.
+ *
+ * Pharos has no GPS. What it does have is a Wi-Fi receiver that already knows
+ * what the access points around it look like - so movement is inferred from
+ * the world changing rather than from a position fix:
+ *
+ *     A LOCALE is the set of access points currently audible. When that set
+ *     turns over substantially, you are somewhere else. A tracker that is
+ *     present in several distinct locales is travelling with you, whatever
+ *     the reason.
+ *
+ * That is the whole idea, and it is honest in a way a signal-strength alarm is
+ * not: it cannot be fooled by standing next to somebody's rucksack.
+ *
+ * WHY ADDRESS ROTATION DOES NOT DEFEAT THIS. Find My devices rotate their
+ * Bluetooth address, which is exactly what makes casual detection hard. But
+ * the rotation period depends on state: while the owner is nearby it rotates
+ * every ~15 minutes, and once SEPARATED from its owner it holds the same
+ * address far longer. The separated case is the one that matters - a tracker
+ * planted on somebody is by definition away from its owner - so the device we
+ * most want to catch is the one that stays addressable. Vigil says plainly
+ * that it undercounts rotating tags rather than pretending otherwise.
+ *
+ * WHAT IT REFUSES TO DO:
+ *
+ *   - It never says "you are safe" or "you are not being tracked". A receiver
+ *     that hears one radio at a time, for a few minutes, cannot support that
+ *     sentence, and for this subject in particular a false reassurance is
+ *     worse than no answer at all.
+ *   - It never claims intent. A tag travelling with you may have been dropped
+ *     in your bag by a friend, may be your own, may be in a parcel you are
+ *     carrying. The engine reports "travelling with you", which is a fact, and
+ *     leaves "why" to a human.
+ *   - Your own devices are expected to follow you, so they can be marked known
+ *     and are then excluded rather than fudged.
+ */
+#ifndef PHAROS_VIGIL_H
+#define PHAROS_VIGIL_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define PV_MAX_TAGS 32
+#define PV_MAX_KNOWN 16   /* devices the operator marked as their own    */
+#define PV_MAX_LOCALES 8  /* distinct places remembered                  */
+
+/* How much of the access-point landscape must turn over before we accept that
+ * we are somewhere else. Two thirds is deliberately demanding: walking to the
+ * other end of one office should not count as travelling. */
+#define PV_LOCALE_CHANGE_PERMIL 660
+
+typedef enum {
+    PV_KIND_UNKNOWN = 0,
+    PV_KIND_FINDMY,       /* Apple Find My, owner nearby            */
+    PV_KIND_FINDMY_LOST,  /* Apple Find My, SEPARATED from its owner */
+    PV_KIND_TILE,
+    PV_KIND_SMARTTAG,     /* Samsung Galaxy SmartTag                */
+    PV_KIND_GENERIC,      /* a persistent advertiser we cannot name  */
+    PV_KIND_COUNT,
+} pv_kind_t;
+
+typedef enum {
+    PV_BAND_CLEAR = 0,   /*  0-19  nothing has followed across a move   */
+    PV_BAND_SEEN,        /* 20-44  trackers nearby - normal in public   */
+    PV_BAND_PERSISTENT,  /* 45-69  one has stayed with you a long time  */
+    PV_BAND_FOLLOWING,   /* 70-100 present across several locales       */
+    PV_BAND_COUNT,
+} pv_band_t;
+
+#define PV_NOTE_ROTATION  (1u << 0) /* rotating tags are undercounted   */
+#define PV_NOTE_ONE_PLACE (1u << 1) /* you have not moved yet           */
+#define PV_NOTE_FULL      (1u << 2) /* more advertisers than we track   */
+#define PV_NOTE_KNOWN     (1u << 3) /* something matched your own list  */
+#define PV_NOTE_SHORT     (1u << 4) /* too little time to judge         */
+
+typedef struct {
+    uint8_t addr[6];
+    uint8_t addr_type;
+    pv_kind_t kind;
+    bool in_use;
+
+    uint32_t sightings;
+    uint8_t locale_mask;   /* bit per locale index it was seen in */
+    uint8_t n_locales;
+    int8_t best_rssi;
+    uint64_t first_us, last_us;
+} pv_tag_t;
+
+typedef struct {
+    pv_tag_t tags[PV_MAX_TAGS];
+    unsigned n;
+    bool full;
+
+    uint8_t known[PV_MAX_KNOWN][6];
+    unsigned n_known;
+
+    /* Locale tracking. The current access-point set is summarised as a small
+     * bloom-ish signature; a substantial change starts a new locale. */
+    uint32_t locale_sig[PV_MAX_LOCALES];
+    unsigned n_locales;
+    uint32_t cur_sig;
+    unsigned cur_locale;
+    uint64_t first_us, last_us;
+} pv_state_t;
+
+typedef struct {
+    uint8_t score;
+    uint8_t raw_score;
+    uint8_t ceiling;
+    uint8_t notes;
+    pv_band_t band;
+
+    uint8_t n_tags;        /* trackers seen at all              */
+    uint8_t n_following;   /* ... present in 2+ locales         */
+    uint8_t n_locales;     /* distinct places so far            */
+
+    uint8_t worst_addr[6];
+    pv_kind_t worst_kind;
+    uint8_t worst_locales;
+    uint32_t worst_minutes;
+
+    const char *headline;
+} pv_verdict_t;
+
+void pv_reset(pv_state_t *s);
+
+/* Mark an address as the operator's own; it is then excluded from following
+ * verdicts. Your own earbuds are supposed to travel with you. */
+bool pv_mark_known(pv_state_t *s, const uint8_t addr[6]);
+
+/* Feed the current access-point landscape. `sig` is any stable summary of the
+ * audible BSSIDs (the lens supplies a hash); when it differs enough from the
+ * current one, a new locale begins. */
+void pv_observe_locale(pv_state_t *s, uint32_t sig, uint64_t t_us);
+
+/* Feed one BLE advertisement. `data`/`len` are the raw AD structures. */
+void pv_observe_adv(pv_state_t *s, const uint8_t addr[6], uint8_t addr_type,
+                    int8_t rssi, const uint8_t *data, uint8_t len,
+                    uint64_t t_us);
+
+void pv_evaluate(const pv_state_t *s, uint64_t now_us, pv_verdict_t *out);
+
+/* Classify an advertisement payload. Exposed for testing. */
+pv_kind_t pv_classify(const uint8_t *data, uint8_t len);
+
+const char *pv_kind_name(pv_kind_t k);
+const char *pv_band_name(pv_band_t b);
+const char *pv_band_advice(pv_band_t b);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PHAROS_VIGIL_H */

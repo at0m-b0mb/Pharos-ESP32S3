@@ -26,6 +26,7 @@ typedef struct {
     int  adopts;
     unsigned adopt_ret;
     int  acks;
+    int  marks;
 } mock_t;
 
 static mock_t g;
@@ -46,6 +47,7 @@ static void m_report(pc_out_t *o) { pc_print(o, "{\"tool\":\"pharos\"}"); }
 static bool m_scenario(const char *n) { snprintf(g.last_scenario, sizeof(g.last_scenario), "%s", n); return g.scenario_ok; }
 static unsigned m_adopt(void) { g.adopts++; return g.adopt_ret; }
 static void m_ack(void) { g.acks++; }
+static bool m_mark_known(void) { g.marks++; return true; }
 
 static pc_ops_t mock_ops(void)
 {
@@ -62,6 +64,7 @@ static pc_ops_t mock_ops(void)
     o.select_scenario = m_scenario;
     o.adopt_baseline = m_adopt;
     o.acknowledge = m_ack;
+    o.mark_known = m_mark_known;
     return o;
 }
 
@@ -168,6 +171,7 @@ void test_console_dispatch(void)
         { "sentinel", "wifi.sentinel" },
         { "harvest", "wifi.harvest" },
         { "squall", "wifi.squall" },
+        { "vigil", "ble.vigil" },
         { "aegis", "sys.aegis" },
         { "footprint", "train.footprint" }, { "range", "train.range" },
     };
@@ -215,6 +219,12 @@ void test_console_dispatch(void)
     no_ack.acknowledge = NULL;
     pc_exec(&no_ack, "aegis ack", &out);
     CHECK(strstr(out.buf, "not wired") != NULL, "null ack op reported");
+
+    /* vigil mine marks the current tag as the operator's own. */
+    reset_mock();
+    CHECK(pc_exec(&ops, "vigil mine", &out), "vigil mine runs");
+    CHECK_EQ(g.marks, 1);
+    CHECK_EQ(g.activations, 0);
 
     /* adopt with the op unwired is reported, not crashed into. */
     reset_mock();

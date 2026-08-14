@@ -86,6 +86,9 @@ typedef struct pc_ops {
     /* Clear the Aegis latch. The operator has read the accumulated findings
      * and is starting a fresh watch; the device never clears them itself. */
     void (*acknowledge)(void);
+    /* Mark the tracker Vigil is currently most concerned about as the
+     * operator's own, excluding it from following verdicts. */
+    bool (*mark_known)(void);
     void *ctx;
 } pc_ops_t;
 

@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://at0m-b0mb.github.io/Pharos-ESP32S3/"><img alt="flash from browser" src="https://img.shields.io/badge/⚡_flash-from_your_browser-1FB6C9"></a>
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
-  <img alt="host checks" src="https://img.shields.io/badge/host_checks-5076_passing-1FB6C9">
+  <img alt="host checks" src="https://img.shields.io/badge/host_checks-5164_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
   <img alt="idf" src="https://img.shields.io/badge/ESP--IDF-5.5%20%7C%206.0-444">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -40,7 +40,7 @@ Most hobby RF tools answer "is there an attack?" with a confident yes/no. Pharos
 
 So every verdict Pharos produces carries a **confidence ceiling** derived from how much of the channel it actually heard. A deauth flood reads `FLOOD LIKELY` when you camp on its channel and only `SUSPICIOUS` when you keep hopping — the same traffic, a different honesty. There is no band named "safe". Absence of evidence on a receiver that hears 7% of the air is not evidence of absence, and the firmware never pretends otherwise.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 5,076 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 5,164 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
 
 ## What it looks like
 
@@ -86,6 +86,7 @@ A **lens** is one tool. The dial is built from whatever lenses are compiled in; 
 | **Mirage** | 🔵 detect | Detects the beacon/SSID-spam flood that fills every phone's network list — the exact attack the ESP32 world is famous for — while scoring a dense city as *busy, not hostile*. |
 | **Locate** | 🔵 hunt | Once a source is flagged, walk toward it: a smoothed RSSI *hotter / colder / here* game. Finds a transmitter without becoming one. |
 | **Aegis** | 🔵 command | **The one screen that tells the story.** Every other lens forgets; Aegis remembers. It latches each finding with the time it happened, so a burst that fired while you were looking at another lens is still there ten minutes later — and it scores a *sequence* (recon → twin → disruption → collection) far above the same alarms in a jumble, because that ordering is an operation rather than a noisy afternoon. |
+| **Vigil** | 🟢 personal | **Is an item tracker travelling with you?** The first lens to use the Bluetooth radio. Seeing an AirTag means nothing — a café has a dozen. What matters is whether one is still with you *after you have moved*, so Vigil infers movement from the Wi-Fi landscape turning over and only counts a tag that survives it. Never claims intent, never says you are safe. |
 | **Squall** | 🔵 triage | **"The Wi-Fi is down — is it broken, busy, or jammed?"** Three problems with three completely different responses, identical to the user. Squall separates them on the one measure that works: *energy versus decodability*. Loud **and** productive is a busy building. Loud and **barren** — fewer frames per second than a single AP's beacons — is the shape of a jam. A busy office is never called an attack. |
 | **Harvest** | 🔵 detect | Catches somebody collecting your handshakes to crack offline — the attack where nothing breaks and nobody complains. Separates the **forced** cycle (knock a client off, catch it reconnecting) from the **clientless PMKID** solicitation, and knows a rebooting router looks identical to one forced cycle. |
 | **Sentinel** | 🔵 audit | Answers the question that starts incidents: *what changed since I last swept this site?* Adopt a baseline while the estate is clean, then it diffs every later sweep — new radios, a network that quietly dropped its 802.11w, an AP gone missing — and scores a **downgrade** far above ordinary churn. |
@@ -113,7 +114,7 @@ Receive-only is the product, so it is enforced four ways, and CI checks all four
 
 1. **Capability tokens.** Every lens declares its powers at compile time. There is no `CAP_WIFI_TX` token to hold — you cannot request what does not exist.
 2. **Link-time wrap fence.** Every Espressif/NimBLE transmit primitive (`esp_wifi_80211_tx`, `esp_wifi_deauth_sta`, `esp_now_send`, AP-mode `esp_wifi_set_mode`, …) is redirected by `-Wl,--wrap` to an abort trap. Call one and the firmware halts at the call site rather than emitting a frame.
-3. **Build-time role fence.** NimBLE is compiled **observer-only**; the advertising and connection code is not in the image.
+3. **Build-time role fence.** NimBLE is compiled **observer-only**; the advertising and connection code is not in the image. The BLE scan is additionally **passive** — an *active* scan answers every advertisement with a `SCAN_REQ`, which is a transmission, so `passive = 1` is audited in CI like every other mechanism.
 4. **Source audit.** [`tools/check_tx_fence.sh`](tools/check_tx_fence.sh) greps the tree for transmit primitives and verifies all four mechanisms, on every commit.
 
 The **System** lens reads the fence's own status and shows it on screen. A device that asks to be trusted in a building it does not own can *prove* it is only listening.
@@ -147,7 +148,7 @@ the honest version of the guarantee, and it is the one Pharos makes.
 **The engines and UI geometry build and test with no board at all** — do this first, it is fast and catches the most:
 
 ```bash
-make -C test/host                # 5076 checks, 0 failures
+make -C test/host                # 5164 checks, 0 failures
 ```
 
 > [!TIP]
@@ -156,7 +157,7 @@ make -C test/host                # 5076 checks, 0 failures
 **Prebuilt firmware** is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases) — a single flashable image built and audited in CI:
 
 ```bash
-esptool.py --chip esp32s3 write_flash 0x0 pharos-v1.6.0-esp32s3.bin
+esptool.py --chip esp32s3 write_flash 0x0 pharos-v1.7.0-esp32s3.bin
 ```
 
 **Build it yourself**, with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or newer:
@@ -223,11 +224,11 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-**v1.6.0 — the panel paints, the device remembers, and it can tell a jam from a crowd.**
+**v1.7.0 — the display fixed at the source, a real CLI, and both radios finally working.**
 
 | Layer | State | Detail |
 |---|---|---|
-| **Detection & evidence engines** | ✅ complete, **5,076 host checks, 0 failures** | 17 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
+| **Detection & evidence engines** | ✅ complete, **5,164 host checks, 0 failures** | 18 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
 | **Round-screen geometry & Virtual HUD** | ✅ complete & tested | layout maths host-tested; every screen rendered from the real code and bounds-checked in CI |
 | **Transmit fence** | ✅ enforced & audited | 4 mechanisms, verified against the linked ELF on every build |
 | **Firmware build** | ✅ green on ESP-IDF v5.5 + v6.0 | a **flashable binary is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases)** |
@@ -237,7 +238,7 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 > [!NOTE]
 > **Hardware bring-up in progress.** The engines and UI geometry are proven in software; the panel-paint path is now fixed against a real board. IMU/PMU telemetry and touch-driven dial navigation remain. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**15 lenses** · **17 engines** · a receive-only serial console · MIT.
+**16 lenses** · **18 engines** · a receive-only serial console · MIT.
 
 ## License
 

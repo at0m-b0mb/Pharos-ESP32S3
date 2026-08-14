@@ -71,4 +71,7 @@ void test_aegis(void);
 /* Suite defined in test_squall.c */
 void test_squall(void);
 
+/* Suite defined in test_vigil.c */
+void test_vigil(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */

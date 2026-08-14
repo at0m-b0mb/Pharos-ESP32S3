@@ -31,6 +31,7 @@
 #include "pharos_harvest.h"
 #include "pharos_sentinel.h"
 #include "pharos_squall.h"
+#include "pharos_vigil.h"
 
 /* Provided by the Watch, Locate and Sentinel lens components. */
 extern void pharos_lens_watch_camp(uint8_t channel);
@@ -42,6 +43,8 @@ extern bool pharos_lens_harvest_snapshot(ph_verdict_t *out);
 extern bool pharos_lens_aegis_snapshot(pa_verdict_t *out);
 extern void pharos_lens_aegis_acknowledge(void);
 extern bool pharos_lens_squall_snapshot(pq_verdict_t *out);
+extern bool pharos_lens_vigil_snapshot(pv_verdict_t *out);
+extern bool pharos_lens_vigil_mark_known(void);
 
 static bool glue_activate(const char *id) { return pharos_lens_activate(id); }
 static void glue_deactivate(void) { pharos_lens_deactivate(); }
@@ -68,6 +71,11 @@ static void glue_set_region(int region)
 static unsigned glue_adopt_baseline(void)
 {
     return pharos_lens_sentinel_adopt();
+}
+
+static bool glue_mark_known(void)
+{
+    return pharos_lens_vigil_mark_known();
 }
 
 static void glue_acknowledge(void)
@@ -112,6 +120,21 @@ static void glue_status(pc_out_t *o)
             pc_printf(o, "  squall: %s ch%u %u/%u  graded=%u denial=%u retry=%u%%\n",
                       pq_state_name(v.worst), v.worst_channel, v.score, v.ceiling,
                       v.n_graded, v.n_denial, v.retry_permil / 10);
+            pc_printf(o, "  %s\n", v.headline ? v.headline : "");
+            return;
+        }
+    }
+    if (strcmp(a->id, "ble.vigil") == 0) {
+        pv_verdict_t v;
+        if (pharos_lens_vigil_snapshot(&v)) {
+            pc_printf(o, "  vigil: %s %u/%u  tags=%u following=%u places=%u\n",
+                      pv_band_name(v.band), v.score, v.ceiling,
+                      v.n_tags, v.n_following, v.n_locales);
+            if (v.n_following) {
+                pc_printf(o, "  worst: %s in %u places, %u min\n",
+                          pv_kind_name(v.worst_kind), v.worst_locales,
+                          (unsigned)v.worst_minutes);
+            }
             pc_printf(o, "  %s\n", v.headline ? v.headline : "");
             return;
         }
@@ -161,6 +184,7 @@ static pc_ops_t build_ops(void)
     o.fence_status = glue_fence;
     o.adopt_baseline = glue_adopt_baseline;
     o.acknowledge = glue_acknowledge;
+    o.mark_known = glue_mark_known;
     /* report / select_scenario intentionally NULL here - the console reports
      * them as "not wired on this build" rather than pretending. */
     return o;

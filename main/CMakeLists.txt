@@ -27,6 +27,7 @@ idf_component_register(
         pharos_lens_aegis
         pharos_lens_harvest
         pharos_lens_squall
+        pharos_lens_vigil
         pharos_lens_system
 )
 

@@ -109,7 +109,23 @@ done
 
 # 5. There is no CAP_WIFI_TX / CAP_BLE_ADV token to grant.
 echo
-echo "[5] no transmit capability token exists"
+echo "[5] the BLE observer scans PASSIVELY"
+# An ACTIVE BLE scan transmits: it answers every advertisement with a SCAN_REQ.
+# That would be a frame emitted by this device, attributable to it, and it
+# would break the one promise the project is built on. The scan parameters must
+# therefore set passive=1, and no source may set it to 0.
+if grep -q "p.passive = 1" components/pharos_radio/pharos_radio.c 2>/dev/null; then
+  ok "BLE scan is passive (never sends SCAN_REQ)"
+else
+  bad "BLE scan parameters do not set passive=1 - an active scan TRANSMITS"
+fi
+if grep -rn "passive *= *0" components/ 2>/dev/null | grep -v "^Binary"; then
+  bad "something sets passive=0 - that is an active, transmitting scan"
+else
+  ok "nothing requests an active scan"
+fi
+
+echo "[6] no transmit capability token exists"
 # Match an actual #define of a transmit token, not the comment in caps.h that
 # explains why no such token exists.
 if grep -qE '^\s*#\s*define\s+PHAROS_CAP_(WIFI_TX|BLE_ADV|WIFI_INJECT|TX)\b' \
