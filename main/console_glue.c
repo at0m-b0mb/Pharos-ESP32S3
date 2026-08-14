@@ -23,6 +23,7 @@
 
 #include "pharos_bsp.h"
 #include "pharos_hud.h"
+#include "pharos_ui.h"
 
 #include "pharos_console.h"
 #include "pharos_lens.h"
@@ -47,8 +48,12 @@ extern bool pharos_lens_squall_snapshot(pq_verdict_t *out);
 extern bool pharos_lens_vigil_snapshot(pv_verdict_t *out);
 extern bool pharos_lens_vigil_mark_known(void);
 
-static bool glue_activate(const char *id) { return pharos_lens_activate(id); }
-static void glue_deactivate(void) { pharos_lens_deactivate(); }
+/* The console FILES a request rather than switching the lens itself. Doing it
+ * here would run Wi-Fi initialisation on the REPL task's small stack, and would
+ * race the analytics loop that is walking the current lens. See
+ * pharos_ui_request_lens(). */
+static bool glue_activate(const char *id) { return pharos_ui_request_lens(id); }
+static void glue_deactivate(void) { pharos_ui_request_stop(); }
 
 static void glue_set_channel(int channel)
 {
@@ -304,7 +309,7 @@ static int cli_lens(int argc, char **argv)
         }
         return 0;
     }
-    printf(pharos_lens_activate(argv[1]) ? "active: %s\n" : "no such lens: %s\n",
+    printf(pharos_ui_request_lens(argv[1]) ? "starting: %s\n" : "no such lens: %s\n",
            argv[1]);
     return 0;
 }
@@ -338,6 +343,10 @@ void pharos_console_start(void)
     esp_console_repl_config_t rc = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     rc.prompt = "pharos>";
     rc.max_cmdline_length = PC_MAX_LINE;
+    /* Headroom: command handlers print, format and read lens snapshots. Lens
+     * activation is deliberately NOT done here (see glue_activate), which is
+     * what keeps this modest. */
+    rc.task_stack_size = 6144;
 
     esp_err_t err;
 #if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)

@@ -28,6 +28,15 @@ extern "C" {
 /* The Aegis latch. The UI loop feeds it from whichever lens is active (see
  * pharos_lens_t::stage_report), so it accumulates findings across lens
  * changes and remembers them long after the air has gone quiet. */
+/* Ask for a lens change from ANOTHER task (the console).
+ *
+ * Lens switching happens only on the UI task: it tears down and restarts the
+ * radio, which must not race the analytics loop and must not run on the
+ * console REPL's small stack. Returns false immediately for an unknown id;
+ * true means the request was filed, and it is applied within a tick. */
+bool pharos_ui_request_lens(const char *id);
+void pharos_ui_request_stop(void);
+
 bool pharos_ui_aegis_snapshot(pa_verdict_t *out);
 void pharos_ui_aegis_ack(void);
 

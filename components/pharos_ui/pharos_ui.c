@@ -46,6 +46,45 @@ static volatile bool s_analytics_run;
  * operator not looking. */
 static pa_state_t s_aegis;
 static SemaphoreHandle_t s_aegis_lock;
+
+/* ---- the lens lifecycle guard ---------------------------------------
+ *
+ * Three tasks used to mutate the active lens - the UI task (touch and the BOOT
+ * button), the console REPL task, and main at boot - while a FOURTH, the
+ * analytics task, was walking it:
+ *
+ *     struct pharos_bus *bus = lens->ingest();   // lens A's ring
+ *     while (pharos_bus_pop(bus, &ev))           // ... A unmounted here ...
+ *         lens->on_event(&ev);                   // writing into torn-down state
+ *
+ * That is a use-after-free, and it is why the device felt unstable: it did not
+ * fail every time, it failed when the timing lined up.
+ *
+ * Two rules now. Lens switching happens ONLY on the UI task - everyone else
+ * files a request. And the analytics pump holds this mutex while it drains, so
+ * a switch cannot start underneath it. */
+static SemaphoreHandle_t s_lens_mtx;
+static char s_req_lens[32];
+static volatile bool s_req_stop;
+
+bool pharos_ui_request_lens(const char *id)
+{
+    if (!id || !*id) {
+        return false;
+    }
+    if (!pharos_lens_find(id)) {
+        return false; /* answer the caller honestly, before queueing anything */
+    }
+    strncpy(s_req_lens, id, sizeof(s_req_lens) - 1);
+    s_req_lens[sizeof(s_req_lens) - 1] = '\0';
+    return true;
+}
+
+void pharos_ui_request_stop(void) { s_req_stop = true; }
+
+/* Defined with the pump, which is where the guard is taken. */
+static bool lens_switch(const char *id);
+static void lens_halt(void);
 static uint32_t s_aegis_accum_ms;
 
 static void aegis_pump(const pharos_lens_t *active, uint32_t dt_ms)
@@ -158,6 +197,40 @@ static void paint_browse(void)
 }
 
 /* Run the pending intent. Called from the UI task only. */
+/* Requests filed by other tasks (the console). Applied here, on the UI task,
+ * so lens switching stays single-threaded - and so Wi-Fi initialisation never
+ * runs on the REPL's small stack. */
+static void request_apply(void)
+{
+    if (s_req_stop) {
+        s_req_stop = false;
+        lens_halt();
+        s_view = VIEW_BROWSE;
+        paint_browse();
+        return;
+    }
+    if (s_req_lens[0] == '\0') {
+        return;
+    }
+    char id[32];
+    strncpy(id, s_req_lens, sizeof(id) - 1);
+    id[sizeof(id) - 1] = '\0';
+    s_req_lens[0] = '\0';
+
+    if (lens_switch(id)) {
+        s_view = VIEW_LIVE;
+        for (unsigned i = 0; i < s_order_n; i++) {
+            if (s_order[i] && strcmp(s_order[i]->id, id) == 0) {
+                s_cursor = i;
+                break;
+            }
+        }
+        ESP_LOGI(TAG, "console started %s", id);
+    } else {
+        ESP_LOGW(TAG, "console could not start %s", id);
+    }
+}
+
 static void nav_apply(void)
 {
     const int want = s_nav_pending;
@@ -191,7 +264,7 @@ static void nav_apply(void)
             }
             return;
         }
-        if (pharos_lens_activate(l->id)) {
+        if (lens_switch(l->id)) {
             s_view = VIEW_LIVE;
             ESP_LOGI(TAG, "started %s", l->id);
         } else {
@@ -205,7 +278,7 @@ static void nav_apply(void)
     }
     case PHAROS_NAV_HOME:
     default:
-        pharos_lens_deactivate();
+        lens_halt();
         s_view = VIEW_BROWSE;
         ESP_LOGI(TAG, "stopped; back to browse");
         paint_browse();
@@ -215,7 +288,7 @@ static void nav_apply(void)
     /* NEXT/PREV: stepping the list stops whatever is running, so the reading
      * on screen always belongs to the lens named above it. */
     if (s_view == VIEW_LIVE) {
-        pharos_lens_deactivate();
+        lens_halt();
         s_view = VIEW_BROWSE;
     }
     paint_browse();
@@ -266,22 +339,50 @@ static void boot_button_poll(uint32_t dt_ms)
 
 unsigned pharos_ui_pump(void)
 {
-    const pharos_lens_t *lens = pharos_lens_active();
-    if (!lens || !lens->ingest || !lens->on_event) {
-        return 0;
-    }
-    struct pharos_bus *bus = lens->ingest();
-    if (!bus) {
+    /* Held for the whole drain: the lens, its ingest ring and the state
+     * on_event writes into must all still belong to the same lens when we
+     * finish. A short timeout keeps the analytics task responsive while a
+     * switch is in progress rather than piling up behind it. */
+    if (!s_lens_mtx || xSemaphoreTake(s_lens_mtx, pdMS_TO_TICKS(20)) != pdTRUE) {
         return 0;
     }
     unsigned n = 0;
-    pharos_event_t ev;
-    /* Bounded per call so one very busy lens cannot starve the tick loop. */
-    while (n < 256 && pharos_bus_pop((pharos_bus_t *)bus, &ev)) {
-        lens->on_event(&ev);
-        n++;
+    const pharos_lens_t *lens = pharos_lens_active();
+    if (lens && lens->ingest && lens->on_event) {
+        struct pharos_bus *bus = lens->ingest();
+        if (bus) {
+            pharos_event_t ev;
+            /* Bounded per call so one very busy lens cannot starve the loop. */
+            while (n < 256 && pharos_bus_pop((pharos_bus_t *)bus, &ev)) {
+                lens->on_event(&ev);
+                n++;
+            }
+        }
     }
+    xSemaphoreGive(s_lens_mtx);
     return n;
+}
+
+/* Every lens change in the firmware goes through these two, on the UI task. */
+static bool lens_switch(const char *id)
+{
+    if (!s_lens_mtx) {
+        return false;
+    }
+    xSemaphoreTake(s_lens_mtx, portMAX_DELAY);
+    const bool ok = pharos_lens_activate(id);
+    xSemaphoreGive(s_lens_mtx);
+    return ok;
+}
+
+static void lens_halt(void)
+{
+    if (!s_lens_mtx) {
+        return;
+    }
+    xSemaphoreTake(s_lens_mtx, portMAX_DELAY);
+    pharos_lens_deactivate();
+    xSemaphoreGive(s_lens_mtx);
 }
 
 static void analytics_task(void *arg)
@@ -423,6 +524,9 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     if (!s_aegis_lock) {
         s_aegis_lock = xSemaphoreCreateMutex();
     }
+    if (!s_lens_mtx) {
+        s_lens_mtx = xSemaphoreCreateMutex();
+    }
 
     pd_dial_t dial;
     unsigned count = 0;
@@ -474,6 +578,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
 
         boot_button_poll(dt_ms);
         nav_apply();
+        request_apply();
 
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here
          * is push fresh text/values in under its lock; a short timeout means a
