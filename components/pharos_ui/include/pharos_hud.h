@@ -27,6 +27,10 @@ extern "C" {
  * Returns false if LVGL is not available on this build. */
 bool pharos_hud_create(void);
 
+/* Have the widgets actually been built? Reported by the `diag` command: a
+ * panel that is up with no HUD on it is a different fault from a dark one. */
+bool pharos_hud_present(void);
+
 /* Update the readout. Any string may be NULL to leave it unchanged.
  *
  *   lens    - the active tool, e.g. "SPECTRUM"

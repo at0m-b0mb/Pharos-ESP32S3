@@ -3,6 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
+        console
         esp_event
         esp_netif
         pharos_core

@@ -20,6 +20,16 @@
 extern "C" {
 #endif
 
+/* Why the panel is in the state it is in. Reported by the `diag` console
+ * command, because "the screen is black" is not a diagnosis and the device
+ * should be able to tell you which of these happened. */
+typedef enum {
+    PHAROS_DISP_UNTRIED = 0, /* vendor BSP not compiled in                */
+    PHAROS_DISP_OK,          /* bsp_display_start() returned a display    */
+    PHAROS_DISP_REPAIRED,    /* it aborted mid-sequence; we finished it   */
+    PHAROS_DISP_FAILED,      /* the panel itself never registered         */
+} pharos_disp_result_t;
+
 typedef struct {
     bool display_ok;
     bool touch_ok;
@@ -28,9 +38,15 @@ typedef struct {
     bool rtc_present;
     bool sd_present;
     uint32_t psram_free;
+    pharos_disp_result_t disp_result;
+    int16_t disp_w, disp_h;
 } pharos_bsp_status_t;
 
 bool pharos_bsp_init(pharos_bsp_status_t *out);
+
+/* The status recorded by the last pharos_bsp_init(), for the CLI. */
+void pharos_bsp_last_status(pharos_bsp_status_t *out);
+const char *pharos_disp_result_name(pharos_disp_result_t r);
 
 /* Battery telemetry from the AXP2101, for the power planner and the rim
  * gauge. Returns false if the PMU did not come up. */

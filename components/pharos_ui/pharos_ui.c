@@ -142,11 +142,18 @@ static bool lens_launchable(const pharos_lens_t *l)
  * detail line, a 0..100 gauge - so a new lens gets a screen for free. Where a
  * lens exposes a verdict snapshot we show it; otherwise we show that it is
  * running, which is still the truth and still better than a black panel. */
+static uint32_t s_paints, s_paint_misses;
+
 static void paint(const pharos_lens_t *active)
 {
     if (!pharos_bsp_display_lock(30)) {
-        return; /* display busy; try again next tick rather than block */
+        /* Counted, not ignored: a paint that never lands is exactly what a
+         * black screen looks like from in here, and the heartbeat below
+         * reports it so a boot log alone is enough to diagnose. */
+        s_paint_misses++;
+        return;
     }
+    s_paints++;
 
     /* Idempotent: builds the widgets on the first frame under a good lock, so
      * the HUD exists even if the one-shot splash lock happened to time out.
@@ -283,7 +290,9 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
          * geometry for it is done and tested in pharos_dial/pharos_round. */
 
         if ((++heartbeat % 100) == 0 && active) {
-            ESP_LOGI(TAG, "active: %s  (dt=%ums)", active->id, dt_ms);
+            ESP_LOGI(TAG, "active: %s (dt=%ums) painted=%u missed=%u hud=%d",
+                     active->id, dt_ms, (unsigned)s_paints,
+                     (unsigned)s_paint_misses, (int)pharos_hud_present());
         }
         vTaskDelay(pdMS_TO_TICKS(50)); /* ~20 Hz */
     }

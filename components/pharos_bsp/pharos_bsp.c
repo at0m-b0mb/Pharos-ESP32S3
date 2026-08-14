@@ -27,7 +27,9 @@
 
 #if defined(PHAROS_HOST)
 
+static pharos_bsp_status_t s_last;
 bool pharos_bsp_init(pharos_bsp_status_t *out) { (void)out; return false; }
+void pharos_bsp_last_status(pharos_bsp_status_t *out) { if (out) *out = s_last; }
 bool pharos_bsp_battery(pwr_battery_t *out) { (void)out; return false; }
 void pharos_bsp_brightness(uint8_t level) { (void)level; }
 bool pharos_bsp_orientation(int16_t *p, int16_t *r) { (void)p; (void)r; return false; }
@@ -44,6 +46,7 @@ void pharos_bsp_display_unlock(void) {}
 #include "esp_log.h"
 
 static const char *TAG = "bsp";
+static pharos_bsp_status_t s_last;
 
 bool pharos_bsp_init(pharos_bsp_status_t *out)
 {
@@ -55,13 +58,17 @@ bool pharos_bsp_init(pharos_bsp_status_t *out)
     st.rtc_present = PHAROS_BOARD_HAS_DISCRETE_RTC ? true : false;
     st.sd_present = PHAROS_BOARD_HAS_SD ? true : false;
     st.psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    st.disp_result = PHAROS_DISP_UNTRIED;
     ESP_LOGW(TAG, "vendor BSP disabled - simulated board, screen will stay dark. "
                   "psram_free=%uKB", (unsigned)(st.psram_free / 1024));
+    s_last = st;
     if (out) {
         *out = st;
     }
     return true;
 }
+
+void pharos_bsp_last_status(pharos_bsp_status_t *out) { if (out) *out = s_last; }
 
 bool pharos_bsp_battery(pwr_battery_t *out)
 {
@@ -93,44 +100,102 @@ void pharos_bsp_display_unlock(void) {}
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
+/* esp_lv_adapter_start() - the step the vendor skips when touch fails. It is
+ * pulled in transitively by the board header, but name it so the dependency
+ * is visible rather than accidental. */
+#include "esp_lv_adapter.h"
 
 static const char *TAG = "bsp";
+
+static pharos_bsp_status_t s_last;
 
 bool pharos_bsp_init(pharos_bsp_status_t *out)
 {
     pharos_bsp_status_t st;
     memset(&st, 0, sizeof(st));
 
-    /* One call brings up the QSPI CO5300 panel, the CST9217 touch controller
-     * and LVGL, and starts the BSP's LVGL task. Matches the vendor example. */
-    bsp_display_start();
+    /* One call is supposed to bring up the QSPI CO5300 panel, the CST9217
+     * touch controller and LVGL, and start the BSP's LVGL task.
+     *
+     * THE RETURN VALUE MATTERS, and throwing it away is what kept the screen
+     * black. bsp_display_start_with_config() runs five steps in order:
+     *
+     *   1. esp_lv_adapter_init()
+     *   2. bsp_display_lcd_init()      <- REGISTERS THE LVGL DISPLAY
+     *   3. bsp_display_indev_init()    <- touch; returns NULL if it fails
+     *   4. bsp_display_brightness_init()  (backlight on)
+     *   5. esp_lv_adapter_start()         (starts the LVGL flush task)
+     *
+     * Step 3 aborts the function with `return NULL`. But step 2 has already
+     * registered the display with LVGL - so lv_display_get_default() answers
+     * "yes, there is a display" while steps 4 and 5 never ran. The panel is
+     * therefore unlit and nothing is ever flushed to it, and every lv_* call
+     * still succeeds because it only mutates objects in RAM.
+     *
+     * That is exactly the reported symptom: a healthy boot, lenses ticking,
+     * `ui: active: wifi.spectrum` forever, and a black screen. Asking LVGL
+     * instead of reading the return value could not distinguish it. */
+    lv_display_t *disp = bsp_display_start();
 
-    /* Ask LVGL whether a display actually registered, rather than assuming a
-     * particular return type from the vendor call - that keeps this source
-     * compiling across BSP revisions. */
-    lv_display_t *disp = lv_display_get_default();
-    st.display_ok = (disp != NULL);
-    st.touch_ok = st.display_ok; /* the same call brings touch up */
+    if (disp != NULL) {
+        st.disp_result = PHAROS_DISP_OK;
+        st.touch_ok = true;
+    } else {
+        /* The vendor aborted part-way. If the PANEL registered, the only
+         * things skipped are the backlight and the LVGL task - finish them
+         * ourselves. A working screen with dead touch beats a black screen,
+         * and this device is usable from the console regardless. */
+        disp = lv_display_get_default();
+        if (disp != NULL) {
+            ESP_LOGW(TAG, "bsp_display_start() aborted after the panel came up "
+                          "(touch controller is the usual cause) - finishing "
+                          "the sequence without it");
+            const esp_err_t b = bsp_display_brightness_init();
+            const esp_err_t a = esp_lv_adapter_start();
+            if (b == ESP_OK && a == ESP_OK) {
+                st.disp_result = PHAROS_DISP_REPAIRED;
+            } else {
+                st.disp_result = PHAROS_DISP_FAILED;
+                ESP_LOGE(TAG, "repair failed: brightness=%s adapter_start=%s",
+                         esp_err_to_name(b), esp_err_to_name(a));
+            }
+            st.touch_ok = false;
+        } else {
+            st.disp_result = PHAROS_DISP_FAILED;
+            ESP_LOGE(TAG, "the panel never registered with LVGL - check the "
+                          "QSPI wiring and that this really is a 1.75C board");
+        }
+    }
+
+    st.display_ok = (disp != NULL) && (st.disp_result != PHAROS_DISP_FAILED);
     st.pmu_ok = true;
-
     st.psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     st.rtc_present = PHAROS_BOARD_HAS_DISCRETE_RTC ? true : false;
     st.sd_present = PHAROS_BOARD_HAS_SD ? true : false;
 
-    if (st.display_ok) {
-        ESP_LOGI(TAG, "panel up: %dx%d, psram_free=%uKB",
-                 (int)lv_display_get_horizontal_resolution(disp),
-                 (int)lv_display_get_vertical_resolution(disp),
-                 (unsigned)(st.psram_free / 1024));
-    } else {
-        ESP_LOGE(TAG, "bsp_display_start() did not register an LVGL display");
+    if (disp) {
+        st.disp_w = (int16_t)lv_display_get_horizontal_resolution(disp);
+        st.disp_h = (int16_t)lv_display_get_vertical_resolution(disp);
     }
 
+    if (st.display_ok) {
+        /* Idempotent, and cheap insurance: on an AMOLED brightness IS emission,
+         * so a panel at zero is indistinguishable from a broken one. */
+        bsp_display_brightness_set(100);
+        ESP_LOGI(TAG, "panel %s: %dx%d, touch=%d, psram_free=%uKB",
+                 pharos_disp_result_name(st.disp_result),
+                 st.disp_w, st.disp_h, st.touch_ok,
+                 (unsigned)(st.psram_free / 1024));
+    }
+
+    s_last = st;
     if (out) {
         *out = st;
     }
     return st.display_ok;
 }
+
+void pharos_bsp_last_status(pharos_bsp_status_t *out) { if (out) *out = s_last; }
 
 bool pharos_bsp_display_lock(int timeout_ms)
 {
@@ -180,3 +245,16 @@ bool pharos_bsp_orientation(int16_t *pitch_cdeg, int16_t *roll_cdeg)
 }
 
 #endif /* build path */
+
+/* ---- diagnosis, for the console ------------------------------------- */
+
+const char *pharos_disp_result_name(pharos_disp_result_t r)
+{
+    switch (r) {
+    case PHAROS_DISP_UNTRIED:  return "not attempted (vendor BSP off)";
+    case PHAROS_DISP_OK:       return "up";
+    case PHAROS_DISP_REPAIRED: return "up (repaired; touch failed)";
+    case PHAROS_DISP_FAILED:   return "FAILED";
+    default:                   return "?";
+    }
+}

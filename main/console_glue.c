@@ -13,8 +13,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_console.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "pharos_bsp.h"
+#include "pharos_hud.h"
 
 #include "pharos_console.h"
 #include "pharos_lens.h"
@@ -167,57 +174,166 @@ void pharos_console_run(const char *line)
     if (out.len) {
         fputs(out.buf, stdout);
     }
-    fputs("pharos> ", stdout);
     fflush(stdout);
 }
 
-/* Read a line by polling getchar().
+/* ---- the CLI -----------------------------------------------------------
  *
- * Deliberately NOT fgets(stdin): with ESP-IDF's default VFS the stdin stream is
- * non-blocking, so fgets returns immediately with EOF and a naive loop either
- * spins at 100% or never sees input at all. Accumulating characters and
- * yielding when the buffer is dry is the behaviour that actually works over
- * both UART and USB-CDC, and it lets us handle backspace properly. */
-static void console_task(void *arg)
+ * Built on ESP-IDF's esp_console REPL rather than a hand-rolled getchar()
+ * loop. That buys line editing, history, tab completion and - the reason it
+ * matters here - a transport that is correct on whichever console this build
+ * uses. The previous loop polled getchar(), which behaves differently on UART
+ * and USB-Serial-JTAG and gave no editing at all.
+ *
+ * Every command in the host-tested table is registered automatically, so the
+ * CLI and the dial can never drift apart, and `help` lists the real thing. */
+
+static int cli_forward(int argc, char **argv)
 {
-    (void)arg;
+    /* Rebuild the line and hand it to the tested dispatcher, rather than
+     * duplicating argument handling here. */
     char line[PC_MAX_LINE];
-    size_t len = 0;
-
-    fputs("\nPharos console - type 'help'. Receive-only; nothing here transmits.\n"
-          "pharos> ", stdout);
-    fflush(stdout);
-
-    for (;;) {
-        const int c = getchar();
-        if (c == EOF) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
+    size_t n = 0;
+    for (int i = 0; i < argc && n + 1 < sizeof(line); i++) {
+        const int w = snprintf(line + n, sizeof(line) - n, "%s%s",
+                               i ? " " : "", argv[i]);
+        if (w < 0) {
+            break;
         }
-        if (c == '\r' || c == '\n') {
-            fputc('\n', stdout);
-            line[len] = '\0';
-            pharos_console_run(line);
-            len = 0;
-            continue;
-        }
-        if (c == 0x7F || c == '\b') { /* DEL / backspace */
-            if (len) {
-                len--;
-                fputs("\b \b", stdout);
-                fflush(stdout);
-            }
-            continue;
-        }
-        if (c >= 0x20 && c < 0x7F && len < sizeof(line) - 1) {
-            line[len++] = (char)c;
-            fputc(c, stdout); /* local echo */
-            fflush(stdout);
+        n += (size_t)w;
+        if (n >= sizeof(line)) {
+            n = sizeof(line) - 1;
+            break;
         }
     }
+    line[n] = '\0';
+    pharos_console_run(line);
+    return 0;
+}
+
+/* `diag` - why is the screen black? The device should be able to answer that
+ * itself rather than making somebody read a boot log they may not have kept. */
+static int cli_diag(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    pharos_bsp_status_t st;
+    memset(&st, 0, sizeof(st));
+    pharos_bsp_last_status(&st);
+
+    printf("display   : %s\n", pharos_disp_result_name(st.disp_result));
+    printf("  size    : %dx%d\n", st.disp_w, st.disp_h);
+    printf("  touch   : %s\n", st.touch_ok ? "up" : "DOWN (screen still works)");
+    printf("  lock    : %s\n",
+           pharos_bsp_display_lock(50) ? (pharos_bsp_display_unlock(), "acquired")
+                                       : "COULD NOT ACQUIRE");
+    printf("  hud     : %s\n", pharos_hud_present() ? "built" : "NOT BUILT");
+    printf("psram free: %u KB\n", (unsigned)(st.psram_free / 1024));
+    printf("heap free : %u B (min %u)\n",
+           (unsigned)esp_get_free_heap_size(),
+           (unsigned)esp_get_minimum_free_heap_size());
+
+    const pharos_lens_t *a = pharos_lens_active();
+    printf("lens      : %s (%u registered)\n", a ? a->id : "none",
+           pharos_lens_count());
+
+    pharos_radio_stats_t rs;
+    pharos_radio_stats(&rs);
+    printf("radio     : ch%u %s seen=%u dropped=%u\n",
+           rs.current_channel, rs.camped ? "camped" : "hopping",
+           (unsigned)rs.frames_seen, (unsigned)rs.frames_dropped);
+
+    pharos_tx_fence_t f;
+    pharos_radio_fence_status(&f);
+    printf("fence     : %s (trips=%u)\n",
+           (f.wrap_linked && f.ble_observer_only && f.tx_symbols_absent &&
+            f.tx_attempts == 0) ? "clean - receive-only" : "BREACH",
+           (unsigned)f.tx_attempts);
+    return 0;
+}
+
+/* `screen` - force a repaint and prove the pixel path end to end. If this
+ * shows something and the lenses do not, the fault is in the UI loop; if it
+ * shows nothing, the fault is below LVGL. */
+static int cli_screen(int argc, char **argv)
+{
+    const bool on = !(argc >= 2 && strcmp(argv[1], "off") == 0);
+    if (argc >= 2 && strcmp(argv[1], "test") == 0) {
+        if (!pharos_bsp_display_lock(500)) {
+            printf("could not take the LVGL lock - the display task is not running\n");
+            return 1;
+        }
+        pharos_hud_create();
+        pharos_hud_update("DIAG", "TEST", "screen test",
+                          "if you can read this, pixels work", 66, 0x3DDC84);
+        pharos_bsp_display_unlock();
+        printf("test pattern pushed - look at the panel\n");
+        return 0;
+    }
+    pharos_bsp_brightness(on ? 255 : 0);
+    printf("brightness %s\n", on ? "100%" : "0%");
+    return 0;
 }
 
 void pharos_console_start(void)
 {
-    xTaskCreate(console_task, "pharos_con", 4096, NULL, 4, NULL);
+    esp_console_repl_t *repl = NULL;
+    esp_console_repl_config_t rc = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    rc.prompt = "pharos>";
+    rc.max_cmdline_length = PC_MAX_LINE;
+
+    esp_err_t err;
+#if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
+    esp_console_dev_usb_serial_jtag_config_t hw =
+        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    err = esp_console_new_repl_usb_serial_jtag(&hw, &rc, &repl);
+#elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
+    esp_console_dev_usb_cdc_config_t hw = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
+    err = esp_console_new_repl_usb_cdc(&hw, &rc, &repl);
+#else
+    esp_console_dev_uart_config_t hw = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    err = esp_console_new_repl_uart(&hw, &rc, &repl);
+#endif
+    if (err != ESP_OK || !repl) {
+        ESP_LOGE("console", "REPL init failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    esp_console_register_help_command();
+
+    /* Every command from the receive-only table, registered for real - so tab
+     * completion and `help` reflect the tested table rather than a copy. */
+    unsigned n = 0;
+    const pc_cmd_t *tbl = pc_table(&n);
+    for (unsigned i = 0; i < n; i++) {
+        if (strcmp(tbl[i].name, "help") == 0) {
+            continue; /* esp_console provides its own */
+        }
+        const esp_console_cmd_t c = {
+            .command = tbl[i].name,
+            .help = tbl[i].summary,
+            .hint = tbl[i].usage,
+            .func = &cli_forward,
+        };
+        esp_console_cmd_register(&c);
+    }
+
+    const esp_console_cmd_t diag = {
+        .command = "diag",
+        .help = "board, display, radio and fence state",
+        .hint = NULL,
+        .func = &cli_diag,
+    };
+    esp_console_cmd_register(&diag);
+
+    const esp_console_cmd_t screen = {
+        .command = "screen",
+        .help = "screen test | on | off - prove the pixel path",
+        .hint = "[test|on|off]",
+        .func = &cli_screen,
+    };
+    esp_console_cmd_register(&screen);
+
+    printf("\nPharos CLI - type 'help'. Receive-only; nothing here transmits.\n"
+           "Start with 'diag' if the screen is dark.\n");
+    esp_console_start_repl(repl);
 }

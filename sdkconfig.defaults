@@ -84,3 +84,18 @@ CONFIG_PHAROS_HAS_VENDOR_BSP=y
 
 # --- Log ---------------------------------------------------------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- console transport --------------------------------------------------
+# This board has one USB-C socket and it goes to the ESP32-S3's native USB,
+# not to a USB-to-UART bridge. With IDF's default (console on UART0) the log
+# output still reaches the USB port via the SECONDARY console - which is why
+# logs were visible - but stdin does not, so the CLI was unreachable over the
+# only cable the board has.
+#
+# Making USB-Serial-JTAG the primary console puts both directions on that
+# cable: same logs as before, and now a REPL you can actually type into.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+
+# Room for command history and the REPL task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

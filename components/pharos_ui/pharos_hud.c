@@ -82,6 +82,8 @@ bool pharos_hud_create(void)
     return true;
 }
 
+bool pharos_hud_present(void) { return s_built; }
+
 void pharos_hud_update(const char *lens, const char *big, const char *band,
                        const char *detail, int score, uint32_t rgb)
 {
@@ -123,6 +125,7 @@ void pharos_hud_splash(const char *version, bool fence_clean)
 #else /* no panel on this build */
 
 bool pharos_hud_create(void) { return false; }
+bool pharos_hud_present(void) { return false; }
 void pharos_hud_update(const char *lens, const char *big, const char *band,
                        const char *detail, int score, uint32_t rgb)
 {
