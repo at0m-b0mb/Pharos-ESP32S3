@@ -242,7 +242,7 @@ bool pharos_hud_create(void)
     s_summary = mk_label(scr, &lv_font_montserrat_18, HUD_DIM, LV_ALIGN_CENTER, 0, -6, "");
     lv_label_set_long_mode(s_summary, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_summary, 300);
-    lv_obj_align(s_summary, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_align(s_summary, LV_ALIGN_CENTER, 0, 84);
 
     s_hint = mk_label(scr, &lv_font_montserrat_16, HUD_DIMMER, LV_ALIGN_CENTER, 0, 120, "");
     s_rx   = mk_label(scr, &lv_font_montserrat_16, HUD_GREEN,  LV_ALIGN_CENTER, 0, 152,
@@ -349,6 +349,18 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
 
 /* ---- LIVE: the lens running ------------------------------------------ */
 
+void pharos_hud_advice(const char *advice)
+{
+    if (!s_built || !s_summary) {
+        return;
+    }
+    /* The advice reuses the summary label: in LIVE the question is no longer
+     * "what is this tool" but "what do I do now", and both belong in the same
+     * place on the glass. */
+    lv_label_set_text(s_summary, advice ? advice : "");
+    show(s_summary, advice && advice[0]);
+}
+
 void pharos_hud_ceiling(int ceiling)
 {
     if (!s_built || !s_ghost) {
@@ -448,5 +460,6 @@ void pharos_hud_splash(const char *version, bool fence_clean)
     (void)version; (void)fence_clean;
 }
 void pharos_hud_ceiling(int ceiling) { (void)ceiling; }
+void pharos_hud_advice(const char *advice) { (void)advice; }
 
 #endif

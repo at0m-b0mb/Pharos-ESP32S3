@@ -9,6 +9,7 @@
  * beacons and feeds the engine. Fast beacons on the current channel are the
  * signal, so it uses a brisk survey sweep and keeps the mgmt filter on.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -150,6 +151,18 @@ static bool k_mirage_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
     return true;
 }
 
+static bool k_mirage_display(struct pharos_lens_display *o)
+{
+    pf_verdict_t v = s_verdict;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pf_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "%u names  ceil %u",
+             (unsigned)v.distinct_ssids, v.ceiling);
+    snprintf(o->advice, sizeof(o->advice), "%s", pf_band_advice(v.band));
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_mirage = {
     .id = "wifi.mirage",
     .name = "Mirage",
@@ -165,6 +178,7 @@ static const pharos_lens_t k_mirage = {
     .on_event = mirage_event,
     .ingest = mirage_ingest,
     .stage_report = k_mirage_stage,
+    .display = k_mirage_display,
 };
 
 PHAROS_LENS_REGISTER(&k_mirage);

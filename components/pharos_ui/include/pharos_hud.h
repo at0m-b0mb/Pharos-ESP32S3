@@ -68,6 +68,9 @@ void pharos_hud_toast(const char *msg);
  * of the project, so it is on the glass rather than only in a report. */
 void pharos_hud_ceiling(int ceiling);
 
+/* One line of what to DO about the reading, under the gauge. */
+void pharos_hud_advice(const char *advice);
+
 #ifdef __cplusplus
 }
 #endif

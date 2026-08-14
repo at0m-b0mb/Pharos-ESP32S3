@@ -15,6 +15,7 @@
  * that runs continuously and always knows which lens is active. This file is
  * the lens that displays it and the operator's acknowledge button.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -98,6 +99,26 @@ bool pharos_lens_aegis_report(char *buf, size_t cap, prt_redact_t redact, uint32
     return prt_finish(&w);
 }
 
+static bool k_aegis_display(struct pharos_lens_display *o)
+{
+    pa_verdict_t v;
+    if (!pharos_ui_aegis_snapshot(&v)) {
+        return false;
+    }
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pa_band_name(v.band));
+    if (v.worst_peak) {
+        snprintf(o->detail, sizeof(o->detail), "%s %u, %us ago",
+                 pa_stage_name(v.worst), v.worst_peak, (unsigned)v.worst_age_s);
+    } else {
+        snprintf(o->detail, sizeof(o->detail), "%u raised  %u live",
+                 v.n_raised, v.n_live);
+    }
+    snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_aegis = {
     .id = "sys.aegis",
     .name = "Aegis",
@@ -110,6 +131,7 @@ static const pharos_lens_t k_aegis = {
     .budget_ma = 25,
     .on_mount = aegis_mount,
     .on_tick = aegis_tick,
+    .display = k_aegis_display,
 };
 
 PHAROS_LENS_REGISTER(&k_aegis);

@@ -13,6 +13,7 @@
  * decides for itself, because a baseline is only meaningful when a human
  * vouches that the estate was clean at that moment.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -240,6 +241,19 @@ static bool k_sentinel_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
     return true;
 }
 
+static bool k_sentinel_display(struct pharos_lens_display *o)
+{
+    ps_verdict_t v = s_verdict;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", ps_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "new %u  down %u  miss %u",
+             v.n_new, v.n_downgrade, v.n_missing);
+    snprintf(o->advice, sizeof(o->advice), "%s",
+             s_baseline.adopted ? v.headline : "no baseline yet - console: sentinel adopt");
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_sentinel = {
     .id = "wifi.sentinel",
     .name = "Sentinel",
@@ -255,6 +269,7 @@ static const pharos_lens_t k_sentinel = {
     .on_event = sentinel_event,
     .ingest = sentinel_ingest,
     .stage_report = k_sentinel_stage,
+    .display = k_sentinel_display,
 };
 
 PHAROS_LENS_REGISTER(&k_sentinel);

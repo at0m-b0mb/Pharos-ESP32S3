@@ -10,6 +10,7 @@
  * `if` here that decides whether something is an attack, it belongs in the
  * engine with a test, not in the lens.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -175,6 +176,19 @@ static bool k_watch_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
     return true;
 }
 
+static bool k_watch_display(struct pharos_lens_display *o)
+{
+    pw_verdict_t v = s_verdict;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pw_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "%s ch%u  ceil %u",
+             pharos_radio_is_camped() ? "CAMPED" : "HOPPING",
+             pharos_radio_channel(), v.ceiling);
+    snprintf(o->advice, sizeof(o->advice), "%s", pw_band_advice(v.band));
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_watch = {
     .id = "wifi.watch",
     .name = "Watch",
@@ -190,6 +204,7 @@ static const pharos_lens_t k_watch = {
     .on_event = watch_event,
     .ingest = watch_ingest,
     .stage_report = k_watch_stage,
+    .display = k_watch_display,
 };
 
 PHAROS_LENS_REGISTER(&k_watch);

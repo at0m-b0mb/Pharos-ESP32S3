@@ -8,6 +8,7 @@
  * All judgement lives in the pure, host-tested engine (pharos_squall). This
  * file only forwards dwell summaries and hands the verdict out.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -154,6 +155,18 @@ static bool k_squall_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
 
 static struct pharos_bus *squall_ingest(void) { return &s_bus; }
 
+static bool k_squall_display(struct pharos_lens_display *o)
+{
+    pq_verdict_t v = s_verdict;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pq_state_name(v.worst));
+    snprintf(o->detail, sizeof(o->detail), "ch%u  %u graded  retry %u%%",
+             v.worst_channel, v.n_graded, v.retry_permil / 10u);
+    snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_squall = {
     .id = "wifi.squall",
     .name = "Squall",
@@ -169,6 +182,7 @@ static const pharos_lens_t k_squall = {
     .on_event = squall_event,
     .ingest = squall_ingest,
     .stage_report = k_squall_stage,
+    .display = k_squall_display,
 };
 
 PHAROS_LENS_REGISTER(&k_squall);

@@ -353,27 +353,37 @@ static void paint(const pharos_lens_t *active)
     }
     name[n] = '\0';
 
-    pharos_radio_stats_t st;
-    pharos_radio_stats(&st);
+    /* Ask the lens what it actually found.
+     *
+     * The screen used to show a running FRAME COUNTER and the logarithm of it
+     * as a "score", identically for every lens. It climbed forever and meant
+     * nothing - which is precisely how it was reported from the field. The
+     * engines were computing real verdicts all along and this function was
+     * ignoring them. */
+    struct pharos_lens_display d;
+    memset(&d, 0, sizeof(d));
 
-    char big[16], detail[48];
-    snprintf(big, sizeof(big), "%u", (unsigned)(st.frames_seen > 99999 ? 99999
-                                                : st.frames_seen));
-    snprintf(detail, sizeof(detail), "ch %u  %s",
-             (unsigned)st.current_channel, st.camped ? "camped" : "hopping");
+    if (active->display && active->display(&d)) {
+        pharos_hud_ceiling(d.has_score ? d.ceiling : 0);
+        pharos_hud_live(name, d.big, d.band, d.detail,
+                        d.has_score ? d.score : 0, d.has_score ? 0 : 0x7FA6B5);
+        pharos_hud_advice(d.advice);
+    } else {
+        /* No verdict yet. Say so plainly and show what IS true - how much has
+         * been heard - rather than dressing a counter up as a measurement. */
+        pharos_radio_stats_t st;
+        pharos_radio_stats(&st);
+        char detail[48];
+        snprintf(detail, sizeof(detail), "ch %u  %s",
+                 (unsigned)st.current_channel, st.camped ? "camped" : "hopping");
+        char frames[16];
+        snprintf(frames, sizeof(frames), "%u",
+                 (unsigned)(st.frames_seen > 99999 ? 99999 : st.frames_seen));
+        pharos_hud_ceiling(0);
+        pharos_hud_live(name, frames, "frames heard", detail, 0, 0x7FA6B5);
+        pharos_hud_advice("listening - no verdict yet");
+    }
 
-    /* Gauge shows airtime activity until a lens publishes a graded verdict:
-     * frames seen, log-ish compressed into 0..100 so it moves visibly in a
-     * quiet room and does not peg in a busy one. */
-    int score = 0;
-    uint32_t f = st.frames_seen;
-    while (f && score < 100) { f >>= 1; score += 7; }
-
-    /* The gauge's dimmed companion: how much of this channel we actually heard.
-     * A hopping receiver cannot earn the top of the arc, and the glass should
-     * say so rather than only the report. */
-    pharos_hud_ceiling((int)(pharos_radio_dwell_permil(st.current_channel) / 10u));
-    pharos_hud_live(name, big, "listening", detail, score, 0);
     pharos_bsp_display_unlock();
 }
 

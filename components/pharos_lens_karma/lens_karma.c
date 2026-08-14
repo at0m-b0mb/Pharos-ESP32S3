@@ -12,6 +12,7 @@
  * Judgement is in pharos_karma.c, pure and host-tested. This file translates
  * frames into engine calls and hands the UI a snapshot.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -165,6 +166,18 @@ static bool k_karma_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
     return true;
 }
 
+static bool k_karma_display(struct pharos_lens_display *o)
+{
+    pk_verdict_t v = s_verdict;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pk_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "%u answered  ceil %u",
+             (unsigned)v.answered_ssids, v.ceiling);
+    snprintf(o->advice, sizeof(o->advice), "%s", pk_band_advice(v.band));
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_karma = {
     .id = "wifi.karma",
     .name = "Karma",
@@ -180,6 +193,7 @@ static const pharos_lens_t k_karma = {
     .on_event = karma_event,
     .ingest = karma_ingest,
     .stage_report = k_karma_stage,
+    .display = k_karma_display,
 };
 
 PHAROS_LENS_REGISTER(&k_karma);

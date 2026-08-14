@@ -31,6 +31,18 @@ typedef enum {
     PHAROS_LENS_SYSTEM,      /* settings, self-audit, storage        */
 } pharos_lens_kind_t;
 
+/* A display-ready verdict. Fixed-size and self-contained: the UI must never
+ * hold a pointer into a lens' state, which changes on another core. */
+struct pharos_lens_display {
+    char big[16];     /* the headline: a score, a grade, a word     */
+    char band[24];    /* what that headline MEANS                   */
+    char detail[48];  /* the supporting numbers                     */
+    char advice[96];  /* what to do about it                        */
+    uint8_t score;    /* 0..100, drives the gauge and its colour    */
+    uint8_t ceiling;  /* the most this observation could have earned*/
+    bool has_score;   /* false when the headline is not a score     */
+};
+
 typedef struct pharos_lens {
     const char *id;      /* stable slug, used in logs: "wifi.census" */
     const char *name;    /* shown on the dial: "Census"              */
@@ -74,6 +86,19 @@ typedef struct pharos_lens {
      * header - which every component includes - does not have to depend on the
      * engine's. Return false when there is nothing worth reporting. */
     bool (*stage_report)(uint8_t *stage, uint8_t *score, uint8_t *ceiling);
+
+    /* What this lens wants on the glass, right now.
+     *
+     * Until v1.11.0 the screen showed a running frame counter and the LOGARITHM
+     * of that counter as a "score" - for every lens, identically. It went up
+     * forever and meant nothing, which is exactly how it was reported: "the
+     * number just increases, how do I know the data is correct?" It wasn't.
+     * The engines were computing real verdicts and the UI was ignoring them.
+     *
+     * A lens fills this from its own verdict, so the panel shows the same
+     * numbers the reports and the console do. Returning false means "I have
+     * nothing to say yet", and the UI says THAT rather than inventing a value. */
+    bool (*display)(struct pharos_lens_display *out);
 } pharos_lens_t;
 
 /* Upper bound on registered lenses. Defined here (not just in the .c) because

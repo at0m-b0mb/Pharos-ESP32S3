@@ -10,6 +10,7 @@
  * with host tests. What lives here is the beacon-to-record translation and
  * the snapshot the UI reads.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -297,6 +298,36 @@ unsigned pharos_lens_twin_adopt_profile(void)
 
 static struct pharos_bus *census_ingest(void) { return &s_bus; }
 
+static bool k_census_display(struct pharos_lens_display *o)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    unsigned worst = 0, n = s_n_aps;
+    pc_grade_t worst_g = PC_GRADE_A_PLUS;
+    for (unsigned i = 0; i < s_n_aps; i++) {
+        if (s_grades[i].grade > worst_g) { worst_g = s_grades[i].grade; worst = i; }
+    }
+    const pc_verdict_t v = n ? s_grades[worst] : (pc_verdict_t){ 0 };
+    xSemaphoreGive(s_lock);
+
+    if (!n) {
+        snprintf(o->big, sizeof(o->big), "--");
+        snprintf(o->band, sizeof(o->band), "listening");
+        snprintf(o->detail, sizeof(o->detail), "no networks heard yet");
+        o->has_score = false;
+        return true;
+    }
+    /* The headline is the WORST grade in the room, because that is the one
+     * that matters - an estate is as strong as its softest network. */
+    snprintf(o->big, sizeof(o->big), "%s", pc_grade_name(v.grade));
+    snprintf(o->band, sizeof(o->band), "worst of %u", n);
+    snprintf(o->detail, sizeof(o->detail), "score %u  ceil %u", v.score, v.ceiling);
+    snprintf(o->advice, sizeof(o->advice), "%s", pc_grade_advice(&v));
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_census = {
     .id = "wifi.census",
     .name = "Census",
@@ -311,6 +342,7 @@ static const pharos_lens_t k_census = {
     .on_tick = census_tick,
     .on_event = census_event,
     .ingest = census_ingest,
+    .display = k_census_display,
 };
 
 /* Aegis: Twin speaks for the IMPERSONATE stage. Census itself reports nothing -
@@ -321,6 +353,17 @@ static bool k_twin_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
     *stage = 1; /* PA_STAGE_IMPERSONATE */
     *score = s_twin_worst.score;
     *ceiling = s_twin_worst.ceiling;
+    return true;
+}
+
+static bool k_twin_display(struct pharos_lens_display *o)
+{
+    pt_verdict_t v = s_twin_worst;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pt_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "\"%s\"  ceil %u", s_twin_ssid, v.ceiling);
+    snprintf(o->advice, sizeof(o->advice), "%s", pt_band_advice(v.band));
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
     return true;
 }
 
@@ -339,6 +382,7 @@ static const pharos_lens_t k_twin = {
     .on_event = census_event,
     .ingest = census_ingest,
     .stage_report = k_twin_stage,
+    .display = k_twin_display,
 };
 
 PHAROS_LENS_REGISTER(&k_census);

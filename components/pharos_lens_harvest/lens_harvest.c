@@ -10,6 +10,7 @@
  * judgement is in the pure, host-tested engine (pharos_harvest); this file only
  * feeds it frames and hands the verdict out.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -148,6 +149,18 @@ static bool k_harvest_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
 
 static struct pharos_bus *harvest_ingest(void) { return &s_bus; }
 
+static bool k_harvest_display(struct pharos_lens_display *o)
+{
+    ph_verdict_t v = s_verdict;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", ph_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "forced %u  pmkid %u  ceil %u",
+             (unsigned)v.forced_cycles, (unsigned)v.pmkid_orphans, v.ceiling);
+    snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_harvest = {
     .id = "wifi.harvest",
     .name = "Harvest",
@@ -163,6 +176,7 @@ static const pharos_lens_t k_harvest = {
     .on_event = harvest_event,
     .ingest = harvest_ingest,
     .stage_report = k_harvest_stage,
+    .display = k_harvest_display,
 };
 
 PHAROS_LENS_REGISTER(&k_harvest);

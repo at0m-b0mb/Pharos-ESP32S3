@@ -15,6 +15,7 @@
  * Neither transmits: the BLE scan is passive by construction (see
  * pharos_radio.c) and the Wi-Fi side is promiscuous receive.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_attr.h"
@@ -212,6 +213,18 @@ static bool k_vigil_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
 
 static struct pharos_bus *vigil_ingest(void) { return &s_bus; }
 
+static bool k_vigil_display(struct pharos_lens_display *o)
+{
+    pv_verdict_t v = s_verdict;
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pv_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "%u tags  %u following  %u places",
+             v.n_tags, v.n_following, v.n_locales);
+    snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
+    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    return true;
+}
+
 static const pharos_lens_t k_vigil = {
     .id = "ble.vigil",
     .name = "Vigil",
@@ -229,6 +242,7 @@ static const pharos_lens_t k_vigil = {
     .on_event = vigil_event,
     .ingest = vigil_ingest,
     .stage_report = k_vigil_stage,
+    .display = k_vigil_display,
 };
 
 PHAROS_LENS_REGISTER(&k_vigil);
