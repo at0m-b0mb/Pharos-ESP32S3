@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.9.0 — 2026-08-14
+
+### Fixed: changing lens rebooted the device
+
+The touch callback called `pharos_lens_activate()` directly. That callback runs
+on **LVGL's task**, holding LVGL's lock and using LVGL's stack — and activating
+a lens tears down and restarts the Wi-Fi driver, which needs far more stack than
+that task has, then re-enters the display lock. Stack overflow, panic, reboot,
+every single time.
+
+The callback now records an *intent* and returns; the UI task, which already
+owns the lens lifecycle, applies it on the next tick. The rule is written into
+`pharos_hud.h` so it does not get rediscovered the same way.
+
+### New: the device explains itself
+
+*"I don't know what this device is doing"* was fair. It showed a number and a
+word, and the only way to learn what a lens did was to read the README on a
+laptop. There are now two views:
+
+**BROWSE** — one lens at a time: its name, **what it actually does in plain
+words**, which team it serves, and where you are in the list (`3 / 16`). Nothing
+runs. The device boots into this, because the first thing an operator should see
+is what the tool is *for*, not an unexplained reading.
+
+**LIVE** — that lens running: gauge, headline value, band word, detail line.
+
+| gesture | action |
+|---|---|
+| tap **left** / **right** | step through the lenses |
+| tap **centre** | start the one you are reading about |
+| **long-press** | stop, and go back to browsing |
+
+Stepping the list stops whatever was running, so the number on screen always
+belongs to the lens named above it. Lenses are colour-coded by kind, and widgets
+with nothing honest to say in BROWSE are hidden rather than left showing stale
+text.
+
+## v1.8.0 — 2026-08-14
+
+**Drivable from the glass.** Touch navigation (`BSP_CAPS_TOUCH` is 1, so the
+CST9217 was already registered with LVGL and simply unused), the BOOT button as
+a physical fallback (`BSP_CAPS_BUTTONS` is 0 — the two side buttons are RESET
+and BOOT/GPIO0), and `rotate <0|90|180|270>`, persisted in NVS, because which
+way is up on a *round* device depends on how you hold it.
+
 ## v1.7.1 — 2026-08-14
 
 ### Fixed: the black screen. The actual, embarrassing cause.
