@@ -121,9 +121,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -eo pipefail
           TAG="${{ steps.vars.outputs.tag }}"
-          # The release is created by the maintainer; here we only upload the
-          # built firmware onto it (idempotent - --clobber replaces on re-run).
+
+          # The release object is normally created by the maintainer, but this
+          # job is triggered by the TAG PUSH - so on a "push the tag, then write
+          # the notes" workflow the build can finish first and upload into
+          # nothing. v1.7.1 failed exactly that way: every audit passed and the
+          # binary was simply dropped, with `release not found`.
+          #
+          # So wait for it, then create a placeholder only if the maintainer
+          # never appeared. Waiting keeps their notes; creating stops a good
+          # build from being thrown away.
+          deadline=$(( SECONDS + 600 ))   # 10 minutes
+          until gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::no release for $TAG after 10 minutes; creating one"
+              gh release create "$TAG" --repo "${{ github.repository }}" \
+                --title "Pharos $TAG" \
+                --notes "Automated release. Firmware built and audited in CI." || true
+              break
+            fi
+            echo "waiting for release $TAG to be created ..."
+            sleep 20
+          done
+
+          # Idempotent - --clobber replaces on re-run.
           gh release upload "$TAG" \
             "dist/pharos-${TAG}-esp32s3.bin" \
             "dist/pharos-esp32s3.bin" \
