@@ -322,9 +322,13 @@ static bool k_census_display(struct pharos_lens_display *o)
      * that matters - an estate is as strong as its softest network. */
     snprintf(o->big, sizeof(o->big), "%s", pc_grade_name(v.grade));
     snprintf(o->band, sizeof(o->band), "worst of %u", n);
-    snprintf(o->detail, sizeof(o->detail), "score %u  ceil %u", v.score, v.ceiling);
+    /* A posture grade is not a sweep-confidence reading: pc_verdict_t has no
+     * ceiling, it has the CAPS it applied - the reasons a grade could not go
+     * higher. Report those instead of inventing a ceiling. */
+    snprintf(o->detail, sizeof(o->detail), "score %u  caps 0x%02x", v.score,
+             (unsigned)v.caps_applied);
     snprintf(o->advice, sizeof(o->advice), "%s", pc_grade_advice(&v));
-    o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    o->score = v.score; o->ceiling = 100; o->has_score = true;
     return true;
 }
 
