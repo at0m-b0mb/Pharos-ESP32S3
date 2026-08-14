@@ -86,6 +86,7 @@ void pharos_bsp_display_unlock(void) {}
 
 #include <string.h>
 
+#include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
@@ -133,7 +134,15 @@ bool pharos_bsp_init(pharos_bsp_status_t *out)
 
 bool pharos_bsp_display_lock(int timeout_ms)
 {
-    return bsp_display_lock(timeout_ms);
+    /* CRITICAL: bsp_display_lock() wraps esp_lv_adapter_lock(), which returns
+     * an esp_err_t - ESP_OK (== 0) means the LVGL mutex was ACQUIRED. Returning
+     * that value straight as a bool inverts it: a successful lock reads as
+     * false, every caller (the splash that creates the HUD, and every repaint)
+     * bails out under `if (!lock)`, and the panel - fully powered, backlight at
+     * 100%, LVGL task running - is simply never drawn to. That is the black
+     * screen. Compare against ESP_OK so success is true. A negative timeout is
+     * the vendor's "wait forever" sentinel, so it is passed through as-is. */
+    return bsp_display_lock((uint32_t)timeout_ms) == ESP_OK;
 }
 
 void pharos_bsp_display_unlock(void)
