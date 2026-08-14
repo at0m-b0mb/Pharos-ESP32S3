@@ -369,7 +369,11 @@ static void paint(const pharos_lens_t *active)
     uint32_t f = st.frames_seen;
     while (f && score < 100) { f >>= 1; score += 7; }
 
-    pharos_hud_update(name, big, "listening", detail, score, 0x1FB6C9);
+    /* The gauge's dimmed companion: how much of this channel we actually heard.
+     * A hopping receiver cannot earn the top of the arc, and the glass should
+     * say so rather than only the report. */
+    pharos_hud_ceiling((int)(pharos_radio_dwell_permil(st.current_channel) / 10u));
+    pharos_hud_live(name, big, "listening", detail, score, 0);
     pharos_bsp_display_unlock();
 }
 

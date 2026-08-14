@@ -63,6 +63,11 @@ void pharos_hud_update(const char *lens, const char *big, const char *band,
 void pharos_hud_splash(const char *version, bool fence_clean);
 void pharos_hud_toast(const char *msg);
 
+/* The confidence ceiling, drawn as a dimmed arc behind the score: the part a
+ * thin sweep EARNED and then had taken away. Showing it is the whole argument
+ * of the project, so it is on the glass rather than only in a report. */
+void pharos_hud_ceiling(int ceiling);
+
 #ifdef __cplusplus
 }
 #endif

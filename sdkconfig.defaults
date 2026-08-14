@@ -83,6 +83,8 @@ CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_26=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_FONT_COMPRESSED=y
+# lv_scale draws the 24 bezel ticks; without it the HUD loses its instrument face.
+CONFIG_LV_USE_SCALE=y
 
 # --- Pharos ------------------------------------------------------------
 CONFIG_PHAROS_ENFORCE_RX_ONLY=y
