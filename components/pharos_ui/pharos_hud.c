@@ -432,6 +432,43 @@ void pharos_hud_update(const char *lens, const char *big, const char *band,
     pharos_hud_live(lens, big, band, detail, score, rgb);
 }
 
+void pharos_hud_colourbars(void)
+{
+    lv_obj_t *scr = lv_screen_active();
+    if (!scr) {
+        return;
+    }
+    /* Start from a clean screen: this is a measurement, not a HUD overlay. */
+    lv_obj_clean(scr);
+    s_built = false;
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
+
+    static const struct { uint32_t rgb; const char *name; } bar[] = {
+        { 0xFF0000, "RED"   }, { 0x00FF00, "GREEN" }, { 0x0000FF, "BLUE"  },
+        { 0xFFFF00, "YELLOW"}, { 0xFFFFFF, "WHITE" }, { 0x000000, "BLACK" },
+    };
+    const int n = (int)(sizeof(bar) / sizeof(bar[0]));
+    const int h = PR_H / n;
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *b = lv_obj_create(scr);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, PR_W, h);
+        lv_obj_set_pos(b, 0, i * h);
+        lv_obj_set_style_bg_color(b, lv_color_hex(bar[i].rgb), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+
+        lv_obj_t *t = lv_label_create(b);
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+        /* Label in the opposite luminance so it is readable on its own patch. */
+        lv_obj_set_style_text_color(
+            t, lv_color_hex(bar[i].rgb == 0xFFFFFF || bar[i].rgb == 0xFFFF00
+                                ? 0x000000 : 0xFFFFFF), 0);
+        lv_label_set_text(t, bar[i].name);
+        lv_obj_center(t);
+    }
+}
+
 void pharos_hud_splash(const char *version, bool fence_clean)
 {
     if (!pharos_hud_create()) {
@@ -471,10 +508,48 @@ void pharos_hud_update(const char *lens, const char *big, const char *band,
 {
     (void)lens; (void)big; (void)band; (void)detail; (void)score; (void)rgb;
 }
+void pharos_hud_colourbars(void)
+{
+    lv_obj_t *scr = lv_screen_active();
+    if (!scr) {
+        return;
+    }
+    /* Start from a clean screen: this is a measurement, not a HUD overlay. */
+    lv_obj_clean(scr);
+    s_built = false;
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
+
+    static const struct { uint32_t rgb; const char *name; } bar[] = {
+        { 0xFF0000, "RED"   }, { 0x00FF00, "GREEN" }, { 0x0000FF, "BLUE"  },
+        { 0xFFFF00, "YELLOW"}, { 0xFFFFFF, "WHITE" }, { 0x000000, "BLACK" },
+    };
+    const int n = (int)(sizeof(bar) / sizeof(bar[0]));
+    const int h = PR_H / n;
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *b = lv_obj_create(scr);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, PR_W, h);
+        lv_obj_set_pos(b, 0, i * h);
+        lv_obj_set_style_bg_color(b, lv_color_hex(bar[i].rgb), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+
+        lv_obj_t *t = lv_label_create(b);
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+        /* Label in the opposite luminance so it is readable on its own patch. */
+        lv_obj_set_style_text_color(
+            t, lv_color_hex(bar[i].rgb == 0xFFFFFF || bar[i].rgb == 0xFFFF00
+                                ? 0x000000 : 0xFFFFFF), 0);
+        lv_label_set_text(t, bar[i].name);
+        lv_obj_center(t);
+    }
+}
+
 void pharos_hud_splash(const char *version, bool fence_clean)
 {
     (void)version; (void)fence_clean;
 }
+void pharos_hud_colourbars(void) {}
 void pharos_hud_ceiling(int ceiling) { (void)ceiling; }
 void pharos_hud_advice(const char *advice) { (void)advice; }
 

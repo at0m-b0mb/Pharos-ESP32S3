@@ -60,6 +60,15 @@ void pharos_hud_live(const char *lens, const char *big, const char *band,
 /* Kept for the boot splash and the `screen test` command. */
 void pharos_hud_update(const char *lens, const char *big, const char *band,
                        const char *detail, int score, uint32_t rgb);
+/* Paint six full-screen colour patches with their names.
+ *
+ * A panel driven with the wrong channel order still shows black as black and
+ * white as white - only the mid-tones move - so a photograph of a normal screen
+ * cannot tell you what is wrong. Naming each patch can: if the patch labelled
+ * RED is blue, the red and blue channels are swapped; if everything is shifted,
+ * the byte order is. It turns a guess into a reading. */
+void pharos_hud_colourbars(void);
+
 void pharos_hud_splash(const char *version, bool fence_clean);
 void pharos_hud_toast(const char *msg);
 

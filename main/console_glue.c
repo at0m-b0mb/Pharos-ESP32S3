@@ -320,6 +320,20 @@ static int cli_lens(int argc, char **argv)
 static int cli_screen(int argc, char **argv)
 {
     const bool on = !(argc >= 2 && strcmp(argv[1], "off") == 0);
+    if (argc >= 2 && strcmp(argv[1], "colour") == 0) {
+        if (!pharos_bsp_display_lock(500)) {
+            printf("could not take the LVGL lock - the display task is not running\n");
+            return 1;
+        }
+        pharos_hud_colourbars();
+        pharos_bsp_display_unlock();
+        printf("colour bars pushed. Top to bottom the patches are LABELLED:\n");
+        printf("  RED  GREEN  BLUE  YELLOW  WHITE  BLACK\n");
+        printf("If a patch does not match its own label, the panel's channel\n");
+        printf("order is wrong - tell me which label showed which colour.\n");
+        printf("Run 'screen test' to go back, or switch lenses.\n");
+        return 0;
+    }
     if (argc >= 2 && strcmp(argv[1], "test") == 0) {
         if (!pharos_bsp_display_lock(500)) {
             printf("could not take the LVGL lock - the display task is not running\n");
@@ -410,7 +424,7 @@ void pharos_console_start(void)
 
     const esp_console_cmd_t screen = {
         .command = "screen",
-        .help = "screen test | on | off - prove the pixel path",
+        .help = "screen test | colour | on | off - prove the pixel path",
         .hint = "[test|on|off]",
         .func = &cli_screen,
     };
