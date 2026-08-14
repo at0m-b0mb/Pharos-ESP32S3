@@ -17,6 +17,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -275,6 +276,39 @@ static int cli_diag(int argc, char **argv)
     return 0;
 }
 
+/* `rotate` - which way is up on a round device is the operator's call. */
+static int cli_rotate(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("rotation is %d degrees; usage: rotate <0|90|180|270>\n",
+               pharos_bsp_rotation());
+        return 0;
+    }
+    const int deg = atoi(argv[1]);
+    if (!pharos_bsp_rotate(deg)) {
+        printf("rotate takes 0, 90, 180 or 270\n");
+        return 1;
+    }
+    printf("rotated to %d degrees (saved - it will come back this way)\n", deg);
+    return 0;
+}
+
+/* `lens` - switch lenses from the CLI, same order as the touch zones. */
+static int cli_lens(int argc, char **argv)
+{
+    if (argc < 2) {
+        for (unsigned i = 0; i < pharos_lens_count(); i++) {
+            const pharos_lens_t *l = pharos_lens_at(i);
+            const pharos_lens_t *a = pharos_lens_active();
+            printf("  %c %-14s %s\n", (a && a == l) ? '*' : ' ', l->id, l->summary);
+        }
+        return 0;
+    }
+    printf(pharos_lens_activate(argv[1]) ? "active: %s\n" : "no such lens: %s\n",
+           argv[1]);
+    return 0;
+}
+
 /* `screen` - force a repaint and prove the pixel path end to end. If this
  * shows something and the lenses do not, the fault is in the UI loop; if it
  * shows nothing, the fault is below LVGL. */
@@ -349,6 +383,22 @@ void pharos_console_start(void)
     };
     esp_console_cmd_register(&diag);
 
+    const esp_console_cmd_t rotate = {
+        .command = "rotate",
+        .help = "set panel rotation: 0, 90, 180 or 270 (saved)",
+        .hint = "<0|90|180|270>",
+        .func = &cli_rotate,
+    };
+    esp_console_cmd_register(&rotate);
+
+    const esp_console_cmd_t lens = {
+        .command = "lens",
+        .help = "list lenses, or switch to one by id",
+        .hint = "[id]",
+        .func = &cli_lens,
+    };
+    esp_console_cmd_register(&lens);
+
     const esp_console_cmd_t screen = {
         .command = "screen",
         .help = "screen test | on | off - prove the pixel path",
@@ -358,6 +408,8 @@ void pharos_console_start(void)
     esp_console_cmd_register(&screen);
 
     printf("\nPharos CLI - type 'help'. Receive-only; nothing here transmits.\n"
-           "Start with 'diag' if the screen is dark.\n");
+           "  touch: tap LEFT/RIGHT of the glass to change lens, long-press = stop\n"
+           "  BOOT button: short press = next lens, hold = stop\n"
+           "  'rotate 90' if the screen is sideways, 'diag' if it is dark\n");
     esp_console_start_repl(repl);
 }

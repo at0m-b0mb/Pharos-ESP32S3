@@ -10,7 +10,7 @@ idf_component_register(
     SRCS "pharos_bsp.c"
     INCLUDE_DIRS "include"
     REQUIRES pharos_core pharos_engine
-    PRIV_REQUIRES driver esp_timer
+    PRIV_REQUIRES driver esp_timer nvs_flash
 )
 
 # Link against the managed components only when they are actually in the build.

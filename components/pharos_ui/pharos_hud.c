@@ -32,7 +32,10 @@ static lv_obj_t *s_big;
 static lv_obj_t *s_band;
 static lv_obj_t *s_detail;
 static lv_obj_t *s_rx;
+static lv_obj_t *s_toast;
 static bool s_built;
+static pharos_hud_nav_cb_t s_nav_cb;
+static uint32_t s_toast_until_ms;
 
 static lv_obj_t *mk_label(lv_obj_t *parent, const lv_font_t *font, uint32_t rgb,
                           lv_align_t align, int dx, int dy, const char *text)
@@ -44,6 +47,57 @@ static lv_obj_t *mk_label(lv_obj_t *parent, const lv_font_t *font, uint32_t rgb,
     lv_label_set_text(l, text);
     lv_obj_align(l, align, dx, dy);
     return l;
+}
+
+/* Touch zones. LVGL dispatches these from the vendor's touch indev, so they
+ * follow the panel's rotation without any geometry of our own. */
+static void nav_event(lv_event_t *e)
+{
+    if (!s_nav_cb) {
+        return;
+    }
+    const lv_event_code_t code = lv_event_get_code(e);
+    const pharos_nav_t what = (pharos_nav_t)(uintptr_t)lv_event_get_user_data(e);
+    if (code == LV_EVENT_LONG_PRESSED) {
+        s_nav_cb(PHAROS_NAV_HOME);
+    } else if (code == LV_EVENT_SHORT_CLICKED) {
+        s_nav_cb(what);
+    }
+}
+
+static lv_obj_t *mk_zone(lv_obj_t *parent, lv_align_t align, int w, int h,
+                         pharos_nav_t what)
+{
+    lv_obj_t *z = lv_obj_create(parent);
+    lv_obj_remove_style_all(z);
+    lv_obj_set_size(z, w, h);
+    lv_obj_align(z, align, 0, 0);
+    lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
+    lv_obj_add_event_cb(z, nav_event, LV_EVENT_SHORT_CLICKED, (void *)(uintptr_t)what);
+    lv_obj_add_event_cb(z, nav_event, LV_EVENT_LONG_PRESSED, (void *)(uintptr_t)what);
+    return z;
+}
+
+void pharos_hud_set_nav_cb(pharos_hud_nav_cb_t cb) { s_nav_cb = cb; }
+
+void pharos_hud_toast(const char *msg)
+{
+    if (!s_built || !s_toast || !msg) {
+        return;
+    }
+    lv_label_set_text(s_toast, msg);
+    lv_obj_clear_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+    s_toast_until_ms = lv_tick_get() + 1200u;
+}
+
+/* Called from the repaint path; hides the toast once its time is up. */
+static void toast_tick(void)
+{
+    if (s_toast && s_toast_until_ms && lv_tick_get() > s_toast_until_ms) {
+        lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+        s_toast_until_ms = 0;
+    }
 }
 
 bool pharos_hud_create(void)
@@ -83,6 +137,15 @@ bool pharos_hud_create(void)
     s_rx     = mk_label(scr, &lv_font_montserrat_16, HUD_GREEN,  LV_ALIGN_CENTER, 0, 150,
                         "receive-only");
 
+    /* Navigation zones, added last so they sit above the labels. Left and
+     * right thirds of the glass; the middle is left alone so a tap there does
+     * nothing rather than doing something surprising. */
+    mk_zone(scr, LV_ALIGN_LEFT_MID, 150, 466, PHAROS_NAV_PREV);
+    mk_zone(scr, LV_ALIGN_RIGHT_MID, 150, 466, PHAROS_NAV_NEXT);
+
+    s_toast = mk_label(scr, &lv_font_montserrat_20, HUD_TEXT, LV_ALIGN_CENTER, 0, 110, "");
+    lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+
     s_built = true;
     return true;
 }
@@ -95,6 +158,7 @@ void pharos_hud_update(const char *lens, const char *big, const char *band,
     if (!s_built) {
         return;
     }
+    toast_tick();
     if (lens && s_lens)     lv_label_set_text(s_lens, lens);
     if (big && s_big)       lv_label_set_text(s_big, big);
     if (band && s_band)     lv_label_set_text(s_band, band);
@@ -131,6 +195,8 @@ void pharos_hud_splash(const char *version, bool fence_clean)
 
 bool pharos_hud_create(void) { return false; }
 bool pharos_hud_present(void) { return false; }
+void pharos_hud_set_nav_cb(pharos_hud_nav_cb_t cb) { (void)cb; }
+void pharos_hud_toast(const char *msg) { (void)msg; }
 void pharos_hud_update(const char *lens, const char *big, const char *band,
                        const char *detail, int score, uint32_t rgb)
 {

@@ -55,6 +55,14 @@ bool pharos_bsp_battery(pwr_battery_t *out);
 /* Set panel brightness, 0..255. AMOLED, so 0 is truly off. */
 void pharos_bsp_brightness(uint8_t level);
 
+/* Panel rotation in degrees: 0, 90, 180 or 270.
+ *
+ * Which one is "upright" depends on how you hold a round device, so this is a
+ * runtime setting rather than a build constant. It is persisted, so the board
+ * comes back the way you left it. Returns false for an unsupported angle. */
+bool pharos_bsp_rotate(int degrees);
+int pharos_bsp_rotation(void);
+
 /* Latest IMU sample, in centi-degrees, for the wrist-raise and still-detect
  * that drive the Sentry lens. */
 bool pharos_bsp_orientation(int16_t *pitch_cdeg, int16_t *roll_cdeg);

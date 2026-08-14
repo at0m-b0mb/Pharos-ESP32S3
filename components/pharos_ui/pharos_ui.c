@@ -22,6 +22,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 
 #include "freertos/semphr.h"
 
@@ -92,6 +93,92 @@ void pharos_ui_aegis_ack(void)
     ESP_LOGI(TAG, "aegis: latch acknowledged; watch restarts clean");
 }
 
+/* ---- navigation -----------------------------------------------------
+ *
+ * The dial order is the same one build_dial() computes, so tapping through the
+ * lenses walks them in the order they appear on screen. Kept as an index into
+ * the registry rather than a copy, so adding a lens needs no change here. */
+static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
+static unsigned s_order_n;
+static unsigned s_cursor;
+
+static bool launchable_fwd(const pharos_lens_t *l);
+
+static void nav_to(unsigned idx)
+{
+    if (!s_order_n) {
+        return;
+    }
+    for (unsigned tries = 0; tries < s_order_n; tries++) {
+        const pharos_lens_t *l = s_order[idx % s_order_n];
+        if (l && launchable_fwd(l) && pharos_lens_activate(l->id)) {
+            s_cursor = idx % s_order_n;
+            ESP_LOGI(TAG, "nav -> %s", l->id);
+            if (pharos_bsp_display_lock(50)) {
+                pharos_hud_toast(l->name);
+                pharos_bsp_display_unlock();
+            }
+            return;
+        }
+        idx++;
+    }
+}
+
+static void on_nav(pharos_nav_t what)
+{
+    switch (what) {
+    case PHAROS_NAV_NEXT: nav_to(s_cursor + 1); break;
+    case PHAROS_NAV_PREV: nav_to(s_cursor + s_order_n - 1); break;
+    case PHAROS_NAV_HOME:
+    default:
+        pharos_lens_deactivate();
+        ESP_LOGI(TAG, "nav -> home (stopped)");
+        if (pharos_bsp_display_lock(50)) {
+            pharos_hud_toast("stopped");
+            pharos_bsp_display_unlock();
+        }
+        break;
+    }
+}
+
+/* The board exposes no user buttons (BSP_CAPS_BUTTONS is 0); the two on the
+ * side are RESET and BOOT. BOOT is GPIO0 and is readable, so it becomes a
+ * physical "next lens" - useful when a glove, a dead touch controller or a
+ * pocket makes the screen impractical. Polled, because it shares its pin with
+ * the bootloader strap and an interrupt here is not worth the care. */
+#define PHAROS_BOOT_GPIO 0
+
+static void boot_button_init(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << PHAROS_BOOT_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+}
+
+static void boot_button_poll(uint32_t dt_ms)
+{
+    static bool was_down;
+    static uint32_t held_ms;
+    const bool down = (gpio_get_level(PHAROS_BOOT_GPIO) == 0); /* active low */
+
+    if (down) {
+        held_ms += dt_ms;
+        was_down = true;
+        return;
+    }
+    if (was_down) {
+        /* Released: long press goes home, short press advances. */
+        on_nav(held_ms >= 800u ? PHAROS_NAV_HOME : PHAROS_NAV_NEXT);
+        was_down = false;
+        held_ms = 0;
+    }
+}
+
 unsigned pharos_ui_pump(void)
 {
     const pharos_lens_t *lens = pharos_lens_active();
@@ -126,6 +213,9 @@ static void analytics_task(void *arg)
 
 /* Is a lens safe to auto-launch given the fence state? A lens that holds any
  * radio capability is gated behind a clean fence. */
+static bool lens_launchable(const pharos_lens_t *l);
+static bool launchable_fwd(const pharos_lens_t *l) { return lens_launchable(l); }
+
 static bool lens_launchable(const pharos_lens_t *l)
 {
     if (s_fence_ok) {
@@ -235,10 +325,14 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         s_aegis_lock = xSemaphoreCreateMutex();
     }
 
-    const pharos_lens_t *order[PHAROS_MAX_LENSES];
     pd_dial_t dial;
     unsigned count = 0;
-    build_dial(&dial, order, &count);
+    build_dial(&dial, s_order, &count);
+    s_order_n = count;
+
+    /* Touch is the primary control; the BOOT button is the fallback. */
+    pharos_hud_set_nav_cb(on_nav);
+    boot_button_init();
 
     ESP_LOGI(TAG, "Lamp Room: %u lenses on the dial%s", count,
              s_fence_ok ? "" : " (radio lenses locked: fence not clean)");
@@ -252,11 +346,17 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     if (!pharos_lens_activate(landing)) {
         ESP_LOGE(TAG, "could not activate landing lens %s", landing);
     }
+    for (unsigned i = 0; i < s_order_n; i++) {
+        if (s_order[i] && strcmp(s_order[i]->id, landing) == 0) {
+            s_cursor = i;
+            break;
+        }
+    }
 
     /* Put the identity on the panel immediately, so the operator sees the
      * device is alive long before a lens has anything to say. */
     if (pharos_bsp_display_lock(200)) {
-        pharos_hud_splash("v1.7.1", s_fence_ok);
+        pharos_hud_splash("v1.8.0", s_fence_ok);
         pharos_bsp_display_unlock();
     }
 
@@ -276,6 +376,8 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         /* Fold whatever the active lens is seeing into the correlator. */
         aegis_pump(active, dt_ms);
 
+        boot_button_poll(dt_ms);
+
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here
          * is push fresh text/values in under its lock; a short timeout means a
          * busy display never stalls the analytics tick. */
@@ -284,10 +386,6 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
             since_paint = 0;
             paint(active);
         }
-
-        /* M2 (remaining): touch hit-testing against the Lamp Room dial, so the
-         * operator can switch lenses on the glass rather than over serial. The
-         * geometry for it is done and tested in pharos_dial/pharos_round. */
 
         if ((++heartbeat % 100) == 0 && active) {
             ESP_LOGI(TAG, "active: %s (dt=%ums) painted=%u missed=%u hud=%d",

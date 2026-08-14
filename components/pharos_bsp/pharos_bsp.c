@@ -47,6 +47,8 @@ bool pharos_bsp_init(pharos_bsp_status_t *out) { (void)out; return false; }
 void pharos_bsp_last_status(pharos_bsp_status_t *out) { if (out) *out = s_last; }
 bool pharos_bsp_battery(pwr_battery_t *out) { (void)out; return false; }
 void pharos_bsp_brightness(uint8_t level) { (void)level; }
+bool pharos_bsp_rotate(int degrees) { (void)degrees; return false; }
+int pharos_bsp_rotation(void) { return 0; }
 bool pharos_bsp_orientation(int16_t *p, int16_t *r) { (void)p; (void)r; return false; }
 bool pharos_bsp_display_lock(int timeout_ms) { (void)timeout_ms; return false; }
 void pharos_bsp_display_unlock(void) {}
@@ -119,6 +121,7 @@ void pharos_bsp_display_unlock(void) {}
  * pulled in transitively by the board header, but name it so the dependency
  * is visible rather than accidental. */
 #include "esp_lv_adapter.h"
+#include "nvs.h"
 
 static const char *TAG = "bsp";
 
@@ -197,6 +200,7 @@ bool pharos_bsp_init(pharos_bsp_status_t *out)
         /* Idempotent, and cheap insurance: on an AMOLED brightness IS emission,
          * so a panel at zero is indistinguishable from a broken one. */
         bsp_display_brightness_set(100);
+        rotation_restore();
         ESP_LOGI(TAG, "panel %s: %dx%d, touch=%d, psram_free=%uKB",
                  pharos_disp_result_name(st.disp_result),
                  st.disp_w, st.disp_h, st.touch_ok,
@@ -242,6 +246,52 @@ bool pharos_bsp_battery(pwr_battery_t *out)
     out->present = false;
     out->capacity_mah = PHAROS_BOARD_BATTERY_MAH;
     return false;
+}
+
+static int s_rotation;
+
+int pharos_bsp_rotation(void) { return s_rotation; }
+
+bool pharos_bsp_rotate(int degrees)
+{
+    bsp_display_rotation_t r;
+    switch (degrees) {
+    case 0:   r = BSP_DISPLAY_ROTATE_0;   break;
+    case 90:  r = BSP_DISPLAY_ROTATE_90;  break;
+    case 180: r = BSP_DISPLAY_ROTATE_180; break;
+    case 270: r = BSP_DISPLAY_ROTATE_270; break;
+    default:  return false;
+    }
+    if (bsp_display_rotation_set(r) != ESP_OK) {
+        return false;
+    }
+    s_rotation = degrees;
+
+    /* Remember it: which way is up is a property of how this particular
+     * operator holds the thing, not of the build. */
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "rot", degrees);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "panel rotation set to %d degrees", degrees);
+    return true;
+}
+
+static void rotation_restore(void)
+{
+    nvs_handle_t h;
+    int32_t deg = -1;
+    if (nvs_open("pharos", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "rot", &deg) != ESP_OK) {
+            deg = -1;
+        }
+        nvs_close(h);
+    }
+    if (deg == 0 || deg == 90 || deg == 180 || deg == 270) {
+        pharos_bsp_rotate((int)deg);
+    }
 }
 
 void pharos_bsp_brightness(uint8_t level)

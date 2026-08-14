@@ -6,5 +6,5 @@ idf_component_register(
         "pharos_ui.c"
     INCLUDE_DIRS "include"
     REQUIRES pharos_core pharos_bsp pharos_radio pharos_engine
-    PRIV_REQUIRES esp_timer
+    PRIV_REQUIRES esp_timer driver esp_driver_gpio
 )
