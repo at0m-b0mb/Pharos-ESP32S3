@@ -23,6 +23,7 @@
 #include "pharos_aegis.h"
 #include "pharos_harvest.h"
 #include "pharos_sentinel.h"
+#include "pharos_squall.h"
 
 /* Provided by the Watch, Locate and Sentinel lens components. */
 extern void pharos_lens_watch_camp(uint8_t channel);
@@ -33,6 +34,7 @@ extern bool pharos_lens_sentinel_snapshot(ps_verdict_t *out);
 extern bool pharos_lens_harvest_snapshot(ph_verdict_t *out);
 extern bool pharos_lens_aegis_snapshot(pa_verdict_t *out);
 extern void pharos_lens_aegis_acknowledge(void);
+extern bool pharos_lens_squall_snapshot(pq_verdict_t *out);
 
 static bool glue_activate(const char *id) { return pharos_lens_activate(id); }
 static void glue_deactivate(void) { pharos_lens_deactivate(); }
@@ -93,6 +95,16 @@ static void glue_status(pc_out_t *o)
                       ph_band_name(v.band), v.score, v.ceiling,
                       (unsigned)v.forced_cycles, (unsigned)v.pmkid_orphans,
                       (unsigned)v.victims);
+            pc_printf(o, "  %s\n", v.headline ? v.headline : "");
+            return;
+        }
+    }
+    if (strcmp(a->id, "wifi.squall") == 0) {
+        pq_verdict_t v;
+        if (pharos_lens_squall_snapshot(&v)) {
+            pc_printf(o, "  squall: %s ch%u %u/%u  graded=%u denial=%u retry=%u%%\n",
+                      pq_state_name(v.worst), v.worst_channel, v.score, v.ceiling,
+                      v.n_graded, v.n_denial, v.retry_permil / 10);
             pc_printf(o, "  %s\n", v.headline ? v.headline : "");
             return;
         }

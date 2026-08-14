@@ -23,6 +23,7 @@ idf_component_register(
         "pharos_report.c"
         "pharos_sentinel.c"
         "pharos_sha256.c"
+        "pharos_squall.c"
         "pharos_twin.c"
         "pharos_watch.c"
     INCLUDE_DIRS "include"

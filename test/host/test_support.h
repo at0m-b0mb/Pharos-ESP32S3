@@ -68,4 +68,7 @@ void test_harvest(void);
 /* Suite defined in test_aegis.c */
 void test_aegis(void);
 
+/* Suite defined in test_squall.c */
+void test_squall(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */

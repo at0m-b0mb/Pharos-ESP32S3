@@ -30,6 +30,7 @@ SRCS := \
   test_sentinel.c \
   test_harvest.c \
   test_aegis.c \
+  test_squall.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \
@@ -49,6 +50,7 @@ SRCS := \
   $(ROOT)/components/pharos_engine/pharos_report.c \
   $(ROOT)/components/pharos_engine/pharos_sentinel.c \
   $(ROOT)/components/pharos_engine/pharos_sha256.c \
+  $(ROOT)/components/pharos_engine/pharos_squall.c \
   $(ROOT)/components/pharos_engine/pharos_twin.c \
   $(ROOT)/components/pharos_engine/pharos_watch.c \
   $(ROOT)/components/pharos_ui/pharos_dial.c \

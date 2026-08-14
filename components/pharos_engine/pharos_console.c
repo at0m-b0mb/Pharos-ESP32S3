@@ -189,6 +189,11 @@ static void cmd_harvest(const pc_ops_t *ops, int argc, char **argv, pc_out_t *ou
     run_scan(ops, "wifi.harvest", 0, NULL, out);
 }
 
+static void cmd_squall(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
+{
+    run_scan(ops, "wifi.squall", argc - 1, argv + 1, out);
+}
+
 /* Aegis: the accumulated picture. `aegis ack` clears the latch once the
  * operator has seen it - the device never forgets a finding on its own. */
 static void cmd_aegis(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
@@ -376,6 +381,7 @@ static const pc_cmd_t k_cmds[] = {
     { "probe",    "probe",                           "what devices leak in probe requests",    PC_CAT_SCAN,     0, 0, cmd_probe },
     { "sentinel", "sentinel [adopt]",                "what changed since your site baseline",  PC_CAT_SCAN,     0, 1, cmd_sentinel },
     { "harvest",  "harvest",                         "catch handshake/PMKID collection",       PC_CAT_SCAN,     0, 0, cmd_harvest },
+    { "squall",   "squall [camp <ch>|survey]",       "busy, broken, or jammed?",               PC_CAT_SCAN,     0, 2, cmd_squall },
     { "aegis",    "aegis [ack]",                     "the whole picture: every finding so far",PC_CAT_ANALYSE,  0, 1, cmd_aegis },
     { "locate",   "locate <bssid>",                  "walk to a transmitter (hotter/colder)",  PC_CAT_ANALYSE,  1, 1, cmd_locate },
     { "footprint","footprint [scenario]",            "how detectable is an attack? (OPSEC)",   PC_CAT_ANALYSE,  0, 1, cmd_footprint },

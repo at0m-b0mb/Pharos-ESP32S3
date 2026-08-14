@@ -43,6 +43,14 @@ static struct {
     uint32_t dwell_us[PHAROS_CHAN_MAX + 1];
     uint64_t window_us;
     pharos_radio_stats_t stats;
+
+    /* Per-channel-visit tallies, reset each time we retune. These become one
+     * PHAROS_EV_DWELL event when the visit ends - the only summary of what a
+     * channel sounded like as opposed to what any single frame said. */
+    uint32_t dwell_frames;
+    uint32_t dwell_retries;
+    uint32_t dwell_busy_us;
+    int8_t dwell_peak_rssi;
 } s;
 
 /* ---- channel plans (host-safe) -------------------------------------- */
@@ -74,6 +82,44 @@ pharos_scan_plan_t pharos_scan_plan_camp(uint8_t channel)
 }
 
 /* ---- dwell bookkeeping (host-safe) ---------------------------------- */
+
+/* Summarise the visit we are leaving and publish it, then clear the tallies.
+ * Emitted on the same bus as frames so a lens sees it in order, and pushed
+ * best-effort: if the ring is full the drop is already counted and feeds the
+ * confidence ceiling, exactly like a dropped frame. */
+static void emit_dwell(uint8_t channel, uint32_t us)
+{
+#if !defined(PHAROS_HOST)
+    if (!s.bus || channel == 0 || channel > PHAROS_CHAN_MAX || us == 0) {
+        return;
+    }
+    pharos_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.t_us = (uint64_t)esp_timer_get_time();
+    ev.type = PHAROS_EV_DWELL;
+    ev.u.dwell.channel = channel;
+    ev.u.dwell.band = 0; /* this radio is deaf above 2.4 GHz */
+    ev.u.dwell.dwell_ms = (uint16_t)(us / 1000u > 0xFFFFu ? 0xFFFFu : us / 1000u);
+    ev.u.dwell.frames = (uint16_t)(s.dwell_frames > 0xFFFFu ? 0xFFFFu : s.dwell_frames);
+    ev.u.dwell.peak_rssi = s.dwell_peak_rssi;
+    /* No true noise-floor register is exposed, so leave it at 0 - which the
+     * engines read as "unknown" and disclose - rather than inventing one. */
+    ev.u.dwell.noise_floor = 0;
+    {
+        const uint64_t busy = ((uint64_t)s.dwell_busy_us * 1000ull) / (uint64_t)us;
+        ev.u.dwell.busy_permil = (uint16_t)(busy > 1000ull ? 1000ull : busy);
+    }
+    ev.u.dwell.retries =
+        (uint16_t)(s.dwell_retries > 0xFFFFu ? 0xFFFFu : s.dwell_retries);
+    pharos_bus_push(s.bus, &ev);
+#else
+    (void)channel; (void)us;
+#endif
+    s.dwell_frames = 0;
+    s.dwell_retries = 0;
+    s.dwell_busy_us = 0;
+    s.dwell_peak_rssi = 0;
+}
 
 static void account_dwell(uint8_t channel, uint32_t us)
 {
@@ -177,6 +223,25 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     }
 
     s.stats.frames_seen++;
+
+    /* Per-visit tallies for the DWELL summary emitted when we leave this
+     * channel. Squall reasons about these rather than about any one frame:
+     * how much decoded, how much of it was retransmission, how strong the
+     * strongest thing here was. */
+    s.dwell_frames++;
+    if (ev.u.dot11.flags & PHAROS_DOT11_F_RETRY) {
+        s.dwell_retries++;
+    }
+    if (ev.u.dot11.rssi > s.dwell_peak_rssi || s.dwell_peak_rssi == 0) {
+        s.dwell_peak_rssi = ev.u.dot11.rssi;
+    }
+    /* Airtime estimate: a frame occupies the medium for roughly its length at
+     * the going rate. Without per-frame duration from the driver, count each
+     * decoded frame as a nominal slot - crude, but it is the same crudeness on
+     * every channel, and Squall compares channels rather than trusting the
+     * absolute number. */
+    s.dwell_busy_us += 400;
+
     if (!pharos_bus_push(s.bus, &ev)) {
         /* Bus full: the count is not lost, it feeds the confidence ceiling. */
     }
@@ -187,7 +252,9 @@ static void apply_channel(uint8_t channel)
 {
     const uint64_t now = (uint64_t)esp_timer_get_time();
     if (s.channel && s.channel_since_us) {
-        account_dwell(s.channel, (uint32_t)(now - s.channel_since_us));
+        const uint32_t visit_us = (uint32_t)(now - s.channel_since_us);
+        account_dwell(s.channel, visit_us);
+        emit_dwell(s.channel, visit_us);
     }
     s.channel = pharos_region_clamp_channel(channel);
     s.channel_since_us = now;

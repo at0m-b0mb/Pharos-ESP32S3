@@ -87,6 +87,7 @@ typedef struct {
     uint8_t channel;
     uint8_t band;         /* 0 = 2.4 GHz */
     uint16_t frames;      /* frames seen during the dwell      */
+    uint16_t retries;     /* of those, how many were retries   */
     uint16_t dwell_ms;    /* how long we actually sat there    */
     int8_t noise_floor;   /* dBm, quartile estimate            */
     int8_t peak_rssi;

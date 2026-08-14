@@ -1,5 +1,57 @@
 # Changelog
 
+## v1.6.0 — 2026-08-14
+
+### New lens: **Squall** — busy, broken, or being denied
+
+The question a defender actually asks in a crisis is not "am I under attack?"
+It is *"the Wi-Fi is down — is it broken, is it just busy, or is somebody
+jamming us?"* Those three have completely different responses — call the ISP,
+add capacity, or start a physical search — and to the user they look identical.
+
+The discriminator, and the reason this is worth an engine rather than a
+threshold on a noise meter:
+
+| energy | decodable frames | verdict |
+|---|---|---|
+| high | **high** | `CONGESTED` — a busy building. Loud, and entirely healthy. |
+| high | **low** | `DENIAL` — power that will not resolve into frames. |
+| low | low | `QUIET` — nothing here… or a deaf receiver, and it says so. |
+
+**A busy office is never called an attack.** That is the false positive every
+naive "high noise = jamming" detector ships with, and a tool that cries wolf at
+a crowded building gets switched off. It is the first test in the suite.
+
+"Barren" is anchored to something physical rather than picked: a single access
+point beacons roughly ten times a second, so hearing *fewer than ten frames a
+second* means the receiver cannot decode even one beaconing AP — which, on a
+channel the radio reports as busy, is exactly the condition worth naming.
+
+The honesty rules:
+
+- **DENIAL needs two evidence families.** Energy alone is a microwave oven, a
+  video sender, a neighbour's outdoor bridge. When only energy is present the
+  score is capped *and the word is downgraded too* — the number and the label
+  are never allowed to disagree.
+- **Nothing is graded from a single dwell.** A jammer is a sustained condition;
+  one bad 300 ms visit is a sample.
+- **A single loud channel is capped**, because real denial rarely covers just
+  one — that is far more likely to be one piece of equipment.
+- **The harshest ceiling curve in Pharos.** Every other engine reasons about
+  frames that *arrived* and can extrapolate; this one reasons about frames that
+  did not — and "no frames on channel 11" is indistinguishable from "we were
+  not listening to channel 11".
+
+This also fixed a real gap: `PHAROS_EV_DWELL` had been **defined but never
+produced** since v1.0. The radio now emits one summary per channel visit
+(frames, retries, airtime, peak RSSI), which is what Squall reasons about. The
+noise-floor field is left at zero and disclosed as unknown rather than invented,
+because the driver exposes no true noise register.
+
+`squall` on the console, `squall camp 6` to interrogate one channel.
+
+**5,076 host checks, 0 failures.**
+
 ## v1.5.0 — 2026-08-13
 
 **The panel actually paints now — and the device has a memory.**

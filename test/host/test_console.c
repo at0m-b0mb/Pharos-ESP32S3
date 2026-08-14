@@ -167,6 +167,7 @@ void test_console_dispatch(void)
         { "mirage", "wifi.mirage" }, { "probe", "wifi.probe" },
         { "sentinel", "wifi.sentinel" },
         { "harvest", "wifi.harvest" },
+        { "squall", "wifi.squall" },
         { "aegis", "sys.aegis" },
         { "footprint", "train.footprint" }, { "range", "train.range" },
     };

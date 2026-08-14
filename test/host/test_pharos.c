@@ -612,6 +612,7 @@ int main(void)
     test_sentinel();
     test_harvest();
     test_aegis();
+    test_squall();
 
     printf("\n%u checks, %u failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
