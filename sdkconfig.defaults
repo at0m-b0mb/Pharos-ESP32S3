@@ -66,7 +66,14 @@ CONFIG_LV_DEF_REFR_PERIOD=15
 CONFIG_LV_OS_FREERTOS=y
 CONFIG_LV_OBJ_STYLE_CACHE=y
 CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
-CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+# LVGL's LV_ATTRIBUTE_FAST_MEM places the software blend units in IRAM. Once
+# the Bluetooth controller was linked in for the Vigil lens, IRAM no longer
+# fit and the link failed on IDF 6.0 with
+#   .DebugExceptionVector.text: dangerous relocation: j: cannot encode
+# which is what Xtensa IRAM exhaustion looks like: the vector's jump can no
+# longer reach its target. The panel repaints at 5 Hz here, so trading blend
+# speed for headroom costs nothing observable.
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=n
 CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_18=y
@@ -99,3 +106,12 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=n
 
 # Room for command history and the REPL task.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# --- IRAM headroom ------------------------------------------------------
+# Both radios are linked in now (Wi-Fi promiscuous + NimBLE observer), and the
+# Wi-Fi IRAM optimisations exist to speed up a throughput path this firmware
+# does not have: Pharos receives management frames and reasons about them on
+# the other core. Giving that IRAM back is free here and is what keeps the
+# image linkable on IDF 6.0.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
