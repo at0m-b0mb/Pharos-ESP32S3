@@ -118,8 +118,15 @@ bool pharos_hud_create(void)
     lv_arc_set_bg_angles(s_arc, 0, 270);
     lv_arc_set_range(s_arc, 0, 100);
     lv_arc_set_value(s_arc, 0);
-    lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB); /* no drag handle */
+    /* An lv_arc is an INPUT widget by default - it tracks your finger like a
+     * slider. This one is a gauge reporting a confidence score, so being
+     * draggable is not a cosmetic problem: it lets a fingertip overwrite a
+     * measurement. Strip the knob and every way of grabbing it. */
+    lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_arc_set_change_rate(s_arc, 0);
     lv_obj_set_style_arc_width(s_arc, 16, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_arc, lv_color_hex(HUD_TRACK), LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_arc, 16, LV_PART_INDICATOR);

@@ -268,6 +268,10 @@ static void apply_channel(uint8_t channel)
     s.stats.channel_changes++;
 }
 
+/* The channel hopper. Exactly one may exist at a time - see rx_stop for why
+ * that is worth enforcing rather than assuming. */
+static volatile bool s_hop_alive;
+
 static void hop_task(void *arg)
 {
     (void)arg;
@@ -277,6 +281,9 @@ static void hop_task(void *arg)
         s.plan_idx = (uint8_t)((s.plan_idx + 1) % (p->n_channels ? p->n_channels : 1));
         vTaskDelay(pdMS_TO_TICKS(p->dwell_ms ? p->dwell_ms : 200));
     }
+    /* Publish the exit BEFORE deleting, so rx_stop knows the task is really
+     * gone and it is safe to tear the state down. */
+    s_hop_alive = false;
     vTaskDelete(NULL);
 }
 
@@ -295,6 +302,15 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
     if (plan->n_channels > 1 && !(caps & PHAROS_CAP_WIFI_CHAN)) {
         ESP_LOGE(TAG, "hopping plan refused: lens has not declared wifi.chan");
         return false;
+    }
+
+    /* Idempotent. Starting while already running used to spawn a SECOND hop
+     * task and leak the first: every lens change added one more, all of them
+     * driving the channel and all of them reading state that rx_start was
+     * about to memset. Three or four lens changes exhausted the heap and
+     * rebooted the board - which is exactly how it was reported. */
+    if (s.running || s_hop_alive) {
+        pharos_radio_rx_stop();
     }
 
     memset(&s, 0, sizeof(s));
@@ -319,7 +335,19 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
     esp_wifi_set_promiscuous_rx_cb(&promisc_cb);
     esp_wifi_set_promiscuous(true);
 
-    xTaskCreatePinnedToCore(hop_task, "pharos_hop", 3072, NULL, 5, NULL, 0);
+    /* Marked alive HERE, not inside the task: the task may not be scheduled
+     * before rx_start returns, and a stop in that window would tear the driver
+     * down just as the hopper woke up. */
+    s_hop_alive = true;
+    if (xTaskCreatePinnedToCore(hop_task, "pharos_hop", 3072, NULL, 5, NULL, 0) != pdPASS) {
+        s_hop_alive = false;
+        s.running = false;
+        ESP_LOGE(TAG, "could not create the hop task");
+        esp_wifi_set_promiscuous(false);
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        return false;
+    }
     ESP_LOGI(TAG, "rx started: %u channels, %u ms dwell, %s",
              plan->n_channels, plan->dwell_ms, s.camped ? "camped" : "hopping");
     return true;
@@ -327,11 +355,23 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
 
 void pharos_radio_rx_stop(void)
 {
-    if (!s.running) {
+    if (!s.running && !s_hop_alive) {
         return;
     }
+    /* Ask the hopper to finish, then WAIT for it. Tearing down the Wi-Fi
+     * driver while a task is still calling esp_wifi_set_channel() is a use
+     * after free with extra steps. The hopper checks s.running once per dwell,
+     * so the wait is bounded by the longest dwell we use plus slack. */
     s.running = false;
+    for (int i = 0; i < 200 && s_hop_alive; i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (s_hop_alive) {
+        ESP_LOGW(TAG, "hop task did not exit in 2s; tearing down anyway");
+    }
+
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(NULL);
     esp_wifi_stop();
     esp_wifi_deinit();
     s.bus = NULL;
