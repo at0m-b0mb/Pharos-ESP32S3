@@ -90,6 +90,12 @@ static void paint(const pharos_lens_t *active)
         return; /* display busy; try again next tick rather than block */
     }
 
+    /* Idempotent: builds the widgets on the first frame under a good lock, so
+     * the HUD exists even if the one-shot splash lock happened to time out.
+     * Without this, a single missed lock at boot would leave the panel blank
+     * for the whole session. */
+    pharos_hud_create();
+
     if (!active) {
         pharos_hud_update("PHAROS", "--", s_fence_ok ? "idle" : "FENCE UNVERIFIED",
                           s_fence_ok ? "no lens running" : "radio locked",
@@ -180,7 +186,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     /* Put the identity on the panel immediately, so the operator sees the
      * device is alive long before a lens has anything to say. */
     if (pharos_bsp_display_lock(200)) {
-        pharos_hud_splash("v1.4.0", s_fence_ok);
+        pharos_hud_splash("v1.5.0", s_fence_ok);
         pharos_bsp_display_unlock();
     }
 

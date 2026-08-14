@@ -23,6 +23,8 @@ typedef struct {
     char last_scenario[24];
     bool activate_ok;
     bool scenario_ok;
+    int  adopts;
+    unsigned adopt_ret;
 } mock_t;
 
 static mock_t g;
@@ -41,6 +43,7 @@ static void m_status(pc_out_t *o) { pc_println(o, "  band=BACKGROUND score=22/96
 static void m_fence(pc_out_t *o) { pc_println(o, "fence: clean (receive-only)"); }
 static void m_report(pc_out_t *o) { pc_print(o, "{\"tool\":\"pharos\"}"); }
 static bool m_scenario(const char *n) { snprintf(g.last_scenario, sizeof(g.last_scenario), "%s", n); return g.scenario_ok; }
+static unsigned m_adopt(void) { g.adopts++; return g.adopt_ret; }
 
 static pc_ops_t mock_ops(void)
 {
@@ -55,6 +58,7 @@ static pc_ops_t mock_ops(void)
     o.fence_status = m_fence;
     o.report = m_report;
     o.select_scenario = m_scenario;
+    o.adopt_baseline = m_adopt;
     return o;
 }
 
@@ -64,6 +68,7 @@ static void reset_mock(void)
     g.last_channel = -2;
     g.activate_ok = true;
     g.scenario_ok = true;
+    g.adopt_ret = 3;
 }
 
 /* ---- tokeniser ------------------------------------------------------- */
@@ -157,6 +162,7 @@ void test_console_dispatch(void)
         { "scan", "wifi.spectrum" }, { "census", "wifi.census" },
         { "twin", "wifi.twin" }, { "karma", "wifi.karma" },
         { "mirage", "wifi.mirage" }, { "probe", "wifi.probe" },
+        { "sentinel", "wifi.sentinel" },
         { "footprint", "train.footprint" }, { "range", "train.range" },
     };
     for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
@@ -170,6 +176,33 @@ void test_console_dispatch(void)
     reset_mock();
     pc_exec(&ops, "footprint deauth", &out);
     CHECK(strcmp(g.last_scenario, "deauth") == 0, "footprint scenario forwarded");
+
+    /* sentinel (no arg) brings the change-detector up but adopts nothing. */
+    reset_mock();
+    CHECK(pc_exec(&ops, "sentinel", &out), "sentinel runs");
+    CHECK(strcmp(g.last_lens, "wifi.sentinel") == 0, "sentinel activates its lens");
+    CHECK_EQ(g.adopts, 0);
+
+    /* sentinel adopt freezes the baseline and reports the count. */
+    reset_mock();
+    g.adopt_ret = 5;
+    CHECK(pc_exec(&ops, "sentinel adopt", &out), "sentinel adopt runs");
+    CHECK_EQ(g.adopts, 1);
+    CHECK_EQ(g.activations, 0); /* adopting does not re-activate a lens */
+    CHECK(strstr(out.buf, "5") != NULL, "reports how many were adopted: %s", out.buf);
+
+    /* adopt with nothing in view says so rather than claiming a baseline. */
+    reset_mock();
+    g.adopt_ret = 0;
+    pc_exec(&ops, "sentinel adopt", &out);
+    CHECK(strstr(out.buf, "nothing in view") != NULL, "empty adopt is honest: %s", out.buf);
+
+    /* adopt with the op unwired is reported, not crashed into. */
+    reset_mock();
+    pc_ops_t no_adopt = mock_ops();
+    no_adopt.adopt_baseline = NULL;
+    pc_exec(&no_adopt, "sentinel adopt", &out);
+    CHECK(strstr(out.buf, "not wired") != NULL, "null adopt op reported");
 
     /* report and fence route to their ops. */
     reset_mock();

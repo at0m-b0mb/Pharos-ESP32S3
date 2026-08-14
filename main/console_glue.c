@@ -20,11 +20,14 @@
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_region.h"
+#include "pharos_sentinel.h"
 
-/* Provided by the Watch and Locate lens components. */
+/* Provided by the Watch, Locate and Sentinel lens components. */
 extern void pharos_lens_watch_camp(uint8_t channel);
 extern void pharos_lens_watch_survey(void);
 extern void pharos_lens_locate_set_target(const uint8_t bssid[6], uint8_t channel);
+extern unsigned pharos_lens_sentinel_adopt(void);
+extern bool pharos_lens_sentinel_snapshot(ps_verdict_t *out);
 
 static bool glue_activate(const char *id) { return pharos_lens_activate(id); }
 static void glue_deactivate(void) { pharos_lens_deactivate(); }
@@ -48,12 +51,30 @@ static void glue_set_region(int region)
     pharos_region_set((pharos_region_t)region);
 }
 
+static unsigned glue_adopt_baseline(void)
+{
+    return pharos_lens_sentinel_adopt();
+}
+
 static void glue_status(pc_out_t *o)
 {
     const pharos_lens_t *a = pharos_lens_active();
     if (!a) {
         pc_println(o, "  idle - nothing active");
         return;
+    }
+    /* Sentinel earns a real status line: the diff against the baseline is the
+     * whole point of the lens, so `status` should show it rather than just the
+     * lens id. */
+    if (strcmp(a->id, "wifi.sentinel") == 0) {
+        ps_verdict_t v;
+        if (pharos_lens_sentinel_snapshot(&v)) {
+            pc_printf(o, "  sentinel: %s %u/%u  new=%u down=%u miss=%u moved=%u\n",
+                      ps_band_name(v.band), v.score, v.ceiling,
+                      v.n_new, v.n_downgrade, v.n_missing, v.n_moved);
+            pc_printf(o, "  %s\n", v.headline ? v.headline : "");
+            return;
+        }
     }
     char caps[64];
     pharos_caps_describe(a->caps, caps, sizeof(caps));
@@ -82,6 +103,7 @@ static pc_ops_t build_ops(void)
     o.set_region = glue_set_region;
     o.status_line = glue_status;
     o.fence_status = glue_fence;
+    o.adopt_baseline = glue_adopt_baseline;
     /* report / select_scenario intentionally NULL here - the console reports
      * them as "not wired on this build" rather than pretending. */
     return o;

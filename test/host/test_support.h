@@ -59,4 +59,7 @@ void test_console_tokenise(void);
 void test_console_dispatch(void);
 void test_console_help_and_safety(void);
 
+/* Suite defined in test_sentinel.c */
+void test_sentinel(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */

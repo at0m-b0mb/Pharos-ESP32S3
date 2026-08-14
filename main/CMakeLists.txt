@@ -6,6 +6,7 @@ idf_component_register(
         esp_event
         esp_netif
         pharos_core
+        pharos_engine
         pharos_bsp
         pharos_ui
         pharos_radio
@@ -21,6 +22,7 @@ idf_component_register(
         pharos_lens_locate
         pharos_lens_range
         pharos_lens_footprint
+        pharos_lens_sentinel
         pharos_lens_system
 )
 

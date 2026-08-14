@@ -79,6 +79,10 @@ typedef struct pc_ops {
     void (*report)(pc_out_t *o);
     /* Select a training scenario by name for the Range/Footprint. */
     bool (*select_scenario)(const char *name);
+    /* Adopt whatever the active lens has in view as the trusted site baseline
+     * (Sentinel). Returns how many networks were captured. Receive-only: this
+     * only remembers what has already been heard - it emits nothing. */
+    unsigned (*adopt_baseline)(void);
     void *ctx;
 } pc_ops_t;
 

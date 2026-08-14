@@ -19,6 +19,7 @@ idf_component_register(
         "pharos_probe.c"
         "pharos_range.c"
         "pharos_report.c"
+        "pharos_sentinel.c"
         "pharos_sha256.c"
         "pharos_twin.c"
         "pharos_watch.c"

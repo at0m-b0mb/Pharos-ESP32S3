@@ -183,6 +183,39 @@ static void cmd_probe(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
     run_scan(ops, "wifi.probe", 0, NULL, out);
 }
 
+/* Sentinel: bring up the change-detector, or - with `adopt` - freeze the
+ * current view as the trusted baseline. Adopting only remembers what has
+ * already been heard; like everything here it transmits nothing. */
+static void cmd_sentinel(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
+{
+    if (argc >= 2 && strcmp(argv[1], "adopt") == 0) {
+        if (!ops->adopt_baseline) {
+            need_ops(out, (const void *)ops->adopt_baseline, "adopt");
+            return;
+        }
+        const unsigned n = ops->adopt_baseline();
+        if (n == 0) {
+            pc_println(out, "nothing in view yet - let Sentinel survey, then adopt");
+        } else {
+            pc_printf(out, "baseline adopted: %u network%s now trusted\n",
+                      n, n == 1 ? "" : "s");
+        }
+        return;
+    }
+    if (argc >= 2) {
+        pc_printf(out, "usage: %s\n", pc_find("sentinel")->usage);
+        return;
+    }
+    if (!ops->activate_lens || !ops->activate_lens("wifi.sentinel")) {
+        pc_println(out, "could not start Sentinel");
+        return;
+    }
+    pc_println(out, "sentinel: watching for change. 'sentinel adopt' when clean, 'status' to diff");
+    if (ops->status_line) {
+        ops->status_line(out);
+    }
+}
+
 static void cmd_locate(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
 {
     uint8_t bssid[6];
@@ -308,6 +341,7 @@ static const pc_cmd_t k_cmds[] = {
     { "karma",    "karma",                           "KARMA/MANA responder detector",          PC_CAT_SCAN,     0, 0, cmd_karma },
     { "mirage",   "mirage",                          "beacon / SSID-spam flood detector",      PC_CAT_SCAN,     0, 0, cmd_mirage },
     { "probe",    "probe",                           "what devices leak in probe requests",    PC_CAT_SCAN,     0, 0, cmd_probe },
+    { "sentinel", "sentinel [adopt]",                "what changed since your site baseline",  PC_CAT_SCAN,     0, 1, cmd_sentinel },
     { "locate",   "locate <bssid>",                  "walk to a transmitter (hotter/colder)",  PC_CAT_ANALYSE,  1, 1, cmd_locate },
     { "footprint","footprint [scenario]",            "how detectable is an attack? (OPSEC)",   PC_CAT_ANALYSE,  0, 1, cmd_footprint },
     { "range",    "range [scenario]",                "training: replay an attack scenario",    PC_CAT_ANALYSE,  0, 1, cmd_range },
