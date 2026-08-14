@@ -23,6 +23,14 @@
 extern "C" {
 #endif
 
+#include "pharos_aegis.h"
+
+/* The Aegis latch. The UI loop feeds it from whichever lens is active (see
+ * pharos_lens_t::stage_report), so it accumulates findings across lens
+ * changes and remembers them long after the air has gone quiet. */
+bool pharos_ui_aegis_snapshot(pa_verdict_t *out);
+void pharos_ui_aegis_ack(void);
+
 /* Never returns. fence_ok gates the radio lenses: when the transmit fence did
  * not verify clean, the UI still runs but refuses to launch anything holding a
  * radio capability, and says why. */

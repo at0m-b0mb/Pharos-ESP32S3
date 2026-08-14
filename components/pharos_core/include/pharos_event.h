@@ -48,6 +48,7 @@ typedef enum {
 #define PHAROS_DOT11_F_FROM_DS    (1u << 3)
 #define PHAROS_DOT11_F_BROADCAST  (1u << 4) /* addr1 is ff:ff:ff:ff:ff:ff */
 #define PHAROS_DOT11_F_MFP_SEEN   (1u << 5) /* frame carried an MMIE      */
+#define PHAROS_DOT11_F_PMKID      (1u << 6) /* EAPOL M1 carried a PMKID KDE */
 
 typedef struct {
     uint8_t a1[6]; /* receiver / destination */
@@ -61,6 +62,14 @@ typedef struct {
     uint8_t subtype; /* PHAROS_ST_*  */
     uint8_t flags;   /* PHAROS_DOT11_F_* */
     uint8_t rate_idx;
+    /* EAPOL-Key message number 1..4, or 0 when the frame is not one.
+     *
+     * Only the pairwise 4-way handshake is identified, and only messages 1
+     * and 2 are reliably visible: they are exchanged BEFORE the PTK is
+     * installed, so they travel unprotected and a passive receiver can read
+     * them. That is precisely the pair an attacker needs for offline
+     * cracking, which is why noticing them is worth the byte. */
+    uint8_t eapol;
 } pharos_ev_dot11_t;
 
 #define PHAROS_BLE_ADV_MAX 31

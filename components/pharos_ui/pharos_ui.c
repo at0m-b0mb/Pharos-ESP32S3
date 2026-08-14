@@ -23,6 +23,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "freertos/semphr.h"
+
+#include "pharos_aegis.h"
 #include "pharos_bus.h"
 #include "pharos_dial.h"
 #include "pharos_hud.h"
@@ -33,6 +36,61 @@ static const char *TAG = "ui";
 
 static bool s_fence_ok;
 static volatile bool s_analytics_run;
+
+/* ---- the Aegis latch ------------------------------------------------
+ *
+ * Lives here because the UI loop is the one thing that runs continuously and
+ * always knows which lens is active. Every second it asks the active lens for
+ * its finding and folds it in, so the picture survives lens changes - and the
+ * operator not looking. */
+static pa_state_t s_aegis;
+static SemaphoreHandle_t s_aegis_lock;
+static uint32_t s_aegis_accum_ms;
+
+static void aegis_pump(const pharos_lens_t *active, uint32_t dt_ms)
+{
+    s_aegis_accum_ms += dt_ms;
+    if (s_aegis_accum_ms < 1000u) {
+        return;
+    }
+    s_aegis_accum_ms = 0;
+    if (!active || !active->stage_report || !s_aegis_lock) {
+        return;
+    }
+    uint8_t stage = 0, score = 0, ceiling = 0;
+    if (!active->stage_report(&stage, &score, &ceiling)) {
+        return;
+    }
+    if (xSemaphoreTake(s_aegis_lock, 0) != pdTRUE) {
+        return;
+    }
+    pa_observe(&s_aegis, (pa_stage_t)stage, score, ceiling,
+               (uint64_t)esp_timer_get_time());
+    xSemaphoreGive(s_aegis_lock);
+}
+
+bool pharos_ui_aegis_snapshot(pa_verdict_t *out)
+{
+    if (!out || !s_aegis_lock) {
+        return false;
+    }
+    if (xSemaphoreTake(s_aegis_lock, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return false;
+    }
+    pa_evaluate(&s_aegis, (uint64_t)esp_timer_get_time(), out);
+    xSemaphoreGive(s_aegis_lock);
+    return true;
+}
+
+void pharos_ui_aegis_ack(void)
+{
+    if (!s_aegis_lock || xSemaphoreTake(s_aegis_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return;
+    }
+    pa_acknowledge(&s_aegis);
+    xSemaphoreGive(s_aegis_lock);
+    ESP_LOGI(TAG, "aegis: latch acknowledged; watch restarts clean");
+}
 
 unsigned pharos_ui_pump(void)
 {
@@ -165,6 +223,11 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     (void)bsp;
     s_fence_ok = fence_ok;
 
+    pa_reset(&s_aegis);
+    if (!s_aegis_lock) {
+        s_aegis_lock = xSemaphoreCreateMutex();
+    }
+
     const pharos_lens_t *order[PHAROS_MAX_LENSES];
     pd_dial_t dial;
     unsigned count = 0;
@@ -202,6 +265,9 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         if (active && active->on_tick && lens_launchable(active)) {
             active->on_tick(dt_ms);
         }
+
+        /* Fold whatever the active lens is seeing into the correlator. */
+        aegis_pump(active, dt_ms);
 
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here
          * is push fresh text/values in under its lock; a short timeout means a

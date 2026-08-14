@@ -20,6 +20,8 @@
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_region.h"
+#include "pharos_aegis.h"
+#include "pharos_harvest.h"
 #include "pharos_sentinel.h"
 
 /* Provided by the Watch, Locate and Sentinel lens components. */
@@ -28,6 +30,9 @@ extern void pharos_lens_watch_survey(void);
 extern void pharos_lens_locate_set_target(const uint8_t bssid[6], uint8_t channel);
 extern unsigned pharos_lens_sentinel_adopt(void);
 extern bool pharos_lens_sentinel_snapshot(ps_verdict_t *out);
+extern bool pharos_lens_harvest_snapshot(ph_verdict_t *out);
+extern bool pharos_lens_aegis_snapshot(pa_verdict_t *out);
+extern void pharos_lens_aegis_acknowledge(void);
 
 static bool glue_activate(const char *id) { return pharos_lens_activate(id); }
 static void glue_deactivate(void) { pharos_lens_deactivate(); }
@@ -56,6 +61,11 @@ static unsigned glue_adopt_baseline(void)
     return pharos_lens_sentinel_adopt();
 }
 
+static void glue_acknowledge(void)
+{
+    pharos_lens_aegis_acknowledge();
+}
+
 static void glue_status(pc_out_t *o)
 {
     const pharos_lens_t *a = pharos_lens_active();
@@ -72,6 +82,33 @@ static void glue_status(pc_out_t *o)
             pc_printf(o, "  sentinel: %s %u/%u  new=%u down=%u miss=%u moved=%u\n",
                       ps_band_name(v.band), v.score, v.ceiling,
                       v.n_new, v.n_downgrade, v.n_missing, v.n_moved);
+            pc_printf(o, "  %s\n", v.headline ? v.headline : "");
+            return;
+        }
+    }
+    if (strcmp(a->id, "wifi.harvest") == 0) {
+        ph_verdict_t v;
+        if (pharos_lens_harvest_snapshot(&v)) {
+            pc_printf(o, "  harvest: %s %u/%u  forced=%u pmkid=%u victims=%u\n",
+                      ph_band_name(v.band), v.score, v.ceiling,
+                      (unsigned)v.forced_cycles, (unsigned)v.pmkid_orphans,
+                      (unsigned)v.victims);
+            pc_printf(o, "  %s\n", v.headline ? v.headline : "");
+            return;
+        }
+    }
+    if (strcmp(a->id, "sys.aegis") == 0) {
+        pa_verdict_t v;
+        if (pharos_lens_aegis_snapshot(&v)) {
+            pc_printf(o, "  aegis: %s %u/%u  raised=%u live=%u\n",
+                      pa_band_name(v.band), v.score, v.ceiling,
+                      v.n_raised, v.n_live);
+            if (v.worst_peak) {
+                pc_printf(o, "  worst: %s %u, %us ago%s\n",
+                          pa_stage_name(v.worst), v.worst_peak,
+                          (unsigned)v.worst_age_s,
+                          (v.notes & PA_NOTE_LATCHED) ? " (latched)" : "");
+            }
             pc_printf(o, "  %s\n", v.headline ? v.headline : "");
             return;
         }
@@ -104,6 +141,7 @@ static pc_ops_t build_ops(void)
     o.status_line = glue_status;
     o.fence_status = glue_fence;
     o.adopt_baseline = glue_adopt_baseline;
+    o.acknowledge = glue_acknowledge;
     /* report / select_scenario intentionally NULL here - the console reports
      * them as "not wired on this build" rather than pretending. */
     return o;

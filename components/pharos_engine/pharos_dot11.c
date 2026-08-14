@@ -10,6 +10,15 @@ static uint16_t rd16(const uint8_t *p)
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
+/* 802.11 fields are little-endian, but everything riding ON them - the SNAP
+ * ethertype, and every field of EAPOL - is network byte order. Mixing the two
+ * up silently reads the wrong bits and still "parses", so they are two
+ * clearly-named readers rather than one. */
+static uint16_t rd16be(const uint8_t *p)
+{
+    return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
+}
+
 bool pharos_dot11_parse_header(const uint8_t *buf, size_t len, pharos_ev_dot11_t *out)
 {
     if (!buf || !out || len < DOT11_HDR_MIN) {
@@ -142,6 +151,127 @@ bool pharos_dot11_rsn(const uint8_t *body, size_t len, pharos_rsn_t *out)
         /* The standard forbids required-without-capable, but a beacon is
          * whatever somebody chose to transmit. Normalise rather than trust. */
         out->mfp_capable = true;
+    }
+    return true;
+}
+
+/* ---- WPA 4-way handshake ------------------------------------------------
+ *
+ * See the header for why messages 1 and 2 are visible to a passive listener
+ * and why that matters. The walk below is deliberately paranoid about length:
+ * this runs against frames chosen by whoever is transmitting.
+ */
+bool pharos_dot11_eapol(const uint8_t *buf, size_t len, pharos_eapol_t *out)
+{
+    if (!buf || !out) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    if (len < 24u) {
+        return false;
+    }
+
+    const uint8_t fc0 = buf[0];
+    const uint8_t fc1 = buf[1];
+    const uint8_t type = (uint8_t)((fc0 >> 2) & 0x3u);
+    const uint8_t subtype = (uint8_t)((fc0 >> 4) & 0xFu);
+    if (type != PHAROS_FT_DATA) {
+        return false;
+    }
+    /* A protected frame is CCMP/TKIP ciphertext from here on. Parsing it would
+     * be reading noise and calling it evidence. */
+    if (fc1 & 0x40u) {
+        return false;
+    }
+
+    /* Header length: 24, plus 6 for the 4-address (WDS) form, plus 2 for the
+     * QoS control field that the QoS data subtypes carry. */
+    size_t off = 24u;
+    const bool to_ds = (fc1 & 0x01u) != 0;
+    const bool from_ds = (fc1 & 0x02u) != 0;
+    if (to_ds && from_ds) {
+        off += 6u;
+    }
+    if (subtype & 0x08u) {
+        off += 2u;
+    }
+
+    /* LLC/SNAP: AA AA 03 00 00 00, then the ethertype. 0x888E is EAPOL. */
+    if (off + 8u > len) {
+        return false;
+    }
+    if (!(buf[off] == 0xAAu && buf[off + 1] == 0xAAu && buf[off + 2] == 0x03u &&
+          buf[off + 3] == 0x00u && buf[off + 4] == 0x00u && buf[off + 5] == 0x00u)) {
+        return false;
+    }
+    if (rd16be(buf + off + 6) != 0x888Eu) {
+        return false;
+    }
+    off += 8u;
+
+    /* EAPOL header: version, packet type, body length. Type 3 = EAPOL-Key. */
+    if (off + 4u > len) {
+        return false;
+    }
+    if (buf[off + 1] != 0x03u) {
+        return false;
+    }
+    off += 4u;
+
+    /* EAPOL-Key: descriptor type, then the 2-byte key information field. */
+    if (off + 3u > len) {
+        return false;
+    }
+    const uint8_t desc = buf[off];
+    if (desc != 2u && desc != 254u) { /* RSN, or the legacy WPA descriptor */
+        return false;
+    }
+    const uint16_t info = rd16be(buf + off + 1);
+
+    const bool pairwise = (info & 0x0008u) != 0; /* key type: 1 = pairwise */
+    const bool install  = (info & 0x0040u) != 0;
+    const bool ack      = (info & 0x0080u) != 0;
+    const bool mic      = (info & 0x0100u) != 0;
+    const bool secure   = (info & 0x0200u) != 0;
+    out->is_pairwise = pairwise;
+    if (!pairwise) {
+        /* A group-key rekey. Routine housekeeping, not a handshake capture. */
+        return true;
+    }
+
+    /* The four messages are told apart by ACK/MIC/Secure/Install, which is the
+     * standard's own way of distinguishing them. */
+    if (ack && !mic) {
+        out->msg = 1;
+    } else if (!ack && mic && !secure) {
+        out->msg = 2;
+    } else if (ack && mic && install) {
+        out->msg = 3;
+    } else if (!ack && mic && secure) {
+        out->msg = 4;
+    }
+
+    /* Key data follows the fixed part: descriptor(1) + info(2) + key_len(2) +
+     * replay(8) + nonce(32) + iv(16) + rsc(8) + reserved(8) + mic(16), then a
+     * 2-byte key-data length. A PMKID rides in message 1 as a KDE:
+     *   DD <len> 00 0F AC 04 <16 bytes>
+     * Its presence is the clientless attack's signature. */
+    if (out->msg == 1) {
+        const size_t kd_len_off = off + 1u + 2u + 2u + 8u + 32u + 16u + 8u + 8u + 16u;
+        if (kd_len_off + 2u <= len) {
+            const uint16_t kd_len = rd16be(buf + kd_len_off);
+            const size_t kd = kd_len_off + 2u;
+            if (kd_len >= 22u && kd + kd_len <= len) {
+                for (size_t i = 0; i + 6u <= (size_t)kd_len; i++) {
+                    const uint8_t *p = buf + kd + i;
+                    if (p[0] == 0xDDu && p[2] == 0x00u && p[3] == 0x0Fu &&
+                        p[4] == 0xACu && p[5] == 0x04u) {
+                        out->has_pmkid = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
     return true;
 }

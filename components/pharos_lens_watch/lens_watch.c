@@ -163,6 +163,18 @@ bool pharos_lens_watch_report(char *buf, size_t cap, prt_redact_t redact, uint32
 
 static struct pharos_bus *watch_ingest(void) { return &s_bus; }
 
+
+/* Aegis: this lens speaks for the DISRUPT stage. See pharos_lens_t::stage_report
+ * - the UI loop asks about once a second, so the finding survives the operator
+ * moving on to another lens. */
+static bool k_watch_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
+{
+    *stage = 2; /* PA_STAGE_DISRUPT */
+    *score = s_verdict.score;
+    *ceiling = s_verdict.ceiling;
+    return true;
+}
+
 static const pharos_lens_t k_watch = {
     .id = "wifi.watch",
     .name = "Watch",
@@ -177,6 +189,7 @@ static const pharos_lens_t k_watch = {
     .on_tick = watch_tick,
     .on_event = watch_event,
     .ingest = watch_ingest,
+    .stage_report = k_watch_stage,
 };
 
 PHAROS_LENS_REGISTER(&k_watch);

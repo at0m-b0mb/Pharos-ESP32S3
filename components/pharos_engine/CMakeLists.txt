@@ -7,11 +7,13 @@
 # after the host tests went green.
 idf_component_register(
     SRCS
+        "pharos_aegis.c"
         "pharos_census.c"
         "pharos_chain.c"
         "pharos_console.c"
         "pharos_dot11.c"
         "pharos_flood.c"
+        "pharos_harvest.c"
         "pharos_karma.c"
         "pharos_locate.c"
         "pharos_opsec.c"

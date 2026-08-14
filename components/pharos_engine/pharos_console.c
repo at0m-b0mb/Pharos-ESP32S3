@@ -183,6 +183,39 @@ static void cmd_probe(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
     run_scan(ops, "wifi.probe", 0, NULL, out);
 }
 
+static void cmd_harvest(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
+{
+    (void)argc; (void)argv;
+    run_scan(ops, "wifi.harvest", 0, NULL, out);
+}
+
+/* Aegis: the accumulated picture. `aegis ack` clears the latch once the
+ * operator has seen it - the device never forgets a finding on its own. */
+static void cmd_aegis(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
+{
+    if (argc >= 2 && strcmp(argv[1], "ack") == 0) {
+        if (!ops->acknowledge) {
+            need_ops(out, (const void *)ops->acknowledge, "ack");
+            return;
+        }
+        ops->acknowledge();
+        pc_println(out, "aegis: latch cleared - a fresh watch starts now");
+        return;
+    }
+    if (argc >= 2) {
+        pc_printf(out, "usage: %s\n", pc_find("aegis")->usage);
+        return;
+    }
+    if (!ops->activate_lens || !ops->activate_lens("sys.aegis")) {
+        pc_println(out, "could not start Aegis");
+        return;
+    }
+    pc_println(out, "aegis: every finding so far, and what it adds up to");
+    if (ops->status_line) {
+        ops->status_line(out);
+    }
+}
+
 /* Sentinel: bring up the change-detector, or - with `adopt` - freeze the
  * current view as the trusted baseline. Adopting only remembers what has
  * already been heard; like everything here it transmits nothing. */
@@ -342,6 +375,8 @@ static const pc_cmd_t k_cmds[] = {
     { "mirage",   "mirage",                          "beacon / SSID-spam flood detector",      PC_CAT_SCAN,     0, 0, cmd_mirage },
     { "probe",    "probe",                           "what devices leak in probe requests",    PC_CAT_SCAN,     0, 0, cmd_probe },
     { "sentinel", "sentinel [adopt]",                "what changed since your site baseline",  PC_CAT_SCAN,     0, 1, cmd_sentinel },
+    { "harvest",  "harvest",                         "catch handshake/PMKID collection",       PC_CAT_SCAN,     0, 0, cmd_harvest },
+    { "aegis",    "aegis [ack]",                     "the whole picture: every finding so far",PC_CAT_ANALYSE,  0, 1, cmd_aegis },
     { "locate",   "locate <bssid>",                  "walk to a transmitter (hotter/colder)",  PC_CAT_ANALYSE,  1, 1, cmd_locate },
     { "footprint","footprint [scenario]",            "how detectable is an attack? (OPSEC)",   PC_CAT_ANALYSE,  0, 1, cmd_footprint },
     { "range",    "range [scenario]",                "training: replay an attack scenario",    PC_CAT_ANALYSE,  0, 1, cmd_range },

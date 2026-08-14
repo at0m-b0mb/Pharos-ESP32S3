@@ -138,6 +138,18 @@ bool pharos_lens_mirage_report(char *buf, size_t cap, prt_redact_t redact, uint3
 
 static struct pharos_bus *mirage_ingest(void) { return &s_bus; }
 
+
+/* Aegis: this lens speaks for the DISRUPT stage. See pharos_lens_t::stage_report
+ * - the UI loop asks about once a second, so the finding survives the operator
+ * moving on to another lens. */
+static bool k_mirage_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
+{
+    *stage = 2; /* PA_STAGE_DISRUPT */
+    *score = s_verdict.score;
+    *ceiling = s_verdict.ceiling;
+    return true;
+}
+
 static const pharos_lens_t k_mirage = {
     .id = "wifi.mirage",
     .name = "Mirage",
@@ -152,6 +164,7 @@ static const pharos_lens_t k_mirage = {
     .on_tick = mirage_tick,
     .on_event = mirage_event,
     .ingest = mirage_ingest,
+    .stage_report = k_mirage_stage,
 };
 
 PHAROS_LENS_REGISTER(&k_mirage);

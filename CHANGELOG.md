@@ -1,5 +1,126 @@
 # Changelog
 
+## v1.5.0 — 2026-08-13
+
+**The panel actually paints now — and the device has a memory.**
+
+### Fixed: the screen was still black — the real cause
+
+v1.4.0 powered the panel (backlight at 100 %, LVGL task running) but **never
+drew a single pixel**, and this is why. Waveshare's v3.0.0 BSP drives LVGL
+through Espressif's `esp_lvgl_adapter`, whose lock is an `esp_err_t`:
+
+```c
+esp_err_t bsp_display_lock(uint32_t timeout_ms);   // ESP_OK (== 0) means ACQUIRED
+```
+
+Pharos' wrapper returned that value straight as a `bool`. `ESP_OK` is `0`, so a
+**successful** lock read as `false` — and every drawing site is guarded by
+`if (!lock) return;`. The boot splash that *creates* the HUD, and all 5 Hz
+repaints, saw a good lock as a failure and bailed out. The panel was up, the
+app was running (`ui: active: wifi.spectrum` in the logs), and nothing was ever
+painted. The fix is one line — compare against `ESP_OK` — plus a belt-and-braces
+`pharos_hud_create()` on the first painted frame so a single missed lock at boot
+can no longer leave the screen blank for the session.
+
+*This was found by reading the vendor BSP source, exactly as reported from the
+board: everything ran, the screen stayed dark.*
+
+### New lens: **Aegis** — the one screen that tells the story
+
+Every other lens answers one question and then forgets. Two things are true of
+real defensive work and false of every single-purpose detector: an attack is a
+*sequence*, not a reading; and **you are not looking** — a handheld shows one
+lens at a time and the capture you care about lasts seconds.
+
+So Aegis **latches**. Each stage (RECON → IMPERSONATE → DISRUPT → HARVEST →
+DRIFT) keeps its own high-water mark with the time it happened, fed by whichever
+lens is active through a new `stage_report` entry in the lens vtable. Walk back
+to the device ten minutes later and it still tells you what fired, how high, and
+how long ago.
+
+The honesty rules are the design:
+
+- **Correlation may not invent evidence.** With one stage raised there is
+  nothing to correlate, so Aegis reports that stage's own score *unchanged* —
+  a single finding, however loud, can never become an "incident" by fusion.
+- **The ceiling is the minimum** across contributing stages. A conclusion drawn
+  from a thin sweep and a good one is only as good as the thin one. A stage's
+  peak also keeps the ceiling it was *measured* with, so a later high-quality
+  sweep cannot retroactively lend confidence to an old, thin observation.
+- **The sequence bonus requires actual ordering in time.** Four alarms in a
+  jumble is a noisy room; the same four in the attacker's own order is a
+  campaign, and only the latter earns it.
+- **A latched peak is always reported with its age**, and the headline says so
+  rather than implying the present tense.
+
+`aegis` on the console; `aegis ack` clears the latch once you have read it —
+the device never forgets a finding on its own.
+
+### New lens: **Harvest** — somebody is collecting your handshakes
+
+The attack that ends in a cracked Wi-Fi password, and the quiet one: nothing
+goes down, nobody complains, and the capture lasts seconds. Two routes, told
+apart because the response differs:
+
+- **Forced** — deauthenticate a client and record messages 1 and 2 of the 4-way
+  handshake as it reconnects. Those two travel *before* the pairwise key exists,
+  so a passive listener can read them. The tell is the ordering and the
+  tightness, repeated.
+- **PMKID (clientless)** — solicit a PMKID from the access point itself. No
+  victim, no outage, and **no second message**, because the attacker never
+  intended to finish connecting. An unanswered solicitation is deliberate;
+  ordinary clients complete their handshakes.
+
+This required real EAPOL visibility, so `pharos_dot11_eapol()` is new: a
+paranoid, fully host-tested parser (every truncation length is fuzzed) that
+identifies the pairwise message number and the PMKID KDE. It refuses protected
+frames — those are ciphertext, and parsing them would be reading noise and
+calling it evidence. Pharos stores no nonces, no MICs and no key data, and has
+no transmitter with which to complete or replay anything.
+
+Honesty, again, is the point: one disconnect followed by one handshake is a
+*rebooting access point* and is explicitly not an evidence family; where 802.11w
+is in force forged disconnects are rejected, so that evidence is discounted
+hard; and one family alone can never reach HARVEST LIKELY.
+
+### New lens: **Sentinel** — what changed since your site baseline
+
+The other lenses answer *"is anything wrong right now."* Sentinel answers the
+question that actually starts incidents: *"what changed since I last swept this
+building?"* Adopt a baseline while you believe the estate is clean, then every
+later sweep is diffed against it — **NEW / MISSING / MOVED / RENAMED / UPGRADE /
+DOWNGRADE**. The severity model is deliberately asymmetric and host-tested:
+
+- a **downgrade** (an AP that dropped from WPA3+MFP to open, or lost 802.11w) is
+  scored highest — it is either a misconfiguration or an impersonation, and both
+  need a human;
+- a **new** AP is ordinary churn and scores low, unless it is *also* open or
+  wearing an SSID the estate already owns — the shape of an impersonator;
+- **missing** scores lowest of all and is discounted further on a thin sweep,
+  because a receiver that hears one channel at a time is far more likely to have
+  *missed* an AP than to have watched it leave.
+
+Reachable on the dial and over the console: `sentinel` to watch, `sentinel
+adopt` to freeze the baseline when the site is clean, `status` to read the diff.
+Pure-C engine with **86 new host checks**.
+
+### Also
+
+- Console gains `sentinel`, `harvest` and `aegis` commands plus `adopt_baseline`
+  and `acknowledge` ops. The receive-only table-walk invariant still holds: no
+  command can emit a frame, because the ops vtable cannot express one.
+- **4,999 host checks, 0 failures** (up from 4,727) across 16 engines.
+- `tools/check_sources.sh` and `check_lenses.sh` cover every new engine and
+  lens, so none can silently fall out of either build.
+
+Two real defects were caught by the new tests while writing them, and both are
+worth recording: the EAPOL parser initially read the ethertype, `key_info` and
+`key_data_len` with the little-endian reader (802.11 is little-endian, but
+everything riding on it is network byte order), and the Harvest engine used a
+timestamp of `0` as its "no disconnect seen" sentinel — silently dropping any
+disconnect in the first microsecond of a sweep.
+
 ## v1.4.0 — 2026-08-13
 
 **The screen works.** This release is driven by real hardware logs from a board,

@@ -313,6 +313,17 @@ static const pharos_lens_t k_census = {
     .ingest = census_ingest,
 };
 
+/* Aegis: Twin speaks for the IMPERSONATE stage. Census itself reports nothing -
+ * grading how strong the neighbours' Wi-Fi is says nothing about whether an
+ * attack is under way, and feeding it in would be noise. */
+static bool k_twin_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
+{
+    *stage = 1; /* PA_STAGE_IMPERSONATE */
+    *score = s_twin_worst.score;
+    *ceiling = s_twin_worst.ceiling;
+    return true;
+}
+
 static const pharos_lens_t k_twin = {
     .id = "wifi.twin",
     .name = "Twin",
@@ -327,6 +338,7 @@ static const pharos_lens_t k_twin = {
     .on_tick = twin_tick,
     .on_event = census_event,
     .ingest = census_ingest,
+    .stage_report = k_twin_stage,
 };
 
 PHAROS_LENS_REGISTER(&k_census);

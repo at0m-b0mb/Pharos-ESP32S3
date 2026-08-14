@@ -54,6 +54,36 @@ bool pharos_dot11_rsn(const uint8_t *body, size_t len, pharos_rsn_t *out);
 const uint8_t *pharos_dot11_find_ie(const uint8_t *body, size_t len, uint8_t id,
                                     uint8_t *out_len);
 
+/* WPA 4-way handshake visibility.
+ *
+ * The handshake is what an attacker actually wants: capture it and the
+ * passphrase can be attacked offline, at leisure, with no further contact
+ * with the network. Two things make it observable to a purely passive
+ * receiver, and both are worth stating plainly:
+ *
+ *   - Messages 1 and 2 are exchanged BEFORE the pairwise key is installed,
+ *     so they are not protected at the 802.11 layer. A listener reads them.
+ *     Messages 3 and 4 usually are protected, and Pharos does not pretend to
+ *     see inside them.
+ *   - Message 1 may carry a PMKID. That is the clientless attack: an attacker
+ *     associates to the AP itself and the AP hands over a PMKID with no
+ *     client involved at all - no deauthentication, no waiting, no victim.
+ *
+ * Pharos detects that this is happening. It does not store nonces, MICs or
+ * key data, and it could not complete a handshake if it wanted to: it has no
+ * transmitter. This is the defender learning that their handshakes are being
+ * collected. */
+typedef struct {
+    uint8_t msg;      /* 1..4, or 0 when this is not a pairwise EAPOL-Key */
+    bool has_pmkid;   /* message 1 carried a PMKID KDE (clientless route) */
+    bool is_pairwise; /* group-key rekeys are ordinary housekeeping       */
+} pharos_eapol_t;
+
+/* buf/len are the whole frame, starting at the MAC header. Returns false when
+ * the frame is not an unprotected EAPOL-Key, which includes every ordinary
+ * data frame - so this is safe (and cheap) to call on anything. */
+bool pharos_dot11_eapol(const uint8_t *buf, size_t len, pharos_eapol_t *out);
+
 #define PHAROS_IE_SSID 0
 #define PHAROS_IE_DS_PARAM 3
 #define PHAROS_IE_RSN 48

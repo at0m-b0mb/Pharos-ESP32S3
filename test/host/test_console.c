@@ -25,6 +25,7 @@ typedef struct {
     bool scenario_ok;
     int  adopts;
     unsigned adopt_ret;
+    int  acks;
 } mock_t;
 
 static mock_t g;
@@ -44,6 +45,7 @@ static void m_fence(pc_out_t *o) { pc_println(o, "fence: clean (receive-only)");
 static void m_report(pc_out_t *o) { pc_print(o, "{\"tool\":\"pharos\"}"); }
 static bool m_scenario(const char *n) { snprintf(g.last_scenario, sizeof(g.last_scenario), "%s", n); return g.scenario_ok; }
 static unsigned m_adopt(void) { g.adopts++; return g.adopt_ret; }
+static void m_ack(void) { g.acks++; }
 
 static pc_ops_t mock_ops(void)
 {
@@ -59,6 +61,7 @@ static pc_ops_t mock_ops(void)
     o.report = m_report;
     o.select_scenario = m_scenario;
     o.adopt_baseline = m_adopt;
+    o.acknowledge = m_ack;
     return o;
 }
 
@@ -163,6 +166,8 @@ void test_console_dispatch(void)
         { "twin", "wifi.twin" }, { "karma", "wifi.karma" },
         { "mirage", "wifi.mirage" }, { "probe", "wifi.probe" },
         { "sentinel", "wifi.sentinel" },
+        { "harvest", "wifi.harvest" },
+        { "aegis", "sys.aegis" },
         { "footprint", "train.footprint" }, { "range", "train.range" },
     };
     for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
@@ -196,6 +201,19 @@ void test_console_dispatch(void)
     g.adopt_ret = 0;
     pc_exec(&ops, "sentinel adopt", &out);
     CHECK(strstr(out.buf, "nothing in view") != NULL, "empty adopt is honest: %s", out.buf);
+
+    /* aegis ack clears the latch, and does not re-activate a lens. */
+    reset_mock();
+    CHECK(pc_exec(&ops, "aegis ack", &out), "aegis ack runs");
+    CHECK_EQ(g.acks, 1);
+    CHECK_EQ(g.activations, 0);
+    CHECK(strstr(out.buf, "cleared") != NULL, "ack confirmed: %s", out.buf);
+
+    reset_mock();
+    pc_ops_t no_ack = mock_ops();
+    no_ack.acknowledge = NULL;
+    pc_exec(&no_ack, "aegis ack", &out);
+    CHECK(strstr(out.buf, "not wired") != NULL, "null ack op reported");
 
     /* adopt with the op unwired is reported, not crashed into. */
     reset_mock();

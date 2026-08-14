@@ -5,6 +5,6 @@ idf_component_register(
         "pharos_round.c"
         "pharos_ui.c"
     INCLUDE_DIRS "include"
-    REQUIRES pharos_core pharos_bsp pharos_radio
+    REQUIRES pharos_core pharos_bsp pharos_radio pharos_engine
     PRIV_REQUIRES esp_timer
 )

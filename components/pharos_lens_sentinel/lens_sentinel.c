@@ -230,6 +230,16 @@ bool pharos_lens_sentinel_report(char *buf, size_t cap, prt_redact_t redact, uin
 
 static struct pharos_bus *sentinel_ingest(void) { return &s_bus; }
 
+/* Aegis: Sentinel speaks for the DRIFT stage - the estate not being configured
+ * the way the baseline recorded it. */
+static bool k_sentinel_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
+{
+    *stage = 4; /* PA_STAGE_DRIFT */
+    *score = s_verdict.score;
+    *ceiling = s_verdict.ceiling;
+    return true;
+}
+
 static const pharos_lens_t k_sentinel = {
     .id = "wifi.sentinel",
     .name = "Sentinel",
@@ -244,6 +254,7 @@ static const pharos_lens_t k_sentinel = {
     .on_tick = sentinel_tick,
     .on_event = sentinel_event,
     .ingest = sentinel_ingest,
+    .stage_report = k_sentinel_stage,
 };
 
 PHAROS_LENS_REGISTER(&k_sentinel);

@@ -23,6 +23,8 @@ idf_component_register(
         pharos_lens_range
         pharos_lens_footprint
         pharos_lens_sentinel
+        pharos_lens_aegis
+        pharos_lens_harvest
         pharos_lens_system
 )
 

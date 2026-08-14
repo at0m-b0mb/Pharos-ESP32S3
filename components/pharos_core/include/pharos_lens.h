@@ -60,6 +60,20 @@ typedef struct pharos_lens {
      * training and system lenses). Kept as an accessor rather than a pointer
      * so a lens can allocate its bus lazily in on_mount. */
     struct pharos_bus *(*ingest)(void);
+
+    /* Optional: report this lens' current finding to the Aegis correlator.
+     *
+     * Only one lens runs at a time, so no lens can see another's verdict. This
+     * is how the picture is assembled anyway: while a lens is active the UI
+     * loop asks it, roughly once a second, "what are you seeing, and how sure
+     * are you?" and forwards the answer to the latch. Findings therefore
+     * accumulate as the operator moves between lenses, and survive long after
+     * the lens that saw them has been swapped out.
+     *
+     * `stage` is a pa_stage_t value, carried as a plain integer so that this
+     * header - which every component includes - does not have to depend on the
+     * engine's. Return false when there is nothing worth reporting. */
+    bool (*stage_report)(uint8_t *stage, uint8_t *score, uint8_t *ceiling);
 } pharos_lens_t;
 
 /* Upper bound on registered lenses. Defined here (not just in the .c) because

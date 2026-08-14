@@ -62,4 +62,10 @@ void test_console_help_and_safety(void);
 /* Suite defined in test_sentinel.c */
 void test_sentinel(void);
 
+/* Suite defined in test_harvest.c */
+void test_harvest(void);
+
+/* Suite defined in test_aegis.c */
+void test_aegis(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */

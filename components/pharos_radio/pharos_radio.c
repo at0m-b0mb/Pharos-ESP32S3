@@ -161,6 +161,21 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
      * the element chain against the capture ring. Here we only note that a
      * management frame arrived. */
 
+    /* One fixed-offset check on data frames: is this an unprotected EAPOL-Key?
+     * It is a handful of byte compares - affordable in the hot path - and it
+     * is what lets the Harvest lens see that somebody is collecting 4-way
+     * handshakes. No nonce, MIC or key material is copied; only which message
+     * it was, and whether message 1 carried a PMKID. */
+    if (ev.u.dot11.type == PHAROS_FT_DATA) {
+        pharos_eapol_t eap;
+        if (pharos_dot11_eapol(payload, (size_t)len, &eap)) {
+            ev.u.dot11.eapol = eap.msg;
+            if (eap.has_pmkid) {
+                ev.u.dot11.flags |= PHAROS_DOT11_F_PMKID;
+            }
+        }
+    }
+
     s.stats.frames_seen++;
     if (!pharos_bus_push(s.bus, &ev)) {
         /* Bus full: the count is not lost, it feeds the confidence ceiling. */

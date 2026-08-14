@@ -153,6 +153,18 @@ bool pharos_lens_karma_report(char *buf, size_t cap, prt_redact_t redact, uint32
 
 static struct pharos_bus *karma_ingest(void) { return &s_bus; }
 
+
+/* Aegis: this lens speaks for the IMPERSONATE stage. See pharos_lens_t::stage_report
+ * - the UI loop asks about once a second, so the finding survives the operator
+ * moving on to another lens. */
+static bool k_karma_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
+{
+    *stage = 1; /* PA_STAGE_IMPERSONATE */
+    *score = s_verdict.score;
+    *ceiling = s_verdict.ceiling;
+    return true;
+}
+
 static const pharos_lens_t k_karma = {
     .id = "wifi.karma",
     .name = "Karma",
@@ -167,6 +179,7 @@ static const pharos_lens_t k_karma = {
     .on_tick = karma_tick,
     .on_event = karma_event,
     .ingest = karma_ingest,
+    .stage_report = k_karma_stage,
 };
 
 PHAROS_LENS_REGISTER(&k_karma);

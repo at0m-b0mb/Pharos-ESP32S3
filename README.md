@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://at0m-b0mb.github.io/Pharos-ESP32S3/"><img alt="flash from browser" src="https://img.shields.io/badge/⚡_flash-from_your_browser-1FB6C9"></a>
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
-  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4727_passing-1FB6C9">
+  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4999_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
   <img alt="idf" src="https://img.shields.io/badge/ESP--IDF-5.5%20%7C%206.0-444">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -40,7 +40,7 @@ Most hobby RF tools answer "is there an attack?" with a confident yes/no. Pharos
 
 So every verdict Pharos produces carries a **confidence ceiling** derived from how much of the channel it actually heard. A deauth flood reads `FLOOD LIKELY` when you camp on its channel and only `SUSPICIOUS` when you keep hopping — the same traffic, a different honesty. There is no band named "safe". Absence of evidence on a receiver that hears 7% of the air is not evidence of absence, and the firmware never pretends otherwise.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,727 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,999 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
 
 ## What it looks like
 
@@ -85,6 +85,9 @@ A **lens** is one tool. The dial is built from whatever lenses are compiled in; 
 | **Karma** | 🔵 detect | Catches the rogue AP that answers to *any* name a passing phone asks for — while scoring a legitimate multi-SSID deployment at zero. |
 | **Mirage** | 🔵 detect | Detects the beacon/SSID-spam flood that fills every phone's network list — the exact attack the ESP32 world is famous for — while scoring a dense city as *busy, not hostile*. |
 | **Locate** | 🔵 hunt | Once a source is flagged, walk toward it: a smoothed RSSI *hotter / colder / here* game. Finds a transmitter without becoming one. |
+| **Aegis** | 🔵 command | **The one screen that tells the story.** Every other lens forgets; Aegis remembers. It latches each finding with the time it happened, so a burst that fired while you were looking at another lens is still there ten minutes later — and it scores a *sequence* (recon → twin → disruption → collection) far above the same alarms in a jumble, because that ordering is an operation rather than a noisy afternoon. |
+| **Harvest** | 🔵 detect | Catches somebody collecting your handshakes to crack offline — the attack where nothing breaks and nobody complains. Separates the **forced** cycle (knock a client off, catch it reconnecting) from the **clientless PMKID** solicitation, and knows a rebooting router looks identical to one forced cycle. |
+| **Sentinel** | 🔵 audit | Answers the question that starts incidents: *what changed since I last swept this site?* Adopt a baseline while the estate is clean, then it diffs every later sweep — new radios, a network that quietly dropped its 802.11w, an AP gone missing — and scores a **downgrade** far above ordinary churn. |
 | **Probe** | 🟣 recon | Shows a room what its phones broadcast about their owners, and defeats MAC randomisation to prove the point. Awareness-session gold. |
 | **Range** | 🔴🔵 train | Plays synthesised attacks through the **real** detection engines so you can learn to read the gauge. Holds no radio at all. |
 | **Footprint** | 🔴 train | The red team's mirror: grades how *detectable* an attack is, names the family that gives it away, and tells you whether a hopping defender would even notice. Receive-only OPSEC. |
@@ -143,7 +146,7 @@ the honest version of the guarantee, and it is the one Pharos makes.
 **The engines and UI geometry build and test with no board at all** — do this first, it is fast and catches the most:
 
 ```bash
-make -C test/host                # 4364 checks, 0 failures
+make -C test/host                # 4999 checks, 0 failures
 ```
 
 > [!TIP]
@@ -152,7 +155,7 @@ make -C test/host                # 4364 checks, 0 failures
 **Prebuilt firmware** is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases) — a single flashable image built and audited in CI:
 
 ```bash
-esptool.py --chip esp32s3 write_flash 0x0 pharos-v1.2.0-esp32s3.bin
+esptool.py --chip esp32s3 write_flash 0x0 pharos-v1.5.0-esp32s3.bin
 ```
 
 **Build it yourself**, with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or newer:
@@ -183,7 +186,7 @@ flowchart LR
 
   subgraph C1["core 1 · analytics — pure C, host-tested"]
     direction TB
-    ENG["detection engines<br/>watch · census · twin · karma<br/>mirage · probe · locate · opsec<br/>flood · range · power · region"]
+    ENG["detection engines<br/>watch · census · twin · karma · mirage<br/>probe · locate · sentinel · harvest<br/>aegis · opsec · flood · range · power"]
     EVID["evidence<br/>report · redact-at-write<br/>sha256 + tamper-evident chain"]
     ENG --> EVID
   end
@@ -219,21 +222,21 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-**v1.4.0 — the panel is driven, and the engines are proven.**
+**v1.5.0 — the panel actually paints, and the device now has a memory.**
 
 | Layer | State | Detail |
 |---|---|---|
-| **Detection & evidence engines** | ✅ complete, **4,727 host checks, 0 failures** | 13 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
+| **Detection & evidence engines** | ✅ complete, **4,999 host checks, 0 failures** | 16 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
 | **Round-screen geometry & Virtual HUD** | ✅ complete & tested | layout maths host-tested; every screen rendered from the real code and bounds-checked in CI |
 | **Transmit fence** | ✅ enforced & audited | 4 mechanisms, verified against the linked ELF on every build |
 | **Firmware build** | ✅ green on ESP-IDF v5.5 + v6.0 | a **flashable binary is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases)** |
-| **Board bring-up (display + touch)** | ✅ driven via the Waveshare BSP | verified building against the real component on IDF 5.5 + 6.0; IMU/PMU telemetry still M1 |
-| **On-device LVGL rendering** | ✅ HUD live | boot splash + gauge/lens/band/detail, repainted at 5 Hz; touch-driven dial navigation is what remains of M2 |
+| **Board bring-up (display + touch)** | ✅ driven via the Waveshare BSP | CO5300 AMOLED + CST9217 touch via `bsp_display_start()`; IMU/PMU telemetry still M1 |
+| **On-device LVGL rendering** | ✅ HUD live — **display fix in v1.5.0** | v1.4.0 powered the panel but never drew to it: the BSP's LVGL lock returns `esp_err_t` (`ESP_OK == 0`) and was read as a bool, so every paint saw a successful lock as failure and bailed. Fixed; the boot splash + gauge now render. |
 
 > [!NOTE]
-> **No hardware validation yet.** The engines and UI are proven in software; nothing has been confirmed against a physical board. Treat every hardware claim as unverified until M1 closes. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Hardware bring-up in progress.** The engines and UI geometry are proven in software; the panel-paint path is now fixed against a real board. IMU/PMU telemetry and touch-driven dial navigation remain. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**11 lenses** · **14 engines** · a receive-only serial console · MIT.
+**14 lenses** · **16 engines** · a receive-only serial console · MIT.
 
 ## License
 

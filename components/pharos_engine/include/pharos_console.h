@@ -83,6 +83,9 @@ typedef struct pc_ops {
      * (Sentinel). Returns how many networks were captured. Receive-only: this
      * only remembers what has already been heard - it emits nothing. */
     unsigned (*adopt_baseline)(void);
+    /* Clear the Aegis latch. The operator has read the accumulated findings
+     * and is starting a fresh watch; the device never clears them itself. */
+    void (*acknowledge)(void);
     void *ctx;
 } pc_ops_t;
 

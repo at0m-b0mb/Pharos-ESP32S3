@@ -610,6 +610,8 @@ int main(void)
     test_console_dispatch();
     test_console_help_and_safety();
     test_sentinel();
+    test_harvest();
+    test_aegis();
 
     printf("\n%u checks, %u failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
