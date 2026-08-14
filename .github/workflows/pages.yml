@@ -7,23 +7,27 @@ name: pages
 # manifest points at.
 
 on:
-  # Three ways in, so a new release always reaches the flasher without anyone
-  # touching anything:
-  #   1. the release being published (the wait loop below handles the fact that
-  #      the firmware is still compiling at that moment), and
-  #   2. the release build finishing - belt and braces, in case (1) is ever
-  #      cancelled or times out, and
-  #   3. by hand, for a re-deploy.
-  release:
-    types: [ published ]
+  # Deliberately NOT `release: published`.
+  #
+  # The github-pages environment has a deployment branch policy allowing only
+  # `main`. A release-triggered run executes in the TAG's context (ref
+  # refs/tags/vX.Y.Z), so the environment rejects it before a single step runs -
+  # an instant, stepless red X on every single release. That, not the asset
+  # race, is why the v1.4.0 and v1.5.0 deploys failed.
+  #
+  # `workflow_run` is the right door: it runs in the DEFAULT BRANCH's context,
+  # which the policy allows, and it fires only once the release build has
+  # actually finished - so the firmware asset already exists. Keeping the
+  # environment locked to `main` is the correct posture; this fits it rather
+  # than loosening it.
   workflow_run:
     workflows: [ "release" ]
     types: [ completed ]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (e.g. v1.3.0)"
-        required: true
+        description: "Release tag to publish (e.g. v1.5.0). Blank = newest."
+        required: false
 
 permissions:
   contents: read
@@ -46,11 +50,10 @@ jobs:
       - name: Resolve tag
         id: vars
         run: |
-          # workflow_run carries the tag in head_branch; release carries it in
-          # tag_name; a manual run passes it in. Fall back to the newest
-          # release so a dispatch with no input still does the right thing.
+          # workflow_run carries the tag in head_branch; a manual run passes it
+          # in. Fall back to the newest release so a dispatch with no input
+          # still does the right thing.
           TAG="${{ github.event.inputs.tag }}"
-          [ -n "$TAG" ] || TAG="${{ github.event.release.tag_name }}"
           [ -n "$TAG" ] || TAG="${{ github.event.workflow_run.head_branch }}"
           case "$TAG" in
             v*) ;;
@@ -77,13 +80,15 @@ jobs:
 
           # Wait for the firmware asset to exist.
           #
-          # This job and the release build both fire on the same
-          # "release published" event, so on a fresh release the .bin is not
-          # attached yet - the firmware takes several minutes to compile. The
-          # first attempt at v1.4.0 failed exactly this way and left the flasher
-          # serving the PREVIOUS release's binary, which is the worst possible
-          # outcome: a page that looks fine and installs the wrong firmware.
-          # So: poll, with a ceiling, and fail loudly rather than publish stale.
+          # Triggering on workflow_run means the release build has already
+          # finished, so this normally passes on the first look. It stays as
+          # insurance for the manual-dispatch path, where a human may well fire
+          # this off while the firmware is still compiling.
+          #
+          # The failure being guarded against is specific and nasty: publishing
+          # the flasher with the PREVIOUS release's binary still in place - a
+          # page that looks perfectly fine and installs the wrong firmware. So:
+          # poll, with a ceiling, and fail loudly rather than publish stale.
           deadline=$(( SECONDS + 900 ))   # 15 minutes
           until gh release view "$TAG" --repo "${{ github.repository }}" \
                   --json assets --jq '.assets[].name' 2>/dev/null \
