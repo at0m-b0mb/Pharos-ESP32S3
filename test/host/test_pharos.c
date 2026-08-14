@@ -24,6 +24,55 @@ unsigned g_checks, g_fails;
 
 void banner(const char *s) { printf("\n== %s\n", s); }
 
+/* ---------------------------------------------------- element offsets */
+
+/* Beacons and probe RESPONSES carry 12 bytes of fixed parameters before the
+ * element chain; probe REQUESTS carry none. Starting the walk at the wrong
+ * offset silently skips a probe request's FIRST element - which is the SSID,
+ * the only one that matters for Probe and Karma. This is the test that keeps
+ * the two apart. */
+static void test_ie_offsets(void)
+{
+    banner("802.11 element offsets: beacon vs probe request");
+
+    /* A probe request body: SSID element immediately, no fixed params. */
+    const uint8_t preq[] = {
+        0x00, 0x04, 'H', 'o', 'm', 'e',      /* SSID "Home"      */
+        0x01, 0x02, 0x82, 0x84,              /* supported rates  */
+    };
+    uint8_t len = 0;
+    const uint8_t *ssid = pharos_dot11_find_ie_from(preq, sizeof(preq), 0,
+                                                    PHAROS_IE_SSID, &len);
+    CHECK(ssid != NULL, "probe request SSID found at offset 0");
+    CHECK_EQ(len, 4);
+    CHECK(ssid && memcmp(ssid, "Home", 4) == 0, "probe request SSID reads back");
+
+    /* The same body walked as if it had fixed parameters: the SSID must NOT be
+     * found where it is not, rather than a wrong element being returned. */
+    const uint8_t *wrong = pharos_dot11_find_ie_from(preq, sizeof(preq), 12,
+                                                     PHAROS_IE_SSID, &len);
+    CHECK(wrong == NULL, "walking a probe request at offset 12 finds nothing");
+
+    /* A beacon body: 12 fixed bytes, then the elements. */
+    uint8_t beacon[32];
+    memset(beacon, 0, sizeof(beacon));
+    beacon[12] = 0x00; beacon[13] = 0x05;
+    memcpy(&beacon[14], "Acme1", 5);
+    ssid = pharos_dot11_find_ie(beacon, sizeof(beacon), PHAROS_IE_SSID, &len);
+    CHECK(ssid != NULL, "beacon SSID found past the fixed parameters");
+    CHECK_EQ(len, 5);
+    CHECK(ssid && memcmp(ssid, "Acme1", 5) == 0, "beacon SSID reads back");
+
+    /* Truncation and hostile lengths stop the walk rather than over-reading. */
+    const uint8_t liar[] = { 0x00, 0x40, 'x' }; /* claims 64 bytes, has 1 */
+    CHECK(pharos_dot11_find_ie_from(liar, sizeof(liar), 0, PHAROS_IE_SSID, &len) == NULL,
+          "an element longer than the frame stops the walk");
+    CHECK(pharos_dot11_find_ie_from(NULL, 10, 0, PHAROS_IE_SSID, &len) == NULL,
+          "NULL body is refused");
+    CHECK(pharos_dot11_find_ie_from(preq, 2, 12, PHAROS_IE_SSID, &len) == NULL,
+          "a body shorter than the start offset is refused");
+}
+
 /* ------------------------------------------------------------------ bus */
 
 static void test_bus(void)
@@ -613,6 +662,7 @@ int main(void)
     test_harvest();
     test_aegis();
     test_squall();
+    test_ie_offsets();
     test_vigil();
 
     printf("\n%u checks, %u failures\n", g_checks, g_fails);

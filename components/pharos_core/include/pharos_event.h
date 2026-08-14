@@ -50,6 +50,23 @@ typedef enum {
 #define PHAROS_DOT11_F_MFP_SEEN   (1u << 5) /* frame carried an MMIE      */
 #define PHAROS_DOT11_F_PMKID      (1u << 6) /* EAPOL M1 carried a PMKID KDE */
 
+/* RSN posture, distilled from the beacon's RSN element into one byte.
+ *
+ * Carried on the event because the alternative - a second "capture ring" the
+ * analytics core walks for element chains - was designed but never built, and
+ * in the meantime EVERY name-dependent lens was inert: Census graded nothing
+ * because it never saw an RSN element, and Twin grouped nothing because every
+ * SSID it was handed was empty. */
+#define PHAROS_RSN_F_PRESENT      (1u << 0)
+#define PHAROS_RSN_F_MFP_CAPABLE  (1u << 1)
+#define PHAROS_RSN_F_MFP_REQUIRED (1u << 2)
+#define PHAROS_RSN_F_SAE          (1u << 3)
+#define PHAROS_RSN_F_PSK          (1u << 4)
+#define PHAROS_RSN_F_OWE          (1u << 5)
+#define PHAROS_RSN_F_WPS          (1u << 6)
+
+#define PHAROS_EV_SSID_MAX 32
+
 typedef struct {
     uint8_t a1[6]; /* receiver / destination */
     uint8_t a2[6]; /* transmitter            */
@@ -70,6 +87,14 @@ typedef struct {
      * them. That is precisely the pair an attacker needs for offline
      * cracking, which is why noticing them is worth the byte. */
     uint8_t eapol;
+
+    /* The network name and security posture, parsed in the hot path for the
+     * three subtypes that carry them (beacon, probe response, probe request).
+     * Bounded and copied - never a pointer into the driver's buffer, which is
+     * recycled the moment the callback returns. */
+    uint8_t ssid_len;
+    uint8_t rsn_flags; /* PHAROS_RSN_F_*; 0 for frames that carry no RSN */
+    char ssid[PHAROS_EV_SSID_MAX];
 } pharos_ev_dot11_t;
 
 #define PHAROS_BLE_ADV_MAX 31

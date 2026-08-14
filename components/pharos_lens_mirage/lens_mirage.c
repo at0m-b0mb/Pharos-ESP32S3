@@ -67,12 +67,12 @@ static void mirage_event(const pharos_event_t *ev)
     if (xSemaphoreTake(s_lock, 0) != pdTRUE) {
         return;
     }
-    /* The SSID comes from the beacon body via the capture ring (M5). Until
-     * that path lands the engine sees the BSSID and timing but not the name,
-     * so pf_observe is fed the transmitter address as a stand-in key and the
-     * name-based families stay conservative - the same honest degradation as
-     * Census and Karma, never a fabricated verdict. */
-    pf_observe(&s_engine, f->a2, (const char *)f->a2, 6, ev->t_us);
+    /* Mirage counts DISTINCT NAMES per unit time - that is the whole detector.
+     * Until v1.13.0 it was fed the transmitter address as a stand-in key, which
+     * meant a flood of 300 fake names off one radio counted as one "name" and
+     * the lens could never fire. A beacon with no SSID element is passed as a
+     * genuine empty name rather than skipped: hidden networks are real. */
+    pf_observe(&s_engine, f->a2, f->ssid_len ? f->ssid : NULL, f->ssid_len, ev->t_us);
     xSemaphoreGive(s_lock);
 }
 

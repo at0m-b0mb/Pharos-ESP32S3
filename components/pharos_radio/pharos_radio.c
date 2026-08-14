@@ -209,6 +209,56 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     if (pharos_dot11_reason(payload, (size_t)len, &ev.u.dot11, &reason)) {
         ev.u.dot11.reason_or_status = reason;
     }
+
+    /* Name and security posture, for the three subtypes that carry them.
+     *
+     * This is the frame body, so it belongs in a hot path only because the
+     * alternative was worse: without it EVERY name-dependent lens was inert -
+     * Census graded nothing (pc_grade declines without an RSN element) and Twin
+     * grouped nothing (every SSID it was handed was empty). Both walks are
+     * bounds-checked and stop at the first malformed element, and only three
+     * subtypes pay for them. */
+    if (ev.u.dot11.type == PHAROS_FT_MGMT && (size_t)len > 24u) {
+        const uint8_t *body = payload + 24;
+        const size_t blen = (size_t)len - 24u;
+        const uint8_t st = ev.u.dot11.subtype;
+        const bool has_fixed = (st == PHAROS_ST_BEACON || st == PHAROS_ST_PROBE_RESP);
+
+        if (has_fixed || st == PHAROS_ST_PROBE_REQ) {
+            /* Probe REQUESTS carry no fixed parameters; starting the walk 12
+             * bytes in would skip their first element, which is the SSID - the
+             * only one that matters. */
+            uint8_t ie_len = 0;
+            const uint8_t *ssid = pharos_dot11_find_ie_from(
+                body, blen, has_fixed ? 12u : 0u, PHAROS_IE_SSID, &ie_len);
+            if (ssid && ie_len) {
+                const uint8_t n = ie_len > PHAROS_EV_SSID_MAX ? PHAROS_EV_SSID_MAX : ie_len;
+                memcpy(ev.u.dot11.ssid, ssid, n);
+                ev.u.dot11.ssid_len = n;
+            }
+        }
+        if (has_fixed) {
+            pharos_rsn_t rsn;
+            memset(&rsn, 0, sizeof(rsn));
+            if (pharos_dot11_rsn(body, blen, &rsn) && rsn.has_rsn) {
+                uint8_t f = PHAROS_RSN_F_PRESENT;
+                if (rsn.mfp_capable)  f |= PHAROS_RSN_F_MFP_CAPABLE;
+                if (rsn.mfp_required) f |= PHAROS_RSN_F_MFP_REQUIRED;
+                if (rsn.has_sae)      f |= PHAROS_RSN_F_SAE;
+                if (rsn.has_psk)      f |= PHAROS_RSN_F_PSK;
+                if (rsn.has_owe)      f |= PHAROS_RSN_F_OWE;
+                ev.u.dot11.rsn_flags = f;
+            }
+            /* WPS advertises itself in a vendor element; its presence is a
+             * posture fact Census grades, so note it while we are here. */
+            uint8_t wps_len = 0;
+            const uint8_t *wps = pharos_dot11_find_ie_from(body, blen, 12u, 221, &wps_len);
+            if (wps && wps_len >= 4 && wps[0] == 0x00 && wps[1] == 0x50 &&
+                wps[2] == 0xF2 && wps[3] == 0x04) {
+                ev.u.dot11.rsn_flags |= PHAROS_RSN_F_WPS;
+            }
+        }
+    }
     /* The RSN/MFP flag comes from the beacon body; the analytics core walks
      * the element chain against the capture ring. Here we only note that a
      * management frame arrived. */

@@ -118,13 +118,35 @@ static void census_event(const pharos_event_t *ev)
     ap->rssi = f->rssi;
     ap->channel = f->channel;
     ap->privacy = (f->flags & PHAROS_DOT11_F_PROTECTED) != 0;
+
+    /* Name and posture, now that the hot path carries them. Before v1.13.0
+     * this record was left empty and the grading engines - which correctly
+     * refuse to grade what they cannot see - returned nothing at all. */
+    if (f->ssid_len) {
+        const uint8_t n = f->ssid_len > PC_SSID_MAX ? PC_SSID_MAX : f->ssid_len;
+        memcpy(ap->ssid, f->ssid, n);
+        ap->ssid[n] = '\0';
+        ap->ssid_len = n;
+        ap->hidden = false;
+    } else if (ap->ssid_len == 0) {
+        ap->hidden = true; /* beaconing without a name */
+    }
+    if (f->rsn_flags & PHAROS_RSN_F_PRESENT) {
+        ap->rsn.has_rsn = true;
+        ap->rsn.mfp_capable  = (f->rsn_flags & PHAROS_RSN_F_MFP_CAPABLE) != 0;
+        ap->rsn.mfp_required = (f->rsn_flags & PHAROS_RSN_F_MFP_REQUIRED) != 0;
+        ap->rsn.has_sae = (f->rsn_flags & PHAROS_RSN_F_SAE) != 0;
+        ap->rsn.has_psk = (f->rsn_flags & PHAROS_RSN_F_PSK) != 0;
+        ap->rsn.has_owe = (f->rsn_flags & PHAROS_RSN_F_OWE) != 0;
+        /* An RSN element means a modern cipher suite in practice; TKIP-only
+         * networks are vanishingly rare and would need the full pairwise list
+         * to prove, so this is left as CCMP rather than guessed at. */
+        ap->ccmp_pairwise = true;
+    }
+    ap->wps_present = (f->rsn_flags & PHAROS_RSN_F_WPS) != 0;
     if (f->flags & PHAROS_DOT11_F_MFP_SEEN) {
         ap->rsn.mfp_capable = true;
     }
-    /* The full element walk needs the frame body, which the capture ring
-     * holds rather than the summary bus. M5 wires that path; until then the
-     * record carries what the fixed header can tell us, and pc_grade
-     * declines to grade anything it cannot see the RSN element for. */
 }
 
 static void census_tick(uint32_t dt_ms)

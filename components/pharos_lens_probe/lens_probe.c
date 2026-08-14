@@ -68,11 +68,21 @@ static void probe_event(const pharos_event_t *ev)
     p.seq = f->seq;
     p.rssi = f->rssi;
     p.t_us = ev->t_us;
-    /* The SSID and the IE-order fingerprint come from the frame body, held in
-     * the capture ring; the summary carries a coarse fingerprint from the
-     * rate/flags for now. The full IE fingerprint lands in M5. */
+    /* The named networks a phone asks for ARE the privacy leak this lens
+     * exists to show; without them every probe looked like a wildcard and the
+     * exposure grade was always the floor.
+     *
+     * The fingerprint stays coarse - a full IE-order hash needs the element
+     * chain, and this one is built from what the summary carries. It is enough
+     * to separate devices that differ, not enough to claim two probes came from
+     * the same handset, so the engine treats it as corroboration only. */
     p.fingerprint = ((uint32_t)f->flags << 8) ^ f->rate_idx ^ 0xA53Cu;
-    /* p.ssid_len stays 0 (wildcard) until the body walk fills it in. */
+    if (f->ssid_len) {
+        const uint8_t n = f->ssid_len > PP_SSID_MAX ? PP_SSID_MAX : f->ssid_len;
+        memcpy(p.ssid, f->ssid, n);
+        p.ssid[n] = '\0';
+        p.ssid_len = n;
+    }
 
     if (xSemaphoreTake(s_lock, 0) == pdTRUE) {
         pp_observe(&s_engine, &p);

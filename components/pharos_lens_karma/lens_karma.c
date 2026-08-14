@@ -72,18 +72,20 @@ static void karma_event(const pharos_event_t *ev)
     if (xSemaphoreTake(s_lock, 0) != pdTRUE) {
         return;
     }
-    /* The SSID comes from the frame body via the capture ring (M5); until that
-     * path lands, the engine sees the frames but not the names, and pk_evaluate
-     * reports NORMAL with no probes rather than inventing a verdict. */
+    /* Karma is ENTIRELY a question about names: does this radio answer to a
+     * name it never advertises? Feeding it NULL, as this did until v1.13.0,
+     * left it structurally unable to detect anything - it reported NORMAL
+     * forever, honestly but uselessly. */
+    const char *ssid = f->ssid_len ? f->ssid : NULL;
     switch (f->subtype) {
     case PHAROS_ST_PROBE_REQ:
-        pk_observe_probe(&s_engine, NULL, 0, ev->t_us);
+        pk_observe_probe(&s_engine, ssid, f->ssid_len, ev->t_us);
         break;
     case PHAROS_ST_PROBE_RESP:
-        pk_observe_response(&s_engine, f->a2, NULL, 0, f->rssi, f->channel, ev->t_us);
+        pk_observe_response(&s_engine, f->a2, ssid, f->ssid_len, f->rssi, f->channel, ev->t_us);
         break;
     case PHAROS_ST_BEACON:
-        pk_observe_beacon(&s_engine, f->a2, NULL, 0, f->rssi, f->channel, ev->t_us);
+        pk_observe_beacon(&s_engine, f->a2, ssid, f->ssid_len, f->rssi, f->channel, ev->t_us);
         break;
     default:
         break;

@@ -70,10 +70,17 @@ bool pharos_dot11_reason(const uint8_t *buf, size_t len, const pharos_ev_dot11_t
 const uint8_t *pharos_dot11_find_ie(const uint8_t *body, size_t len, uint8_t id,
                                     uint8_t *out_len)
 {
-    if (!body || len < BEACON_FIXED) {
+    return pharos_dot11_find_ie_from(body, len, BEACON_FIXED, id, out_len);
+}
+
+const uint8_t *pharos_dot11_find_ie_from(const uint8_t *body, size_t len,
+                                         size_t start, uint8_t id,
+                                         uint8_t *out_len)
+{
+    if (!body || len < start) {
         return NULL;
     }
-    size_t off = BEACON_FIXED;
+    size_t off = start;
     /* Walk the element chain. Every step is bounds-checked against the
      * buffer the radio actually gave us: a truncated or hostile beacon must
      * stop the walk, never read past the end. */

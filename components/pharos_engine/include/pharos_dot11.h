@@ -54,6 +54,14 @@ bool pharos_dot11_rsn(const uint8_t *body, size_t len, pharos_rsn_t *out);
 const uint8_t *pharos_dot11_find_ie(const uint8_t *body, size_t len, uint8_t id,
                                     uint8_t *out_len);
 
+/* Same walk, but starting at an explicit offset into the body. Beacons and
+ * probe RESPONSES carry 12 bytes of fixed parameters before the element chain;
+ * probe REQUESTS carry none, so passing the wrong start silently skips their
+ * first element - which is the SSID, the only one that matters. */
+const uint8_t *pharos_dot11_find_ie_from(const uint8_t *body, size_t len,
+                                         size_t start, uint8_t id,
+                                         uint8_t *out_len);
+
 /* WPA 4-way handshake visibility.
  *
  * The handshake is what an attacker actually wants: capture it and the
