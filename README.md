@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://at0m-b0mb.github.io/Pharos-ESP32S3/"><img alt="flash from browser" src="https://img.shields.io/badge/⚡_flash-from_your_browser-1FB6C9"></a>
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
-  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4396_passing-1FB6C9">
+  <img alt="host checks" src="https://img.shields.io/badge/host_checks-4727_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
   <img alt="idf" src="https://img.shields.io/badge/ESP--IDF-5.5%20%7C%206.0-444">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -40,7 +40,7 @@ Most hobby RF tools answer "is there an attack?" with a confident yes/no. Pharos
 
 So every verdict Pharos produces carries a **confidence ceiling** derived from how much of the channel it actually heard. A deauth flood reads `FLOOD LIKELY` when you camp on its channel and only `SUSPICIOUS` when you keep hopping — the same traffic, a different honesty. There is no band named "safe". Absence of evidence on a receiver that hears 7% of the air is not evidence of absence, and the firmware never pretends otherwise.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,396 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 4,727 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
 
 ## What it looks like
 
@@ -219,21 +219,21 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-**v1.3.0 — the thinking is done and proven; the hardware bring-up is not.**
+**v1.4.0 — the panel is driven, and the engines are proven.**
 
 | Layer | State | Detail |
 |---|---|---|
-| **Detection & evidence engines** | ✅ complete, **4,396 host checks, 0 failures** | 13 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
+| **Detection & evidence engines** | ✅ complete, **4,727 host checks, 0 failures** | 13 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
 | **Round-screen geometry & Virtual HUD** | ✅ complete & tested | layout maths host-tested; every screen rendered from the real code and bounds-checked in CI |
 | **Transmit fence** | ✅ enforced & audited | 4 mechanisms, verified against the linked ELF on every build |
 | **Firmware build** | ✅ green on ESP-IDF v5.5 + v6.0 | a **flashable binary is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases)** |
-| **Board bring-up (display, touch, IMU, PMU)** | 🧱 milestone **M1** | runs on a *simulated* board today; pin map carries `VERIFY` markers |
-| **On-device LVGL rendering** | 🧱 milestone **M2** | the geometry is done and *visible* in the renderer; the on-panel widgets are not wired |
+| **Board bring-up (display + touch)** | ✅ driven via the Waveshare BSP | verified building against the real component on IDF 5.5 + 6.0; IMU/PMU telemetry still M1 |
+| **On-device LVGL rendering** | ✅ HUD live | boot splash + gauge/lens/band/detail, repainted at 5 Hz; touch-driven dial navigation is what remains of M2 |
 
 > [!NOTE]
 > **No hardware validation yet.** The engines and UI are proven in software; nothing has been confirmed against a physical board. Treat every hardware claim as unverified until M1 closes. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**11 lenses** · **13 engines** · receive-only, enforced · MIT.
+**11 lenses** · **14 engines** · a receive-only serial console · MIT.
 
 ## License
 

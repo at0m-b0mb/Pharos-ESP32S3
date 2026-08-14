@@ -1,5 +1,73 @@
 # Changelog
 
+## v1.4.0 — 2026-08-13
+
+**The screen works.** This release is driven by real hardware logs from a board,
+and fixes the two defects they exposed.
+
+### Fixed: completely black panel
+
+`CONFIG_PHAROS_HAS_VENDOR_BSP` defaulted to **n**, so `pharos_bsp_init()` ran
+the *simulated* path and never brought the display up. It is now **on by
+default**, and the real path follows Waveshare's own LVGL example exactly:
+`bsp_display_start()`, then `bsp_display_lock()` / `bsp_display_unlock()`
+around every `lv_*` call, because their BSP runs LVGL on its own task.
+
+Adopted from their `examples/esp-idf/02_lvgl_demo_v9` sdkconfig, because these
+are what make octal PSRAM and the CO5300 panel reliable rather than merely
+bootable: `SPIRAM_FETCH_INSTRUCTIONS`, `SPIRAM_RODATA`, `SPIRAM_XIP_FROM_PSRAM`,
+a 64 KB data cache with **64-byte lines**, a 32 KB instruction cache, QIO flash
+and their LVGL settings. LVGL is pinned to the same **9.5.0** the BSP is built
+against and marked `public` — letting the solver pick a different 9.x is
+another route to a black screen.
+
+And the panel now shows something: a new LVGL HUD (`pharos_hud.c`) with a boot
+splash, a gauge arc, the active lens, a headline value, a band word and the
+permanent receive-only pip, repainted at 5 Hz from the UI loop.
+
+### Fixed: `failed to post WiFi event=43 ret=259`, several times a second
+
+`ret=259` is `ESP_ERR_INVALID_STATE`. The Wi-Fi driver posts internal events
+(start, channel change) to the default event loop **unconditionally**, even for
+a receive-only NULL-mode driver — and that loop was never created, so a
+channel-hopping lens produced one failed post per hop. Fixed with
+`esp_netif_init()` + `esp_event_loop_create_default()` once at boot.
+
+### Fixed: `BSP_*` namespace collision
+
+`board_pins.h` defined `BSP_I2C_SCL`, `BSP_I2S_*` and friends — names the
+vendor header owns for this exact board. Enabling the real BSP produced
+`error: 'BSP_I2C_SCL' redefined`. Pharos no longer defines any pin at all: the
+vendor header is the single source of truth, and `board_pins.h` keeps only the
+facts it does not answer, in a `PHAROS_BOARD_*` namespace.
+
+### Fixed: LVGL vs the IDF 6.0 toolchain
+
+GCC 15 rejects LVGL's own `LV_ATTRIBUTE_FAST_MEM` IRAM placement
+(`-Werror=attributes`). Downgraded for the LVGL library only — the same guard
+Waveshare's example carries — so Pharos code keeps warnings-as-errors.
+
+### New: the command console
+
+A Cardputer-style REPL over serial (`pharos_console`, pure and host-tested):
+`watch camp 6`, `census`, `locate <bssid>`, `karma`, `mirage`, `footprint`,
+`report`, `fence`, `region`, `help`. Its command table is data, categorised
+scan/analyse/evidence/system — **there is no transmit category and no ops entry
+that can emit a frame**, and a host test walks the whole table to prove it.
+
+### Branding
+
+The logo, banner, wordmark and boot splash are rebuilt around the same
+lighthouse the web flasher uses — proper lamp room, tapering banded tower, wide
+base, and receive arches that converge **on** the lamp. Site, repo and device
+are now one mark.
+
+### Verification
+
+- **4,727 host checks**, 0 failures
+- Bounds, transmit-fence and lens-linkage audits green
+- ESP-IDF **v5.5 and v6.0 both build with the real panel driver enabled**
+
 ## v1.3.0 — 2026-08-13
 
 A visual-design pass on the whole HUD, plus a new blue-team hunt tool — and the
