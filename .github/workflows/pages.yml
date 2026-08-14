@@ -92,9 +92,9 @@ jobs:
           deadline=$(( SECONDS + 900 ))   # 15 minutes
           until gh release view "$TAG" --repo "${{ github.repository }}" \
                   --json assets --jq '.assets[].name' 2>/dev/null \
-                | grep -q -- '-esp32s3\.bin'; do
+                | grep -qx -- "pharos-${TAG}-esp32s3.bin"; do
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::no *-esp32s3.bin on release $TAG after 15 minutes;" \
+              echo "::error::pharos-${TAG}-esp32s3.bin missing on release $TAG after 15 min;" \
                    "refusing to publish the flasher with a stale binary"
               exit 1
             fi
@@ -103,8 +103,15 @@ jobs:
           done
 
           # The audited firmware, under the stable path the manifest references.
+          #
+          # Match the VERSIONED name exactly. A glob of '*-esp32s3.bin' now
+          # matches two assets - the versioned image and the stable
+          # version-less copy that release.yml also uploads for curl/esptool -
+          # and `--output` refuses to write more than one:
+          #   unable to write more than one asset with `--output`, got 2 assets
           gh release download "$TAG" --repo "${{ github.repository }}" \
-            --pattern '*-esp32s3.bin' --output _site/firmware/pharos-esp32s3.bin --clobber
+            --pattern "pharos-${TAG}-esp32s3.bin" \
+            --output _site/firmware/pharos-esp32s3.bin --clobber
 
           # Never ship an empty or truncated image to the flasher.
           size=$(stat -c%s _site/firmware/pharos-esp32s3.bin)
