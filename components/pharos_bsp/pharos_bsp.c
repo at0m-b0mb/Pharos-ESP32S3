@@ -52,8 +52,8 @@ bool pharos_bsp_init(pharos_bsp_status_t *out)
     st.display_ok = false; /* honest: no panel is being driven */
     st.touch_ok = false;
     st.pmu_ok = true;
-    st.rtc_present = BSP_HAS_DISCRETE_RTC ? true : false;
-    st.sd_present = BSP_HAS_SD ? true : false;
+    st.rtc_present = PHAROS_BOARD_HAS_DISCRETE_RTC ? true : false;
+    st.sd_present = PHAROS_BOARD_HAS_SD ? true : false;
     st.psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     ESP_LOGW(TAG, "vendor BSP disabled - simulated board, screen will stay dark. "
                   "psram_free=%uKB", (unsigned)(st.psram_free / 1024));
@@ -68,7 +68,7 @@ bool pharos_bsp_battery(pwr_battery_t *out)
     if (!out) return false;
     memset(out, 0, sizeof(*out));
     out->present = false;
-    out->capacity_mah = 500;
+    out->capacity_mah = PHAROS_BOARD_BATTERY_MAH;
     return false;
 }
 
@@ -113,8 +113,8 @@ bool pharos_bsp_init(pharos_bsp_status_t *out)
     st.pmu_ok = true;
 
     st.psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    st.rtc_present = BSP_HAS_DISCRETE_RTC ? true : false;
-    st.sd_present = BSP_HAS_SD ? true : false;
+    st.rtc_present = PHAROS_BOARD_HAS_DISCRETE_RTC ? true : false;
+    st.sd_present = PHAROS_BOARD_HAS_SD ? true : false;
 
     if (st.display_ok) {
         ESP_LOGI(TAG, "panel up: %dx%d, psram_free=%uKB",
@@ -151,7 +151,7 @@ bool pharos_bsp_battery(pwr_battery_t *out)
      * planner is told the reading is absent rather than given a fabricated
      * charge. */
     out->present = false;
-    out->capacity_mah = 500; /* VERIFY against the fitted pack */
+    out->capacity_mah = PHAROS_BOARD_BATTERY_MAH;
     return false;
 }
 

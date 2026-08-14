@@ -1,105 +1,51 @@
-<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pharos">
+<svg width="512" height="512" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pharos">
+  <!-- The Pharos mark: a lighthouse that LISTENS. The arches converge onto the
+       lamp rather than radiating from it - the whole identity of a receive-only
+       instrument in one drawing. This is the same geometry the web flasher
+       header uses, so the site and the repo are one product. -->
   <defs>
-    <radialGradient id="field" cx="50%" cy="38%" r="72%">
-      <stop offset="0%" stop-color="#0E2A3C"/>
-      <stop offset="55%" stop-color="#0A1C2B"/>
-      <stop offset="100%" stop-color="#060F18"/>
+    <radialGradient id="field" cx="50%" cy="42%" r="62%">
+      <stop offset="0%" stop-color="#123449"/>
+      <stop offset="70%" stop-color="#0c2334"/>
+      <stop offset="100%" stop-color="#081521"/>
     </radialGradient>
-    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#7FEBF6" stop-opacity="0.95"/>
-      <stop offset="100%" stop-color="#1FB6C9" stop-opacity="0"/>
-    </linearGradient>
     <linearGradient id="tower" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#EAF6FA"/>
-      <stop offset="100%" stop-color="#9FC2D0"/>
+      <stop offset="0%" stop-color="#eef7fb"/>
+      <stop offset="100%" stop-color="#9fc2d0"/>
     </linearGradient>
-    <radialGradient id="lamp" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#FFE7A8"/>
-      <stop offset="45%" stop-color="#FFC24B"/>
-      <stop offset="100%" stop-color="#F09A1A"/>
+    <radialGradient id="lamp" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#fff0c6"/>
+      <stop offset="55%" stop-color="#ffc24b"/>
+      <stop offset="100%" stop-color="#f0912a"/>
     </radialGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="6" result="b"/>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="1.6" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
 
-  <!-- round field: the 466x466 panel -->
-  <circle cx="256" cy="256" r="248" fill="url(#field)" stroke="#12384B" stroke-width="4"/>
+  <circle cx="60" cy="60" r="58" fill="url(#field)" stroke="#14384c" stroke-width="1.5"/>
 
-  <!-- rim tick ring -->
-  <g stroke="#1E5266" stroke-width="3">
-    <g id="ticks">
-      <line x1="256" y1="20" x2="256" y2="36"/>
-    </g>
-  </g>
-  <g fill="#2A6C82">
-    <!-- 24 rim ticks, drawn explicitly for renderer portability -->
-    <g transform="translate(256,256)">
-      <g><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(15)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(30)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(45)"><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(60)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(75)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(90)"><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(105)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(120)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(135)"><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(150)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(165)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(180)"><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(195)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(210)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(225)"><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(240)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(255)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(270)"><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(285)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(300)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(315)"><rect x="-1.5" y="-236" width="3" height="16" rx="1.5"/></g>
-      <g transform="rotate(330)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-      <g transform="rotate(345)"><rect x="-1.2" y="-234" width="2.4" height="11"/></g>
-    </g>
+  <!-- receive arches: three waves arriving at the lamp, brightest nearest -->
+  <g fill="none" stroke="#1fb6c9" stroke-linecap="round">
+    <path d="M44 34 Q60 23 76 34" stroke-width="3.2" opacity=".95"/>
+    <path d="M38 39 Q60 25 82 39" stroke-width="2.4" opacity=".55"/>
+    <path d="M32 44 Q60 27 88 44" stroke-width="1.7" opacity=".3"/>
   </g>
 
-  <!-- INWARD receive arcs: the signal comes TO the lamp, it does not go out.
-       This is the whole identity - a lighthouse that listens. -->
-  <g fill="none" stroke-linecap="round">
-    <path d="M 150 150 A 150 150 0 0 1 362 150" stroke="#1FB6C9" stroke-width="7" opacity="0.85"/>
-    <path d="M 128 176 A 182 182 0 0 1 384 176" stroke="#1FB6C9" stroke-width="5" opacity="0.5"/>
-    <path d="M 110 202 A 210 210 0 0 1 402 202" stroke="#1FB6C9" stroke-width="3.5" opacity="0.28"/>
-  </g>
-  <!-- inward chevrons emphasising direction of travel -->
-  <g fill="#7FEBF6">
-    <path d="M 256 122 l 12 -16 l -12 6 l -12 -6 z" opacity="0.9"/>
-  </g>
-
-  <!-- the beam the lamp would cast, drawn faint (it is a lamp, after all) -->
-  <path d="M 256 176 L 300 300 L 212 300 Z" fill="url(#beam)" opacity="0.55" filter="url(#glow)"/>
-
-  <!-- tower -->
+  <!-- lighthouse -->
   <g>
-    <path d="M 232 300 L 240 196 L 272 196 L 280 300 Z" fill="url(#tower)"/>
-    <!-- tower banding -->
-    <path d="M 236 268 L 276 268 L 278 288 L 234 288 Z" fill="#C6392E" opacity="0.92"/>
-    <path d="M 239 226 L 273 226 L 275 246 L 237 246 Z" fill="#C6392E" opacity="0.55"/>
-    <!-- gallery -->
-    <rect x="234" y="188" width="44" height="12" rx="3" fill="#8FB2C0"/>
-    <!-- lamp room -->
-    <rect x="242" y="168" width="28" height="24" rx="4" fill="#0A1C2B" stroke="#8FB2C0" stroke-width="2"/>
-    <!-- lamp -->
-    <circle cx="256" cy="180" r="11" fill="url(#lamp)" filter="url(#glow)"/>
-    <!-- roof -->
-    <path d="M 244 168 L 256 154 L 268 168 Z" fill="#8FB2C0"/>
-    <circle cx="256" cy="151" r="3.5" fill="#FFC24B"/>
-    <!-- base -->
-    <path d="M 224 300 L 288 300 L 292 314 L 220 314 Z" fill="#7FA0AE"/>
+    <path d="M47 92 L73 92 L77 100 L43 100 Z" fill="#7fa0ae"/>
+    <path d="M53 90 L55.5 52 L64.5 52 L67 90 Z" fill="url(#tower)"/>
+    <path d="M54.2 74 L65.8 74 L66.6 84 L53.4 84 Z" fill="#c6392e"/>
+    <path d="M55 60 L65 60 L65.6 68 L54.4 68 Z" fill="#c6392e" opacity=".55"/>
+    <rect x="52.5" y="47.5" width="15" height="4.5" rx="1.5" fill="#8fb2c0"/>
+    <rect x="54.5" y="37" width="11" height="11" rx="2" fill="#0a1c2b" stroke="#9fc2d0" stroke-width="1.3"/>
+    <circle cx="60" cy="42.5" r="4.3" fill="url(#lamp)" filter="url(#glow)"/>
+    <path d="M54 37 L60 30.5 L66 37 Z" fill="#8fb2c0"/>
+    <circle cx="60" cy="29" r="1.5" fill="#ffc24b"/>
   </g>
 
-  <!-- horizon line the tower stands on -->
-  <path d="M 96 314 A 200 200 0 0 0 416 314" fill="none" stroke="#12384B" stroke-width="3" opacity="0.7"/>
-
-  <!-- rx dot: receive-only, stated in the mark -->
-  <circle cx="256" cy="360" r="4" fill="#3DDC84"/>
+  <!-- the permanent receive-only tell -->
+  <circle cx="60" cy="106" r="2.3" fill="#3ddc84"/>
 </svg>

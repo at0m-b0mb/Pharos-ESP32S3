@@ -27,10 +27,21 @@ board's ESPHome definition (used to cross-check the buses).
 
 ## Pin map
 
-Confirmed pins are cross-checked against the ESPHome board definition **and** a
-second source. `VERIFY` pins are inferred and must be checked against the
-schematic before first bring-up. The authoritative header is
-[`components/pharos_bsp/include/board_pins.h`](../components/pharos_bsp/include/board_pins.h).
+> [!IMPORTANT]
+> **The Waveshare managed component owns the pin map, and Pharos uses it.**
+> `managed_components/waveshare__esp32_s3_touch_amoled_1_75c/include/bsp/esp32_s3_touch_amoled_1_75c.h`
+> defines `BSP_I2C_SDA/SCL`, the QSPI display pins, the touch lines and the I2S
+> pins for this exact board. Pharos must never define anything in the `BSP_*`
+> namespace — an earlier version of `board_pins.h` did, and it collided the
+> moment the real BSP was enabled (`error: 'BSP_I2C_SCL' redefined`). Two
+> sources of truth for a pin number is one too many.
+>
+> [`components/pharos_bsp/include/board_pins.h`](../components/pharos_bsp/include/board_pins.h)
+> now holds only the board facts the vendor header does not answer, in the
+> `PHAROS_BOARD_*` namespace, plus this table for humans to read.
+
+The table below is a **reference**, cross-checked against the ESPHome board
+definition and the vendor header.
 
 ### Confirmed
 
