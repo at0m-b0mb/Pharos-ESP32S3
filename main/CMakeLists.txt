@@ -23,3 +23,19 @@ idf_component_register(
         pharos_lens_footprint
         pharos_lens_system
 )
+
+# LVGL builds with -Werror under ESP-IDF, and on the GCC 15 toolchain that
+# ships with IDF 6.0 its LV_ATTRIBUTE_FAST_MEM (IRAM) placement trips
+#   error: ignoring attribute 'section (".iram1.8")' because it conflicts
+#          with previous 'section (".iram1.4")' [-Werror=attributes]
+# in the software blend units. It is a warning about LVGL's own codegen, not
+# about anything Pharos does, and Waveshare's own example carries the identical
+# guard. Downgrade it for the LVGL library only, so the rest of the project
+# keeps its warnings-as-errors.
+idf_build_get_property(build_components BUILD_COMPONENTS)
+if("lvgl__lvgl" IN_LIST build_components)
+    idf_component_get_property(LVGL_LIB lvgl__lvgl COMPONENT_LIB)
+    if(TARGET ${LVGL_LIB})
+        target_compile_options(${LVGL_LIB} PRIVATE -Wno-error=attributes -Wno-error=cpp)
+    endif()
+endif()
