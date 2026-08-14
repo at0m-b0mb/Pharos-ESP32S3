@@ -7,8 +7,18 @@ name: pages
 # manifest points at.
 
 on:
+  # Three ways in, so a new release always reaches the flasher without anyone
+  # touching anything:
+  #   1. the release being published (the wait loop below handles the fact that
+  #      the firmware is still compiling at that moment), and
+  #   2. the release build finishing - belt and braces, in case (1) is ever
+  #      cancelled or times out, and
+  #   3. by hand, for a re-deploy.
   release:
     types: [ published ]
+  workflow_run:
+    workflows: [ "release" ]
+    types: [ completed ]
   workflow_dispatch:
     inputs:
       tag:
@@ -35,7 +45,21 @@ jobs:
 
       - name: Resolve tag
         id: vars
-        run: echo "tag=${{ github.event.inputs.tag || github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+        run: |
+          # workflow_run carries the tag in head_branch; release carries it in
+          # tag_name; a manual run passes it in. Fall back to the newest
+          # release so a dispatch with no input still does the right thing.
+          TAG="${{ github.event.inputs.tag }}"
+          [ -n "$TAG" ] || TAG="${{ github.event.release.tag_name }}"
+          [ -n "$TAG" ] || TAG="${{ github.event.workflow_run.head_branch }}"
+          case "$TAG" in
+            v*) ;;
+            *)  TAG=$(gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName) ;;
+          esac
+          echo "resolved tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Assemble the site
         env:

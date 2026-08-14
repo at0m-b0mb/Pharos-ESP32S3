@@ -73,6 +73,13 @@ jobs:
           cp build/partition_table/partition-table.bin "$DIST/"
           cp build/pharos.bin "$DIST/pharos-app.bin"
 
+          # A stable, version-less copy so scripts can always fetch
+          #   .../releases/latest/download/pharos-esp32s3.bin
+          # (works for curl/wget/esptool; browsers cannot use it because GitHub
+          # release assets carry no CORS header, which is why the web flasher
+          # serves its own same-origin copy from Pages instead.)
+          cp "$DIST/pharos-${TAG}-esp32s3.bin" "$DIST/pharos-esp32s3.bin"
+
           cat > dist/FLASH.md <<EOF
           # Flashing Pharos ${TAG} to a Waveshare ESP32-S3-Touch-AMOLED-1.75C
 
@@ -88,10 +95,15 @@ jobs:
                 0x8000  partition-table.bin \\
                 0x10000 pharos-app.bin
 
+          If you are upgrading from a build older than v1.4.0, erase first -
+          the partition layout and PSRAM settings changed:
+
+              esptool.py --chip esp32s3 erase_flash
+
           Notes
-          - This build runs with a SIMULATED board (CONFIG_PHAROS_HAS_VENDOR_BSP=n),
-            so the panel is not driven yet - watch the serial console at 115200.
-            Real display bring-up is milestone M1. See docs/HARDWARE.md.
+          - The panel IS driven (CONFIG_PHAROS_HAS_VENDOR_BSP=y) via Waveshare's
+            BSP; you should see the Pharos HUD. A serial console also runs at
+            115200 - type 'help'. See docs/HARDWARE.md.
           - The transmit fence and lens linkage were audited against this exact
             ELF in CI before it was attached. It cannot transmit; it contains
             every lens.
@@ -112,6 +124,7 @@ jobs:
           # built firmware onto it (idempotent - --clobber replaces on re-run).
           gh release upload "$TAG" \
             "dist/pharos-${TAG}-esp32s3.bin" \
+            "dist/pharos-esp32s3.bin" \
             "dist/pharos-${TAG}-esp32s3.zip" \
             "dist/SHA256SUMS.txt" \
             --clobber --repo "${{ github.repository }}"
