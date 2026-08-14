@@ -16,6 +16,8 @@
  * to call.
  */
 #include "esp_log.h"
+#include "esp_event.h"
+#include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -52,6 +54,20 @@ void app_main(void)
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
         nvs_flash_init();
+    }
+
+    /* The default event loop MUST exist before esp_wifi_init(), even for a
+     * receive-only, NULL-mode driver: the Wi-Fi stack posts internal events
+     * (start, channel change, scan-done) to it unconditionally. Without it
+     * every post fails with ESP_ERR_INVALID_STATE and the console fills with
+     *     E wifi:failed to post WiFi event=43 ret=259
+     * several times a second - which is exactly what a channel-hopping lens
+     * produces. esp_netif_init() is its companion and is equally required.
+     * Both are idempotent, so calling them once here at boot is the whole fix. */
+    ESP_ERROR_CHECK(esp_netif_init());
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
     }
 
     pharos_region_set((pharos_region_t)CONFIG_PHAROS_REGION_DEFAULT);

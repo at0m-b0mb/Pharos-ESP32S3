@@ -1,14 +1,13 @@
-/* Pharos - the UI runtime (M1 scaffold; LVGL widgets are M2)
+/* Pharos - the UI runtime
  *
  * Two tasks, split by core exactly as the architecture promises:
  *
  *   analytics (core 1): drains the active lens' ingest ring and calls its
  *   on_event per frame. This is the hot side; it never touches the display.
  *
- *   ui (core 0): ticks the active lens ~20 Hz, reads touch, and - once M2
- *   lands - draws the round HUD. Today it drives the dial model and logs the
- *   active verdict so the firmware is fully exercisable on hardware over
- *   serial before any pixel is lit.
+ *   ui (core 0): ticks the active lens ~20 Hz and repaints the round HUD at
+ *   ~5 Hz. LVGL runs on the vendor BSP's own task, so painting here is only
+ *   pushing fresh values in under its lock.
  *
  * The dial is built from the lens registry, sorted so the tools a defender
  * reaches for first sit at the top. main.c never names a lens; adding one .c
@@ -16,6 +15,7 @@
  */
 #include "pharos_ui.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -25,6 +25,8 @@
 
 #include "pharos_bus.h"
 #include "pharos_dial.h"
+#include "pharos_hud.h"
+#include "pharos_radio.h"
 #include "pharos_lens.h"
 
 static const char *TAG = "ui";
@@ -74,6 +76,55 @@ static bool lens_launchable(const pharos_lens_t *l)
     const pharos_caps_t radio =
         PHAROS_CAP_WIFI_RX | PHAROS_CAP_WIFI_CHAN | PHAROS_CAP_BLE_SCAN;
     return (l->caps & radio) == 0;
+}
+
+/* Push the active lens' state onto the panel.
+ *
+ * The HUD is deliberately generic - lens name, one big value, a band word, a
+ * detail line, a 0..100 gauge - so a new lens gets a screen for free. Where a
+ * lens exposes a verdict snapshot we show it; otherwise we show that it is
+ * running, which is still the truth and still better than a black panel. */
+static void paint(const pharos_lens_t *active)
+{
+    if (!pharos_bsp_display_lock(30)) {
+        return; /* display busy; try again next tick rather than block */
+    }
+
+    if (!active) {
+        pharos_hud_update("PHAROS", "--", s_fence_ok ? "idle" : "FENCE UNVERIFIED",
+                          s_fence_ok ? "no lens running" : "radio locked",
+                          0, s_fence_ok ? 0x7FA6B5 : 0xE8503F);
+        pharos_bsp_display_unlock();
+        return;
+    }
+
+    /* Uppercase short name for the header. */
+    char name[16];
+    unsigned n = 0;
+    for (; active->name[n] && n < sizeof(name) - 1; n++) {
+        const char c = active->name[n];
+        name[n] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    name[n] = '\0';
+
+    pharos_radio_stats_t st;
+    pharos_radio_stats(&st);
+
+    char big[16], detail[48];
+    snprintf(big, sizeof(big), "%u", (unsigned)(st.frames_seen > 99999 ? 99999
+                                                : st.frames_seen));
+    snprintf(detail, sizeof(detail), "ch %u  %s",
+             (unsigned)st.current_channel, st.camped ? "camped" : "hopping");
+
+    /* Gauge shows airtime activity until a lens publishes a graded verdict:
+     * frames seen, log-ish compressed into 0..100 so it moves visibly in a
+     * quiet room and does not peg in a busy one. */
+    int score = 0;
+    uint32_t f = st.frames_seen;
+    while (f && score < 100) { f >>= 1; score += 7; }
+
+    pharos_hud_update(name, big, "listening", detail, score, 0x1FB6C9);
+    pharos_bsp_display_unlock();
 }
 
 /* Order the dial: observe lenses first (the working tools), then train, then
@@ -126,8 +177,16 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         ESP_LOGE(TAG, "could not activate landing lens %s", landing);
     }
 
+    /* Put the identity on the panel immediately, so the operator sees the
+     * device is alive long before a lens has anything to say. */
+    if (pharos_bsp_display_lock(200)) {
+        pharos_hud_splash("v1.4.0", s_fence_ok);
+        pharos_bsp_display_unlock();
+    }
+
     uint64_t last_us = (uint64_t)esp_timer_get_time();
     uint32_t heartbeat = 0;
+    uint32_t since_paint = 0;
     for (;;) {
         const uint64_t now = (uint64_t)esp_timer_get_time();
         const uint32_t dt_ms = (uint32_t)((now - last_us) / 1000);
@@ -138,9 +197,18 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
             active->on_tick(dt_ms);
         }
 
-        /* M2: read touch, hit-test the dial, draw the HUD. The geometry is in
-         * pharos_dial/pharos_round and is already tested; this loop is where
-         * it gets wired to LVGL and the CST9217 touch events. */
+        /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here
+         * is push fresh text/values in under its lock; a short timeout means a
+         * busy display never stalls the analytics tick. */
+        since_paint += dt_ms;
+        if (since_paint >= 200) {
+            since_paint = 0;
+            paint(active);
+        }
+
+        /* M2 (remaining): touch hit-testing against the Lamp Room dial, so the
+         * operator can switch lenses on the glass rather than over serial. The
+         * geometry for it is done and tested in pharos_dial/pharos_round. */
 
         if ((++heartbeat % 100) == 0 && active) {
             ESP_LOGI(TAG, "active: %s  (dt=%ums)", active->id, dt_ms);

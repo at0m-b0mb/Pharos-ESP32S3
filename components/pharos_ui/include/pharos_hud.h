@@ -1,0 +1,49 @@
+/* Pharos - the on-device LVGL HUD
+ *
+ * The widgets that actually light the panel. Deliberately small and
+ * conservative: a background, a gauge arc, four labels and a receive-only
+ * pip - built once, then updated in place. Nothing here allocates per frame,
+ * and nothing here decides anything; it renders what a lens already computed.
+ *
+ * The round-screen *geometry* work (pharos_round / pharos_dial, and the
+ * Virtual Pharos renderer) is the design reference for where things sit. This
+ * is the LVGL realisation of the same layout: core readout in the middle, the
+ * evidence gauge on the ring, status on the rim.
+ *
+ * Every function here MUST be called with the LVGL lock held
+ * (pharos_bsp_display_lock) because the vendor BSP runs LVGL on its own task.
+ */
+#ifndef PHAROS_HUD_H
+#define PHAROS_HUD_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Build the widget tree on the active screen. Safe to call once at boot.
+ * Returns false if LVGL is not available on this build. */
+bool pharos_hud_create(void);
+
+/* Update the readout. Any string may be NULL to leave it unchanged.
+ *
+ *   lens    - the active tool, e.g. "SPECTRUM"
+ *   big     - the headline value, e.g. "88" or "--"
+ *   band    - the verdict word, e.g. "FLOOD LIKELY"
+ *   detail  - a small line under it, e.g. "camped ch6  dwell 100%"
+ *   score   - 0..100, drives the gauge arc
+ *   rgb     - accent colour for the band + gauge (0xRRGGBB)
+ */
+void pharos_hud_update(const char *lens, const char *big, const char *band,
+                       const char *detail, int score, uint32_t rgb);
+
+/* The boot splash: the Pharos identity while the radio comes up. */
+void pharos_hud_splash(const char *version, bool fence_clean);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PHAROS_HUD_H */

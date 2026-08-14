@@ -1,10 +1,17 @@
 ## Managed component dependencies.
 ##
-## The board driver is the Waveshare BSP for this exact panel; it is the
-## authority on the CO5300 AMOLED init and the AXP2101 bring-up, and Pharos
-## pins it rather than re-driving the hardware. LVGL 9 is the widget toolkit
-## the round UI is built on.
+## The board driver is Waveshare's BSP for this exact panel; it is the authority
+## on the CO5300 AMOLED init and the CST9217 touch bring-up, and Pharos pins it
+## rather than re-driving the hardware.
+##
+## LVGL is pinned to the same 9.5.0 their example uses, and marked public so the
+## `lvgl.h` include resolves in the components that draw the HUD. Letting the
+## solver pick a different LVGL 9.x than the BSP was built against is a good way
+## to get a board that boots to a black screen.
 dependencies:
   idf: ">=5.5"
-  waveshare/esp32_s3_touch_amoled_1_75c: "^3.0.0"
-  lvgl/lvgl: "^9.2.0"
+  waveshare/esp32_s3_touch_amoled_1_75c:
+    version: "^3.0.0"
+  lvgl/lvgl:
+    version: "9.5.0"
+    public: true

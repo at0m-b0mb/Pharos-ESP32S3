@@ -18,6 +18,7 @@ INCLUDES := \
 SRCS := \
   pharos_render.c \
   $(ROOT)/components/pharos_engine/pharos_census.c \
+  $(ROOT)/components/pharos_engine/pharos_console.c \
   $(ROOT)/components/pharos_engine/pharos_flood.c \
   $(ROOT)/components/pharos_engine/pharos_karma.c \
   $(ROOT)/components/pharos_engine/pharos_locate.c \

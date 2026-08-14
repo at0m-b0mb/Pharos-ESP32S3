@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "pharos_census.h"
+#include "pharos_console.h"
 #include "pharos_dial.h"
 #include "pharos_flood.h"
 #include "pharos_karma.h"
@@ -958,6 +959,85 @@ static void screen_home(void)
     rim_status(82, C_GREEN);
 }
 
+/* ---- screen: Console (terminal) -------------------------------------- */
+
+/* Stub ops so the console produces real output lines to render. */
+static bool cx_activate(const char *id) { (void)id; return true; }
+static void cx_set_channel(int ch) { (void)ch; }
+static void cx_status(pc_out_t *o) { pc_println(o, "  SUSPICIOUS  60/60  hopping"); }
+static void cx_fence(pc_out_t *o) { pc_println(o, "  clean - rx-only - 0 trips"); }
+
+/* Render one terminal line, truncated to fit the round terminal card. */
+static void term_line(int x, int *y, int maxchars, const char *col, const char *s)
+{
+    char buf[64];
+    unsigned n = 0;
+    while (s[n] && (int)n < maxchars && n < sizeof(buf) - 1) { buf[n] = s[n]; n++; }
+    buf[n] = '\0';
+    text(x, *y, 14, 'l', col, buf);
+    *y += 20;
+}
+
+static void screen_console(void)
+{
+    screen("console");
+    panel_base();
+    rim_ticks();
+
+    text(PR_CX, PR_CY - 176, 14, 'c', C_DIMMER, "CONSOLE  receive-only");
+
+    /* A terminal card, corner-safe. */
+    const int top = PR_CY - 150, h = 300;
+    int w = card_width(top, h, PR_SAFE_R - 8);
+    if (w > 320) w = 320;
+    const int x = PR_CX - w / 2;
+    roundrect(x, top, w, h, 12, "#07131b");
+    const int lx = x + 16;
+    const int maxc = (w - 28) / 8;   /* ~8px per char */
+    int y = top + 22;
+
+    pc_ops_t ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.activate_lens = cx_activate;
+    ops.set_channel = cx_set_channel;
+    ops.status_line = cx_status;
+    ops.fence_status = cx_fence;
+    pc_out_t o;
+
+    /* Each block: a glowing prompt line, then the console's REAL output. */
+    struct { const char *cmd; const char *outcol; } steps[] = {
+        { "fence", C_GREEN },
+        { "watch camp 6", C_AMBER },
+    };
+    for (unsigned s = 0; s < 2; s++) {
+        char prompt[48];
+        snprintf(prompt, sizeof(prompt), "pharos> %s", steps[s].cmd);
+        /* prompt: cyan chevron via colour, command in bright text */
+        text(lx, y, 14, 'l', C_CYAN_HI, "pharos>");
+        text(lx + 66, y, 14, 'l', C_TEXT, steps[s].cmd);
+        y += 20;
+        pc_exec(&ops, steps[s].cmd, &o);
+        /* split output on newlines */
+        const char *p = o.buf;
+        while (*p && y < top + h - 40) {
+            char line[64]; unsigned n = 0;
+            while (*p && *p != '\n' && n < sizeof(line) - 1) line[n++] = *p++;
+            line[n] = '\0';
+            if (*p == '\n') p++;
+            if (n) term_line(lx, &y, maxc, steps[s].outcol, line);
+        }
+        y += 4;
+    }
+
+    /* Live prompt with a block cursor. */
+    text(lx, y, 14, 'l', C_CYAN_HI, "pharos>");
+    glowline(lx + 70, y - 6, lx + 70, y + 6, 9, C_CYAN);
+
+    /* The always-there reminder. */
+    text(PR_CX, PR_CY + 168, 14, 'c', C_DIMMER, "type 'help' - no command transmits");
+    rim_status(80, C_CYAN);
+}
+
 int main(int argc, char **argv)
 {
     const bool check_only = (argc > 1 && strcmp(argv[1], "--check") == 0);
@@ -967,6 +1047,7 @@ int main(int argc, char **argv)
     }
 
     screen_home();
+    screen_console();
     screen_lamp_room();
     watch_pair();
     screen_census();

@@ -1,35 +1,56 @@
 # Pharos - build defaults for the Waveshare ESP32-S3-Touch-AMOLED-1.75C
 #
+# The PSRAM / cache / LVGL block below is taken from Waveshare's own
+# examples/esp-idf/02_lvgl_demo_v9 sdkconfig.defaults, because those settings
+# are what make the octal PSRAM and the CO5300 panel actually work on this
+# board. Getting the data-cache line size or the XIP options wrong produces a
+# board that boots and shows nothing - which is exactly the failure this
+# configuration was written to fix.
+#
 # The BLE lines are mechanism 3 of 4 of the transmit fence: NimBLE is built
 # observer-only, so the advertising/connection code a "spam" tool would need is
 # not in the image. Do not enable the broadcaster or peripheral roles.
 
 CONFIG_IDF_TARGET="esp32s3"
 
-# --- ESP32-S3R8: 8MB octal PSRAM, 16MB flash ---
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
-# Let large lens buffers (the event rings and engine tables) live in the 8 MB
-# PSRAM instead of internal SRAM. Every lens owns a static ring + engine state,
-# and although only one runs at a time they all coexist in .bss - together far
-# too much for internal DRAM. EXT_RAM_BSS_ATTR (see the lens sources) moves them
-# to PSRAM; this option is what permits it.
-CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# --- flash -------------------------------------------------------------
+# 16MB is declared deliberately: it is correct for the 16MB boards and safe on
+# the 32MB ones (you simply do not address the top half). Declaring MORE flash
+# than a board has is the one direction that bricks a flash cycle.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# --- CPU / performance ---
+# --- ESP32-S3R8: 8MB octal PSRAM ---------------------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# Large lens buffers (event rings, engine tables) live in PSRAM via
+# EXT_RAM_BSS_ATTR; this is what permits it. Without it the link overflows
+# internal DRAM once several lenses are compiled in.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# --- cache: required for octal PSRAM at 80MHz --------------------------
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# --- CPU / RTOS --------------------------------------------------------
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
-# --- Wi-Fi: receive path only. We never start an AP or transmit. ---
+# --- Wi-Fi: receive path only. We never start an AP or transmit. -------
 CONFIG_ESP_WIFI_ENABLED=y
 CONFIG_ESP_WIFI_NVS_ENABLED=y
 
-# --- BLE: observer only (transmit fence, mechanism 3) ---
+# --- BLE: observer only (transmit fence, mechanism 3) ------------------
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
@@ -37,15 +58,29 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 
-# --- LVGL 9: the round HUD toolkit ---
-# LVGL is configured by the managed component / lv_conf at M2; no Kconfig
-# colour-depth or allocator overrides here, to avoid unknown-symbol warnings
-# before the widget layer exists.
+# --- LVGL 9: the round HUD toolkit -------------------------------------
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_DEF_REFR_PERIOD=15
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_OBJ_STYLE_CACHE=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_26=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+CONFIG_LV_USE_FONT_COMPRESSED=y
 
-# --- Pharos ---
+# --- Pharos ------------------------------------------------------------
 CONFIG_PHAROS_ENFORCE_RX_ONLY=y
 CONFIG_PHAROS_REGION_DEFAULT=0
+CONFIG_PHAROS_HAS_VENDOR_BSP=y
 
-# --- Log ---
+# --- Log ---------------------------------------------------------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_COMPILER_OPTIMIZATION_SIZE=y

@@ -26,10 +26,12 @@ SRCS := \
   test_chain.c \
   test_redteam.c \
   test_locate.c \
+  test_console.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \
   $(ROOT)/components/pharos_engine/pharos_census.c \
+  $(ROOT)/components/pharos_engine/pharos_console.c \
   $(ROOT)/components/pharos_engine/pharos_chain.c \
   $(ROOT)/components/pharos_engine/pharos_dot11.c \
   $(ROOT)/components/pharos_engine/pharos_flood.c \

@@ -54,4 +54,9 @@ void test_opsec(void);
 /* Suite defined in test_locate.c */
 void test_locate(void);
 
+/* Suites defined in test_console.c */
+void test_console_tokenise(void);
+void test_console_dispatch(void);
+void test_console_help_and_safety(void);
+
 #endif /* PHAROS_TEST_SUPPORT_H */

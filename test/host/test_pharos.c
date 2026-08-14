@@ -606,6 +606,9 @@ int main(void)
     test_flood();
     test_opsec();
     test_locate();
+    test_console_tokenise();
+    test_console_dispatch();
+    test_console_help_and_safety();
 
     printf("\n%u checks, %u failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

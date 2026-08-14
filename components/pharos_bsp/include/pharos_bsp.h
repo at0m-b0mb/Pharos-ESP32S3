@@ -43,6 +43,18 @@ void pharos_bsp_brightness(uint8_t level);
  * that drive the Sentry lens. */
 bool pharos_bsp_orientation(int16_t *pitch_cdeg, int16_t *roll_cdeg);
 
+/* The LVGL mutex. bsp_display_start() runs LVGL on its own task, so EVERY
+ * lv_* call anywhere in the firmware must be bracketed by these. Wrapping the
+ * vendor's lock here means the rest of Pharos never needs to know whose mutex
+ * it is - and that there even is one.
+ *
+ *   if (pharos_bsp_display_lock(50)) { ...lv_* calls... ; pharos_bsp_display_unlock(); }
+ *
+ * timeout_ms < 0 waits forever. Returns false if the lock was not taken (or
+ * there is no display on this build), in which case do NOT touch LVGL. */
+bool pharos_bsp_display_lock(int timeout_ms);
+void pharos_bsp_display_unlock(void);
+
 #ifdef __cplusplus
 }
 #endif
