@@ -24,6 +24,9 @@
 
 #include "lvgl.h"
 
+/* PR_W / PR_H - the panel geometry, shared with the round-screen maths. */
+#include "pharos_round.h"
+
 /* Palette - the same one the Virtual Pharos renderer uses, so the device and
  * the documentation screenshots are the same product. */
 /* Every colour here is EXACTLY representable in RGB565, which is what the
