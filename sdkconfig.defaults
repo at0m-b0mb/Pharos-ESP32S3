@@ -59,6 +59,13 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 
 # --- LVGL 9: the round HUD toolkit -------------------------------------
+# 16-bit colour, stated rather than inherited. The CO5300 is driven over QSPI
+# at RGB565, so this is the panel's real depth; leaving it to LVGL's default
+# meant the whole palette was being silently requantised, which is what made
+# flat fills speckle and antialiased edges look grainy. The HUD palette is
+# snapped to exactly-representable RGB565 values to match - see pharos_hud.c.
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_COLOR_DEPTH=16
 CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y

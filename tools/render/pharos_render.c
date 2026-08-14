@@ -36,21 +36,27 @@
 
 /* ---- palette ---------------------------------------------------------
  * Dark-first, because the panel is AMOLED: an unlit pixel costs no power, so
- * the HUD is mostly black with a single accent carrying the state. */
-#define C_VOID    "#04090F"
-#define C_FIELD   "#0B1D2B"
-#define C_FIELD2  "#0E2A3C"
-#define C_RIM     "#1E5266"
-#define C_CYAN    "#1FB6C9"
-#define C_CYAN_HI "#7FEBF6"
-#define C_AMBER   "#FFC24B"
-#define C_ORANGE  "#F0913A"
-#define C_RED     "#E8503F"
-#define C_GREEN   "#3DDC84"
-#define C_TEXT    "#EAF6FA"
-#define C_DIM     "#7FA6B5"
-#define C_DIMMER  "#4E7A8C"
-#define C_DENIED  "#243B49"
+ * the HUD is mostly black with a single accent carrying the state.
+ *
+ * Every value is snapped to a colour RGB565 can represent EXACTLY, because the
+ * device is driven at 16-bit and anything else is silently requantised there -
+ * per channel, by different amounts. Keeping these identical to the firmware's
+ * palette (pharos_ui/pharos_hud.c) is what makes the gallery images and the
+ * panel the same product rather than two approximations of one. */
+#define C_VOID    "#000000"
+#define C_FIELD   "#081C29"
+#define C_FIELD2  "#102839"
+#define C_RIM     "#215163"
+#define C_CYAN    "#21B6C6"
+#define C_CYAN_HI "#7BEBF7"
+#define C_AMBER   "#FFC34A"
+#define C_ORANGE  "#EF9239"
+#define C_RED     "#E75142"
+#define C_GREEN   "#39DB84"
+#define C_TEXT    "#E7F7F7"
+#define C_DIM     "#7BA6B5"
+#define C_DIMMER  "#4A798C"
+#define C_DENIED  "#213C4A"
 
 /* ---- display list ---------------------------------------------------- */
 

@@ -26,19 +26,33 @@
 
 /* Palette - the same one the Virtual Pharos renderer uses, so the device and
  * the documentation screenshots are the same product. */
-#define HUD_VOID   0x04090F
-#define HUD_FIELD  0x0B1D2B
-#define HUD_RIM    0x1E5266
-#define HUD_TRACK  0x12283A
-#define HUD_TRACK2 0x08131C
-#define HUD_TEXT   0xEAF6FA
-#define HUD_DIM    0x7FA6B5
-#define HUD_DIMMER 0x4E7A8C
-#define HUD_CYAN   0x1FB6C9
-#define HUD_AMBER  0xFFC24B
-#define HUD_ORANGE 0xF0913A
-#define HUD_RED    0xE8503F
-#define HUD_GREEN  0x3DDC84
+/* Every colour here is EXACTLY representable in RGB565, which is what the
+ * CO5300 is driven at over QSPI.
+ *
+ * This matters more than it sounds. 16-bit colour expands back to 8-bit as
+ * R8 = (r5<<3)|(r5>>2), G8 = (g6<<2)|(g6>>4) - so any colour not of that form
+ * is silently rounded, and rounded by a DIFFERENT amount per channel. Flat
+ * fills then look faintly speckled and antialiased edges look grainy, because
+ * the blend is walking through colours the panel cannot produce. Every value
+ * below was snapped to the nearest one it can, so what is asked for is what is
+ * shown.
+ *
+ * VOID is true black on purpose: an unlit AMOLED pixel emits nothing at all,
+ * which is both the deepest contrast available and the only shade with no
+ * quantisation noise whatsoever. */
+#define HUD_VOID   0x000000
+#define HUD_FIELD  0x081C29
+#define HUD_RIM    0x215163
+#define HUD_TRACK  0x102839
+#define HUD_TRACK2 0x081418
+#define HUD_TEXT   0xE7F7F7
+#define HUD_DIM    0x7BA6B5
+#define HUD_DIMMER 0x4A798C
+#define HUD_CYAN   0x21B6C6
+#define HUD_AMBER  0xFFC34A
+#define HUD_ORANGE 0xEF9239
+#define HUD_RED    0xE75142
+#define HUD_GREEN  0x39DB84
 
 /* The same thresholds the renderer uses, so a screenshot and the panel agree
  * about what a number means. */
@@ -189,7 +203,8 @@ bool pharos_hud_create(void)
     lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     lv_arc_set_change_rate(s_arc, 0);
     lv_obj_set_style_arc_opa(s_arc, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_arc, 16, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_arc, 18, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_arc, lv_color_hex(HUD_CYAN), LV_PART_INDICATOR);
 
     /* The two arcs behind it, configured the same way. */
@@ -208,7 +223,8 @@ bool pharos_hud_create(void)
             lv_obj_remove_flag(a, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICK_FOCUSABLE);
             lv_obj_set_style_arc_opa(a, LV_OPA_TRANSP, LV_PART_MAIN);
-            lv_obj_set_style_arc_width(a, i == 0 ? 20 : 16, LV_PART_INDICATOR);
+            lv_obj_set_style_arc_width(a, i == 0 ? 22 : 16, LV_PART_INDICATOR);
+            lv_obj_set_style_arc_rounded(a, true, LV_PART_INDICATOR);
             lv_obj_set_style_arc_color(a,
                 lv_color_hex(i == 0 ? HUD_TRACK2 : HUD_TRACK), LV_PART_INDICATOR);
         }
