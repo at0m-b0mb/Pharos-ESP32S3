@@ -12,6 +12,7 @@
  */
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -24,7 +25,7 @@
 static const char *TAG = "lens.range";
 
 static pr_range_t s_range;
-static pw_engine_t s_engine;
+EXT_RAM_BSS_ATTR static pw_engine_t s_engine;
 static pw_verdict_t s_verdict;
 static pr_scenario_t s_scenario = PR_SCENARIO_DEAUTH_FLOOD;
 static SemaphoreHandle_t s_lock;

@@ -17,6 +17,7 @@
  */
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -30,6 +31,29 @@
 static const char *TAG = "lens.footprint";
 
 static pr_scenario_t s_scenario = PR_SCENARIO_DEAUTH_FLOOD;
+
+/* THE ENGINE IS A STATIC IN PSRAM, NOT A LOCAL, AND THE REASON IS A CRASH.
+ *
+ * pw_engine_t is 10,720 bytes - an AP table, a 256-entry disconnect ring and
+ * the per-second slots. assess() used to declare one on the STACK, and
+ * pharos_ui_run() is called straight from app_main(), so this code runs on the
+ * main task with CONFIG_ESP_MAIN_TASK_STACK_SIZE = 8192 bytes.
+ *
+ * It fit, barely, while the engine was about 6 KB. The v2 rewrite grew it past
+ * the stack and the device died the moment this lens was opened:
+ *
+ *     ***ERROR*** A stack overflow in task main has been detected.
+ *
+ * A ten-kilobyte automatic is not a near miss to be tuned around; it does not
+ * belong on any task's stack. It lives in .bss in PSRAM instead, like every
+ * other large lens buffer in this project (see the note on EXT_RAM_BSS_ATTR in
+ * the other lenses). Only one lens is active at a time and assess() runs on
+ * the UI task alone, so a single shared instance is safe.
+ *
+ * tools/check_sources.sh now fails the build if any lens declares one of these
+ * on the stack again. */
+EXT_RAM_BSS_ATTR static pw_engine_t s_engine;
+
 static pw_verdict_t s_camped, s_hopping;
 static po_report_t s_report;
 static SemaphoreHandle_t s_lock;
@@ -48,13 +72,12 @@ static void assess(pr_scenario_t scenario)
     pr_range_t r;
     pr_range_init(&r, &cfg);
 
-    pw_engine_t eng;
-    pw_reset(&eng);
+    pw_reset(&s_engine);
     pharos_event_t ev;
     uint64_t last = 0;
     while (pr_range_next(&r, &ev)) {
         if (ev.type == PHAROS_EV_DOT11) {
-            pw_observe(&eng, &ev.u.dot11, ev.t_us);
+            pw_observe(&s_engine, &ev.u.dot11, ev.t_us);
         }
         last = ev.t_us;
     }
@@ -63,8 +86,8 @@ static void assess(pr_scenario_t scenario)
                             .window_ms = 12000 };
     pw_context_t hopping = { .dwell_permil = 71, .bus_yield_permil = 1000,
                              .window_ms = 12000 };
-    pw_evaluate(&eng, last, &camped, &s_camped);
-    pw_evaluate(&eng, last, &hopping, &s_hopping);
+    pw_evaluate(&s_engine, last, &camped, &s_camped);
+    pw_evaluate(&s_engine, last, &hopping, &s_hopping);
     po_assess(&s_camped, &s_hopping, &s_report);
     s_scenario = scenario;
 
