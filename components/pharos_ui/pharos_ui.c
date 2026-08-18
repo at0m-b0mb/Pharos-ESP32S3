@@ -251,7 +251,17 @@ static void nav_apply(void)
         break;
     case PHAROS_NAV_SELECT: {
         if (s_view == VIEW_LIVE) {
-            return; /* already running; the centre does nothing here */
+            /* The centre used to do nothing here, and that hole is why a
+             * SUSPICIOUS Watch reading was a dead end: the way to raise the
+             * confidence ceiling is to stop hopping, and no control on the
+             * glass did it. A running lens may now claim the tap. This runs on
+             * the UI task, which is the only task allowed to touch the radio -
+             * see the note on the touch callback above. */
+            const pharos_lens_t *live = pharos_lens_active();
+            if (live && live->on_select) {
+                live->on_select();
+            }
+            return;
         }
         const pharos_lens_t *l = s_order[s_cursor % s_order_n];
         if (!l) {
@@ -438,9 +448,14 @@ static void paint(const pharos_lens_t *active)
     pharos_hud_create();
 
     if (!active) {
-        pharos_hud_update("PHAROS", "--", s_fence_ok ? "idle" : "FENCE UNVERIFIED",
-                          s_fence_ok ? "no lens running" : "radio locked",
-                          0, s_fence_ok ? 0x7FA6B5 : 0xE8503F);
+        struct pharos_lens_display idle;
+        memset(&idle, 0, sizeof(idle));
+        snprintf(idle.big, sizeof(idle.big), "--");
+        snprintf(idle.band, sizeof(idle.band), "%s",
+                 s_fence_ok ? "idle" : "FENCE UNVERIFIED");
+        snprintf(idle.advice, sizeof(idle.advice), "%s",
+                 s_fence_ok ? "no lens running" : "radio locked");
+        pharos_hud_live("PHAROS", &idle, s_fence_ok ? 0x7FA6B5 : 0xE8503F);
         pharos_bsp_display_unlock();
         return;
     }
@@ -460,29 +475,29 @@ static void paint(const pharos_lens_t *active)
      * as a "score", identically for every lens. It climbed forever and meant
      * nothing - which is precisely how it was reported from the field. The
      * engines were computing real verdicts all along and this function was
-     * ignoring them. */
+     * ignoring them.
+     *
+     * ONE call does the whole face now. It used to be three - live(), then
+     * ceiling(), then advice() - and the second and third disagreed with the
+     * first about whether the summary label should be visible, so it was
+     * hidden and shown again on every repaint. That was half the flicker. */
     struct pharos_lens_display d;
     memset(&d, 0, sizeof(d));
 
     if (active->display && active->display(&d)) {
-        pharos_hud_ceiling(d.has_score ? d.ceiling : 0);
-        pharos_hud_live(name, d.big, d.band, d.detail,
-                        d.has_score ? d.score : 0, d.has_score ? 0 : 0x7FA6B5);
-        pharos_hud_advice(d.advice);
+        pharos_hud_live(name, &d, 0);
     } else {
         /* No verdict yet. Say so plainly and show what IS true - how much has
          * been heard - rather than dressing a counter up as a measurement. */
         pharos_radio_stats_t st;
         pharos_radio_stats(&st);
-        char detail[48];
-        snprintf(detail, sizeof(detail), "ch %u  %s",
+        snprintf(d.detail, sizeof(d.detail), "ch %u  %s",
                  (unsigned)st.current_channel, st.camped ? "camped" : "hopping");
-        char frames[16];
-        snprintf(frames, sizeof(frames), "%u",
+        snprintf(d.big, sizeof(d.big), "%u",
                  (unsigned)(st.frames_seen > 99999 ? 99999 : st.frames_seen));
-        pharos_hud_ceiling(0);
-        pharos_hud_live(name, frames, "frames heard", detail, 0, 0x7FA6B5);
-        pharos_hud_advice("listening - no verdict yet");
+        snprintf(d.band, sizeof(d.band), "frames heard");
+        snprintf(d.advice, sizeof(d.advice), "listening - no verdict yet");
+        pharos_hud_live(name, &d, 0x7FA6B5);
     }
 
     pharos_bsp_display_unlock();

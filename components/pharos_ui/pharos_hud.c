@@ -1,13 +1,15 @@
-/* Pharos - the on-device LVGL screen.
+/* Pharos - the on-device LVGL screen. See pharos_hud.h for the layout and for
+ * the four specific bugs that made the previous one flicker and break.
  *
- * Only compiled with a real panel; with the vendor BSP off these become
- * no-ops so the firmware still builds and runs headless.
+ * Only compiled with a real panel; with the vendor BSP off these become no-ops
+ * so the firmware still builds and runs headless.
  *
  * Layout notes for a 466 px CIRCLE. The usable rectangle inside a circle is a
  * lot smaller than the circle: towards the top and bottom the chord narrows to
- * nothing, so anything wide has to live near the middle. Everything here is
- * centre-aligned and the wrapped text column is capped at 300 px, which is the
- * widest a multi-line block can be and still stay clear of the bezel.
+ * nothing, so anything wide has to live near the middle. Every position here
+ * is the same one tools/render/pharos_render.c draws, and that renderer
+ * bounds-checks every primitive against the glass in CI - so the layout is
+ * verified on a laptop before any pixel is lit.
  */
 
 /* sdkconfig.h FIRST - see the long note in pharos_bsp.c. The #if below tests
@@ -21,14 +23,14 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "lvgl.h"
 
-/* PR_W / PR_H - the panel geometry, shared with the round-screen maths. */
+/* PR_W / PR_H and the polar helpers - the panel geometry, shared with the
+ * round-screen maths and with the renderer. */
 #include "pharos_round.h"
 
-/* Palette - the same one the Virtual Pharos renderer uses, so the device and
- * the documentation screenshots are the same product. */
 /* Every colour here is EXACTLY representable in RGB565, which is what the
  * CO5300 is driven at over QSPI.
  *
@@ -48,9 +50,13 @@
 #define HUD_RIM    0x215163
 #define HUD_TRACK  0x102839
 #define HUD_TRACK2 0x081418
+#define HUD_PIP_ON 0x102839
+#define HUD_PIP_UP 0x081418
 #define HUD_TEXT   0xE7F7F7
 #define HUD_DIM    0x7BA6B5
 #define HUD_DIMMER 0x4A798C
+#define HUD_DENIED 0x213C4A
+#define HUD_GHOST  0x2A4257
 #define HUD_CYAN   0x21B6C6
 #define HUD_AMBER  0xFFC34A
 #define HUD_ORANGE 0xEF9239
@@ -68,36 +74,222 @@ static uint32_t band_colour(int score)
     return HUD_DIM;
 }
 
-static lv_obj_t *s_field;  /* the instrument face          */
-static lv_obj_t *s_ticks;  /* 24 bezel ticks               */
-static lv_obj_t *s_track;  /* dark gauge track             */
-static lv_obj_t *s_ghost;  /* earned-then-capped, dimmed   */
-static lv_obj_t *s_arc;    /* the score itself             */
-static lv_obj_t *s_core;   /* dark disc behind the number  */
-static lv_obj_t *s_pip;    /* the always-on receive-only dot */
-static lv_obj_t *s_lens;    /* lens name, top          */
-static lv_obj_t *s_pos;     /* "blue  3 / 16"          */
-static lv_obj_t *s_big;     /* headline value          */
-static lv_obj_t *s_band;    /* band word               */
-static lv_obj_t *s_detail;  /* detail line             */
-static lv_obj_t *s_summary; /* what this lens does     */
-static lv_obj_t *s_hint;    /* what a tap will do      */
-static lv_obj_t *s_rx;      /* receive-only pip        */
+/* ---- the widget set --------------------------------------------------
+ *
+ * Two page containers. Only these two are ever shown or hidden, and only when
+ * the view actually changes - which is what stops the per-frame show/hide
+ * thrash that made the old face strobe. */
+static lv_obj_t *s_page_browse;
+static lv_obj_t *s_page_live;
+
+/* shared chrome, parented to the screen and visible in both views */
+static lv_obj_t *s_field;
+static lv_obj_t *s_ticks;
+static lv_obj_t *s_pip;
 static lv_obj_t *s_toast;
+
+/* live view */
+static lv_obj_t *s_track;
+static lv_obj_t *s_arc;
+static lv_obj_t *s_ghost;   /* the score the caps took away, thin and inset */
+static lv_obj_t *s_ceiling; /* the hard stop, a tick across the arc         */
+static lv_obj_t *s_core;
+static lv_obj_t *s_ctx;     /* channel / posture / network name */
+static lv_obj_t *s_big;
+static lv_obj_t *s_band;
+static lv_obj_t *s_detail;
+static lv_obj_t *s_why;
+static lv_obj_t *s_peak;
+static lv_obj_t *s_bar[PHAROS_DISP_HISTORY];
+static lv_obj_t *s_bar_base;
+static lv_obj_t *s_fam_box[PHAROS_DISP_FAMILIES];
+static lv_obj_t *s_fam_txt[PHAROS_DISP_FAMILIES];
+
+/* browse view */
+static lv_obj_t *s_b_name;
+static lv_obj_t *s_b_pos;
+static lv_obj_t *s_b_summary;
+static lv_obj_t *s_b_hint;
+static lv_obj_t *s_b_arc;
+
 static bool s_built;
 static pharos_hud_nav_cb_t s_nav_cb;
 static uint32_t s_toast_until_ms;
 
+/* ---- dirty checks ----------------------------------------------------
+ *
+ * The reason the panel is quiet. lv_label_set_text() marks the object dirty
+ * whether or not the string differs, and an invalidated region is a region
+ * that gets redrawn and flushed over QSPI. At 5 Hz across eight labels and
+ * three arcs that is a continuous rolling repaint of the whole face, which is
+ * exactly what "it flickers" looks like from the outside.
+ *
+ * Comparing first turns a steady reading into zero invalidations. */
+static void set_text(lv_obj_t *o, const char *s)
+{
+    if (!o) {
+        return;
+    }
+    if (!s) {
+        s = "";
+    }
+    const char *cur = lv_label_get_text(o);
+    if (cur && strcmp(cur, s) == 0) {
+        return;
+    }
+    lv_label_set_text(o, s);
+}
+
+static void set_text_colour(lv_obj_t *o, uint32_t rgb)
+{
+    if (!o) {
+        return;
+    }
+    const lv_color_t want = lv_color_hex(rgb);
+    const lv_color_t cur = lv_obj_get_style_text_color(o, LV_PART_MAIN);
+    if (lv_color_eq(cur, want)) {
+        return;
+    }
+    lv_obj_set_style_text_color(o, want, 0);
+}
+
+static void set_arc_value(lv_obj_t *o, int v)
+{
+    if (!o) {
+        return;
+    }
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    if (lv_arc_get_value(o) == v) {
+        return;
+    }
+    lv_arc_set_value(o, v);
+}
+
+/* The ceiling tick, placed by absolute angle within the 270-degree sweep. */
+static int s_ceiling_at = -1;
+static void set_ceiling_tick(int ceiling)
+{
+    if (!s_ceiling) {
+        return;
+    }
+    if (ceiling < 0) ceiling = 0;
+    if (ceiling > 100) ceiling = 100;
+    if (s_ceiling_at == ceiling) {
+        return;
+    }
+    s_ceiling_at = ceiling;
+    if (ceiling == 0) {
+        lv_arc_set_angles(s_ceiling, 0, 0);
+        return;
+    }
+    const int32_t a = (270 * ceiling) / 100;
+    const int32_t end = (a + 2 > 270) ? 270 : a + 2;
+    lv_arc_set_angles(s_ceiling, a > 0 ? a - 1 : 0, end);
+}
+
+static void set_arc_colour(lv_obj_t *o, uint32_t rgb)
+{
+    if (!o) {
+        return;
+    }
+    const lv_color_t want = lv_color_hex(rgb);
+    const lv_color_t cur = lv_obj_get_style_arc_color(o, LV_PART_INDICATOR);
+    if (lv_color_eq(cur, want)) {
+        return;
+    }
+    lv_obj_set_style_arc_color(o, want, LV_PART_INDICATOR);
+}
+
+static void set_bg_colour(lv_obj_t *o, uint32_t rgb)
+{
+    if (!o) {
+        return;
+    }
+    const lv_color_t want = lv_color_hex(rgb);
+    const lv_color_t cur = lv_obj_get_style_bg_color(o, LV_PART_MAIN);
+    if (lv_color_eq(cur, want)) {
+        return;
+    }
+    lv_obj_set_style_bg_color(o, want, 0);
+}
+
+static void show(lv_obj_t *o, bool on)
+{
+    if (!o) {
+        return;
+    }
+    const bool hidden = lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN);
+    if (on == !hidden) {
+        return; /* already in the wanted state: touch nothing */
+    }
+    if (on) {
+        lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/* ---- construction helpers -------------------------------------------- */
+
+/* A plain, non-interactive container. lv_obj_create() hands back something
+ * scrollable and clickable with a border and a background; every one of those
+ * defaults is wrong for a HUD element, and the scrollable one is what let a
+ * stray drag push the whole face off the glass. */
+static lv_obj_t *mk_box(lv_obj_t *parent)
+{
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_remove_style_all(o);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_set_scrollbar_mode(o, LV_SCROLLBAR_MODE_OFF);
+    return o;
+}
+
 static lv_obj_t *mk_label(lv_obj_t *parent, const lv_font_t *font, uint32_t rgb,
-                          lv_align_t align, int dx, int dy, const char *text)
+                          int dx, int dy, const char *text)
 {
     lv_obj_t *l = lv_label_create(parent);
+    lv_obj_remove_flag(l, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_text_font(l, font, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(rgb), 0);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    /* No wrapping, ever. A label whose height changes with its text re-lays
+     * out, and a re-layout moves the invalidated region around underneath the
+     * arc. Long strings are truncated by the caller against the real chord
+     * width instead. */
+    lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
     lv_label_set_text(l, text);
-    lv_obj_align(l, align, dx, dy);
+    lv_obj_align(l, LV_ALIGN_CENTER, dx, dy);
     return l;
+}
+
+/* A gauge arc: 270 degrees opening at the bottom, and emphatically NOT an
+ * input. An lv_arc is a slider by default - it tracks your finger - and this
+ * one reports a confidence score, so being draggable would let a fingertip
+ * overwrite a measurement. */
+static lv_obj_t *mk_arc(lv_obj_t *parent, int size, int width, uint32_t rgb,
+                        int value)
+{
+    lv_obj_t *a = lv_arc_create(parent);
+    lv_obj_set_size(a, size, size);
+    lv_obj_center(a);
+    lv_arc_set_rotation(a, 135);
+    lv_arc_set_bg_angles(a, 0, 270);
+    lv_arc_set_range(a, 0, 100);
+    lv_arc_set_value(a, value);
+    lv_arc_set_change_rate(a, 0);
+    lv_obj_remove_style(a, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(a, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_set_style_arc_opa(a, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(a, width, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(a, true, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(a, lv_color_hex(rgb), LV_PART_INDICATOR);
+    return a;
 }
 
 /* ---- touch ----------------------------------------------------------- */
@@ -125,6 +317,12 @@ static void mk_zone(lv_obj_t *parent, lv_align_t align, int w, int h,
     lv_obj_remove_style_all(z);
     lv_obj_set_size(z, w, h);
     lv_obj_align(z, align, 0, 0);
+    /* SCROLLABLE off. This is the one flag whose absence let a drag - or a
+     * smeared tap, which on round glass is most of them - scroll the entire
+     * face out of view with no way back. It was the "and it breaks" half of
+     * the bug report. */
+    lv_obj_remove_flag(z, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(z, LV_SCROLLBAR_MODE_OFF);
     lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
     lv_obj_add_event_cb(z, nav_event, LV_EVENT_SHORT_CLICKED, (void *)(uintptr_t)what);
@@ -134,6 +332,66 @@ static void mk_zone(lv_obj_t *parent, lv_align_t align, int w, int h,
 void pharos_hud_set_nav_cb(pharos_hud_nav_cb_t cb) { s_nav_cb = cb; }
 
 bool pharos_hud_present(void) { return s_built; }
+
+/* ---- the activity ribbon ---------------------------------------------
+ *
+ * Sixteen radial bars across the top of the dial, one per second, height
+ * proportional to that second's activity. A score says whether something is
+ * happening; this says what shape it is. A steady trickle and one violent
+ * burst produce the same ten-second mean and are not the same event.
+ *
+ * Each bar is an lv_line with its own two-point array. The arrays are static
+ * because LVGL keeps the pointer rather than copying, and updating a bar
+ * invalidates only its own few pixels. */
+#define BAR_BASE_R 184
+#define BAR_MAX_H  34
+#define BAR_SPAN   140.0f
+
+static lv_point_precise_t s_bar_pts[PHAROS_DISP_HISTORY][2];
+static uint8_t s_bar_level[PHAROS_DISP_HISTORY];
+static uint32_t s_bar_rgb[PHAROS_DISP_HISTORY];
+
+static void bar_set(unsigned i, uint8_t level, uint32_t rgb)
+{
+    if (i >= PHAROS_DISP_HISTORY || !s_bar[i]) {
+        return;
+    }
+    const uint32_t want = level ? rgb : HUD_DENIED;
+    if (s_bar_rgb[i] != want) {
+        s_bar_rgb[i] = want;
+        lv_obj_set_style_line_color(s_bar[i], lv_color_hex(want), 0);
+    }
+    if (s_bar_level[i] == level) {
+        return; /* same height: no geometry to rewrite, nothing invalidated */
+    }
+    s_bar_level[i] = level;
+
+    const float a = -BAR_SPAN / 2.0f +
+                    BAR_SPAN * ((float)i + 0.5f) / (float)PHAROS_DISP_HISTORY;
+    const int h = ((int)level * BAR_MAX_H) / 255;
+    const pr_point_t p0 = pr_polar((int16_t)BAR_BASE_R, a);
+    const pr_point_t p1 = pr_polar((int16_t)(BAR_BASE_R + (h > 5 ? h : 5)), a);
+
+    /* An lv_line's points are relative to the object, and an object with
+     * LV_SIZE_CONTENT sizes itself to the largest point - so points carrying
+     * their full screen offset would give every bar a bounding box reaching
+     * back to the top-left corner. Changing one bar would then invalidate most
+     * of the panel, which is the exact cost this whole file exists to avoid.
+     *
+     * Anchor each bar at its own bounding box instead and keep the points
+     * local, so a bar redraws a few dozen pixels and nothing else. */
+    const int16_t minx = (p0.x < p1.x) ? p0.x : p1.x;
+    const int16_t miny = (p0.y < p1.y) ? p0.y : p1.y;
+
+    s_bar_pts[i][0].x = p0.x - minx;
+    s_bar_pts[i][0].y = p0.y - miny;
+    s_bar_pts[i][1].x = p1.x - minx;
+    s_bar_pts[i][1].y = p1.y - miny;
+    lv_obj_set_pos(s_bar[i], minx, miny);
+    lv_line_set_points(s_bar[i], s_bar_pts[i], 2);
+}
+
+/* ---- construction ---------------------------------------------------- */
 
 bool pharos_hud_create(void)
 {
@@ -145,16 +403,23 @@ bool pharos_hud_create(void)
         return false;
     }
 
+    /* THE FLAG. The screen itself is scrollable by default and the content
+     * deliberately extends past its bounds, so without this a drag slides the
+     * whole HUD away permanently. */
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
+
     /* AMOLED: an unlit pixel costs no power, so the field is near-black. */
     lv_obj_set_style_bg_color(scr, lv_color_hex(HUD_VOID), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
 
+    /* ---- shared chrome, under both pages ---- */
+
     /* The instrument face: a slightly lifted disc inside the void, with a rim
      * line. This is what makes it read as an instrument rather than as text on
      * a black background. */
-    s_field = lv_obj_create(scr);
-    lv_obj_remove_style_all(s_field);
+    s_field = mk_box(scr);
     lv_obj_set_size(s_field, 462, 462);
     lv_obj_center(s_field);
     lv_obj_set_style_radius(s_field, LV_RADIUS_CIRCLE, 0);
@@ -162,12 +427,13 @@ bool pharos_hud_create(void)
     lv_obj_set_style_bg_opa(s_field, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_field, lv_color_hex(HUD_RIM), 0);
     lv_obj_set_style_border_width(s_field, 1, 0);
-    lv_obj_remove_flag(s_field, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 24 bezel ticks, every sixth long and cyan - the instrument's compass. */
     s_ticks = lv_scale_create(scr);
     lv_obj_set_size(s_ticks, 440, 440);
     lv_obj_center(s_ticks);
+    lv_obj_remove_flag(s_ticks, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_ticks, LV_OBJ_FLAG_CLICKABLE);
     lv_scale_set_mode(s_ticks, LV_SCALE_MODE_ROUND_INNER);
     lv_scale_set_total_tick_count(s_ticks, 25);
     lv_scale_set_major_tick_every(s_ticks, 6);
@@ -182,123 +448,135 @@ bool pharos_hud_create(void)
     lv_obj_set_style_line_width(s_ticks, 3, LV_PART_INDICATOR);
     lv_obj_set_style_line_color(s_ticks, lv_color_hex(HUD_CYAN), LV_PART_INDICATOR);
     lv_obj_set_style_arc_opa(s_ticks, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_remove_flag(s_ticks, LV_OBJ_FLAG_CLICKABLE);
 
-    /* The gauge track, then the ghost, then the score - three arcs on the same
-     * radius. The ghost is the honesty: score EARNED that the confidence
-     * ceiling then took away, shown dimmed rather than silently dropped. */
-    s_track = lv_arc_create(scr);
-    s_ghost = lv_arc_create(scr);
-    s_arc = lv_arc_create(scr);
-    lv_obj_set_size(s_arc, 400, 400);
-    lv_obj_center(s_arc);
-    lv_arc_set_rotation(s_arc, 135);
-    lv_arc_set_bg_angles(s_arc, 0, 270);
-    lv_arc_set_range(s_arc, 0, 100);
-    lv_arc_set_value(s_arc, 0);
-    /* An lv_arc is an INPUT widget by default - it tracks your finger like a
-     * slider. This one is a gauge reporting a confidence score, so being
-     * draggable is not a cosmetic problem: it lets a fingertip overwrite a
-     * measurement. Strip the knob and every way of grabbing it. */
-    lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_CLICK_FOCUSABLE);
-    lv_arc_set_change_rate(s_arc, 0);
-    lv_obj_set_style_arc_opa(s_arc, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_arc, 18, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_arc, lv_color_hex(HUD_CYAN), LV_PART_INDICATOR);
+    /* The permanent receive-only tell, on the bezel where it is always true. */
+    s_pip = mk_box(scr);
+    lv_obj_set_size(s_pip, 8, 8);
+    lv_obj_align(s_pip, LV_ALIGN_CENTER, 0, 200);
+    lv_obj_set_style_radius(s_pip, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_pip, lv_color_hex(HUD_GREEN), 0);
+    lv_obj_set_style_bg_opa(s_pip, LV_OPA_COVER, 0);
 
-    /* The two arcs behind it, configured the same way. */
-    {
-        lv_obj_t *back[2] = { s_track, s_ghost };
-        for (int i = 0; i < 2; i++) {
-            lv_obj_t *a = back[i];
-            lv_obj_set_size(a, 400, 400);
-            lv_obj_center(a);
-            lv_arc_set_rotation(a, 135);
-            lv_arc_set_bg_angles(a, 0, 270);
-            lv_arc_set_range(a, 0, 100);
-            lv_arc_set_value(a, i == 0 ? 100 : 0);
-            lv_obj_remove_style(a, NULL, LV_PART_KNOB);
-            lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_remove_flag(a, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICK_FOCUSABLE);
-            lv_obj_set_style_arc_opa(a, LV_OPA_TRANSP, LV_PART_MAIN);
-            lv_obj_set_style_arc_width(a, i == 0 ? 22 : 16, LV_PART_INDICATOR);
-            lv_obj_set_style_arc_rounded(a, true, LV_PART_INDICATOR);
-            lv_obj_set_style_arc_color(a,
-                lv_color_hex(i == 0 ? HUD_TRACK2 : HUD_TRACK), LV_PART_INDICATOR);
-        }
-        /* Keep the painting order: track, ghost, score. */
-        lv_obj_move_to_index(s_track, 1);
-        lv_obj_move_to_index(s_ghost, 2);
-        lv_obj_move_to_index(s_arc, 3);
+    /* ---- the LIVE page ---- */
+
+    s_page_live = mk_box(scr);
+    lv_obj_set_size(s_page_live, PR_W, PR_H);
+    lv_obj_center(s_page_live);
+
+    /* Ribbon baseline, so a quiet stretch reads as a timeline with nothing on
+     * it rather than as a rendering fault. */
+    /* LVGL measures arc angles clockwise from 3 o'clock, so 12 o'clock is 270.
+     * Centring a BAR_SPAN-wide arc there starts it at 270 - BAR_SPAN/2. */
+    s_bar_base = mk_arc(s_page_live, (BAR_BASE_R - 4) * 2, 2, HUD_DENIED, 100);
+    lv_arc_set_rotation(s_bar_base, 270 - (int32_t)(BAR_SPAN / 2.0f));
+    lv_arc_set_bg_angles(s_bar_base, 0, (int32_t)BAR_SPAN);
+
+    for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+        s_bar[i] = lv_line_create(s_page_live);
+        lv_obj_remove_flag(s_bar[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(s_bar[i], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_line_width(s_bar[i], 7, 0);
+        lv_obj_set_style_line_rounded(s_bar[i], true, 0);
+        lv_obj_set_style_line_color(s_bar[i], lv_color_hex(HUD_DENIED), 0);
+        s_bar_level[i] = 0xFF; /* force the first write through */
+        s_bar_rgb[i] = 0xFFFFFFFFu;
+        bar_set(i, 0, HUD_DENIED);
     }
+
+    /* Track, then the capped-away ghost, then the score. */
+    s_track = mk_arc(s_page_live, 332, 20, HUD_TRACK2, 100);
+    s_ghost = mk_arc(s_page_live, 288, 4, HUD_GHOST, 0);
+    s_arc = mk_arc(s_page_live, 332, 16, HUD_CYAN, 0);
+
+    /* The ceiling: a hard stop drawn as a short TICK across the arc, not as a
+     * second band of colour. The old face drew it as a fat arc behind the
+     * score, where two bars of the same weight showing different numbers read
+     * as a bug rather than as a limit.
+     *
+     * A tick means driving the indicator's angles directly rather than through
+     * a value - lv_arc_set_value() would fill everything from the start of the
+     * sweep to that point, which is the band we are trying not to draw. */
+    s_ceiling = mk_arc(s_page_live, 332, 24, HUD_RED, 0);
+    lv_obj_set_style_arc_rounded(s_ceiling, false, LV_PART_INDICATOR);
+    lv_arc_set_angles(s_ceiling, 0, 0);
 
     /* The dark disc the headline sits on, so the number never competes with
      * the gauge behind it. */
-    s_core = lv_obj_create(scr);
-    lv_obj_remove_style_all(s_core);
-    lv_obj_set_size(s_core, 210, 210);
-    lv_obj_align(s_core, LV_ALIGN_CENTER, 0, -16);
+    s_core = mk_box(s_page_live);
+    lv_obj_set_size(s_core, 192, 192);
+    lv_obj_center(s_core);
     lv_obj_set_style_radius(s_core, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_core, lv_color_hex(HUD_VOID), 0);
     lv_obj_set_style_bg_opa(s_core, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_core, lv_color_hex(HUD_TRACK), 0);
     lv_obj_set_style_border_width(s_core, 1, 0);
-    lv_obj_remove_flag(s_core, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_lens   = mk_label(scr, &lv_font_montserrat_22, HUD_TEXT,   LV_ALIGN_CENTER, 0, -122, "PHAROS");
-    s_pos    = mk_label(scr, &lv_font_montserrat_16, HUD_DIMMER, LV_ALIGN_CENTER, 0,  -92, "");
-    s_big    = mk_label(scr, &lv_font_montserrat_48, HUD_TEXT,   LV_ALIGN_CENTER, 0,  -34, "--");
-    s_band   = mk_label(scr, &lv_font_montserrat_22, HUD_CYAN,   LV_ALIGN_CENTER, 0,   16, "starting");
-    s_detail = mk_label(scr, &lv_font_montserrat_16, HUD_DIM,    LV_ALIGN_CENTER, 0,   52, "");
+    s_peak   = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIMMER, 0, -128, "");
+    s_ctx    = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIMMER, 0,  -52, "");
+    s_big    = mk_label(s_page_live, &lv_font_montserrat_48, HUD_TEXT,   0,   -4, "--");
+    s_band   = mk_label(s_page_live, &lv_font_montserrat_20, HUD_CYAN,   0,   44, "");
+    s_detail = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIM,    0,   88, "");
+    s_why    = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIM,    0,  158, "");
 
-    /* The description, wrapped. Capped at the widest a multi-line block can be
-     * inside this circle without running into the bezel. */
-    s_summary = mk_label(scr, &lv_font_montserrat_18, HUD_DIM, LV_ALIGN_CENTER, 0, -6, "");
-    lv_label_set_long_mode(s_summary, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_summary, 300);
-    lv_obj_align(s_summary, LV_ALIGN_CENTER, 0, 84);
+    /* The evidence pips: four labelled boxes, not four anonymous dots. Naming
+     * them is the whole improvement - "why does it think so" becomes
+     * answerable from the glass instead of from the manual. */
+    {
+        const int w = 74, gap = 8, h = 26;
+        const int total = 4 * w + 3 * gap;
+        for (unsigned i = 0; i < PHAROS_DISP_FAMILIES; i++) {
+            const int dx = -total / 2 + (int)i * (w + gap) + w / 2;
+            s_fam_box[i] = mk_box(s_page_live);
+            lv_obj_set_size(s_fam_box[i], w, h);
+            lv_obj_align(s_fam_box[i], LV_ALIGN_CENTER, dx, 125);
+            lv_obj_set_style_radius(s_fam_box[i], 6, 0);
+            lv_obj_set_style_bg_color(s_fam_box[i], lv_color_hex(HUD_PIP_UP), 0);
+            lv_obj_set_style_bg_opa(s_fam_box[i], LV_OPA_COVER, 0);
+            s_fam_txt[i] = mk_label(s_page_live, &lv_font_montserrat_12,
+                                    HUD_DENIED, dx, 125, "");
+        }
+    }
 
-    s_hint = mk_label(scr, &lv_font_montserrat_16, HUD_DIMMER, LV_ALIGN_CENTER, 0, 120, "");
-    s_rx   = mk_label(scr, &lv_font_montserrat_16, HUD_GREEN,  LV_ALIGN_CENTER, 0, 152,
-                      "receive-only");
+    /* ---- the BROWSE page ---- */
 
-    /* The permanent receive-only tell, on the bezel where it is always true. */
-    s_pip = lv_obj_create(scr);
-    lv_obj_remove_style_all(s_pip);
-    lv_obj_set_size(s_pip, 8, 8);
-    lv_obj_align(s_pip, LV_ALIGN_CENTER, 0, 186);
-    lv_obj_set_style_radius(s_pip, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_pip, lv_color_hex(HUD_GREEN), 0);
-    lv_obj_set_style_bg_opa(s_pip, LV_OPA_COVER, 0);
+    s_page_browse = mk_box(scr);
+    lv_obj_set_size(s_page_browse, PR_W, PR_H);
+    lv_obj_center(s_page_browse);
 
-    s_toast = mk_label(scr, &lv_font_montserrat_20, HUD_TEXT, LV_ALIGN_CENTER, 0, 86, "");
+    s_b_arc = mk_arc(s_page_browse, 332, 16, HUD_CYAN, 0);
+    s_b_name = mk_label(s_page_browse, &lv_font_montserrat_26, HUD_TEXT, 0, -60, "");
+    s_b_pos  = mk_label(s_page_browse, &lv_font_montserrat_16, HUD_DIMMER, 0, -22, "");
+    /* The one place a wrap is worth its cost: this text is static for as long
+     * as the cursor sits on a lens, so it re-lays-out on a cursor move and
+     * never during a repaint. */
+    s_b_summary = lv_label_create(s_page_browse);
+    lv_obj_remove_flag(s_b_summary, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_text_font(s_b_summary, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_b_summary, lv_color_hex(HUD_DIM), 0);
+    lv_obj_set_style_text_align(s_b_summary, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_b_summary, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_b_summary, 300);
+    lv_label_set_text(s_b_summary, "");
+    lv_obj_align(s_b_summary, LV_ALIGN_CENTER, 0, 40);
+    s_b_hint = mk_label(s_page_browse, &lv_font_montserrat_16, HUD_DIMMER, 0, 130,
+                        "tap centre to start");
+
+    /* ---- overlays ---- */
+
+    s_toast = mk_label(scr, &lv_font_montserrat_20, HUD_TEXT, 0, 86, "");
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
 
     /* Navigation zones, added last so they sit above everything. Left and
      * right thirds step through the lenses; the centre is the action. */
-    mk_zone(scr, LV_ALIGN_LEFT_MID,  150, 466, PHAROS_NAV_PREV);
-    mk_zone(scr, LV_ALIGN_RIGHT_MID, 150, 466, PHAROS_NAV_NEXT);
-    mk_zone(scr, LV_ALIGN_CENTER,    160, 300, PHAROS_NAV_SELECT);
+    mk_zone(scr, LV_ALIGN_LEFT_MID,  140, 400, PHAROS_NAV_PREV);
+    mk_zone(scr, LV_ALIGN_RIGHT_MID, 140, 400, PHAROS_NAV_NEXT);
+    mk_zone(scr, LV_ALIGN_CENTER,    160, 260, PHAROS_NAV_SELECT);
+
+    show(s_page_live, false);
+    show(s_page_browse, true);
 
     s_built = true;
     return true;
-}
-
-static void show(lv_obj_t *o, bool on)
-{
-    if (!o) {
-        return;
-    }
-    if (on) {
-        lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
-    }
 }
 
 static void toast_tick(void)
@@ -328,111 +606,124 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
         return;
     }
     toast_tick();
+    show(s_page_live, false);
+    show(s_page_browse, true);
 
-    /* Nothing is running, so the reading widgets have nothing honest to show
-     * and are hidden rather than left displaying a stale number. */
-    show(s_big, false);
-    show(s_band, false);
-    show(s_detail, false);
-    show(s_summary, true);
-    show(s_hint, true);
-
-    if (s_lens) {
-        lv_label_set_text(s_lens, name ? name : "");
-        lv_obj_set_style_text_color(s_lens, lv_color_hex(HUD_TEXT), 0);
-    }
-    if (s_pos) {
+    set_text(s_b_name, name ? name : "");
+    set_text_colour(s_b_name, rgb);
+    {
         char buf[32];
-        snprintf(buf, sizeof(buf), "%s  %u / %u", team ? team : "",
-                 index + 1u, total ? total : 1u);
-        lv_label_set_text(s_pos, buf);
+        snprintf(buf, sizeof(buf), "%s  %u / %u", team ? team : "", index + 1u,
+                 total ? total : 1u);
+        set_text(s_b_pos, buf);
     }
-    if (s_summary) {
-        lv_label_set_text(s_summary, summary ? summary : "");
-    }
-    if (s_hint) {
-        lv_label_set_text(s_hint, "tap centre to start");
-    }
-    if (s_arc) {
-        lv_arc_set_value(s_arc, (int)((index + 1u) * 100u / (total ? total : 1u)));
-        lv_obj_set_style_arc_color(s_arc, lv_color_hex(rgb), LV_PART_INDICATOR);
-    }
-    if (s_ghost) {
-        lv_arc_set_value(s_ghost, 0);
-    }
-    /* No headline number here, so the disc it would sit on is hidden too. */
-    show(s_core, false);
-    show(s_ticks, true);
-    if (s_lens) lv_obj_set_style_text_color(s_lens, lv_color_hex(rgb), 0);
+    set_text(s_b_summary, summary ? summary : "");
+    set_arc_value(s_b_arc, (int)((index + 1u) * 100u / (total ? total : 1u)));
+    set_arc_colour(s_b_arc, rgb);
 }
 
 /* ---- LIVE: the lens running ------------------------------------------ */
 
-void pharos_hud_advice(const char *advice)
-{
-    if (!s_built || !s_summary) {
-        return;
-    }
-    /* The advice reuses the summary label: in LIVE the question is no longer
-     * "what is this tool" but "what do I do now", and both belong in the same
-     * place on the glass. */
-    lv_label_set_text(s_summary, advice ? advice : "");
-    show(s_summary, advice && advice[0]);
-}
-
-void pharos_hud_ceiling(int ceiling)
-{
-    if (!s_built || !s_ghost) {
-        return;
-    }
-    if (ceiling < 0) ceiling = 0;
-    if (ceiling > 100) ceiling = 100;
-    lv_arc_set_value(s_ghost, ceiling);
-}
-
-void pharos_hud_live(const char *lens, const char *big, const char *band,
-                     const char *detail, int score, uint32_t rgb)
+void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
+                     uint32_t rgb_override)
 {
     if (!s_built) {
         return;
     }
     toast_tick();
+    show(s_page_browse, false);
+    show(s_page_live, true);
 
-    show(s_big, true);
-    show(s_band, true);
-    show(s_detail, true);
-    show(s_summary, false);
-    show(s_hint, true);
-
-    if (score < 0) score = 0;
-    if (score > 100) score = 100;
-
-    /* The band decides the colour, not the caller: a 78 must look like a 78
-     * whichever lens produced it, exactly as in the rendered screens. rgb is
-     * honoured only when a caller deliberately overrides (the splash). */
-    const uint32_t col = rgb ? rgb : band_colour(score);
-
-    if (lens && s_lens)     lv_label_set_text(s_lens, lens);
-    if (big && s_big)       lv_label_set_text(s_big, big);
-    if (band && s_band)     lv_label_set_text(s_band, band);
-    if (detail && s_detail) lv_label_set_text(s_detail, detail);
-    if (s_pos)              lv_label_set_text(s_pos, "");
-    if (s_hint)             lv_label_set_text(s_hint, "hold to go back");
-
-    if (s_arc) {
-        lv_arc_set_value(s_arc, score);
-        lv_obj_set_style_arc_color(s_arc, lv_color_hex(col), LV_PART_INDICATOR);
+    if (!d) {
+        set_text(s_ctx, lens ? lens : "");
+        set_text(s_big, "--");
+        set_text(s_band, "starting");
+        set_text(s_detail, "");
+        set_text(s_why, "");
+        set_text(s_peak, "");
+        set_arc_value(s_arc, 0);
+        set_arc_value(s_ghost, 0);
+        set_ceiling_tick(0);
+        for (unsigned i = 0; i < PHAROS_DISP_FAMILIES; i++) {
+            set_text(s_fam_txt[i], "");
+            set_bg_colour(s_fam_box[i], HUD_PIP_UP);
+        }
+        for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+            bar_set(i, 0, HUD_DENIED);
+        }
+        return;
     }
-    if (s_big)  lv_obj_set_style_text_color(s_big, lv_color_hex(col), 0);
-    if (s_band) lv_obj_set_style_text_color(s_band, lv_color_hex(col), 0);
-    show(s_core, true);
-    show(s_ticks, true);
+
+    const int score = d->has_score ? (int)d->score : 0;
+    /* The band decides the colour, not the caller: a 78 must look like a 78
+     * whichever lens produced it, exactly as in the rendered screens. The
+     * override exists only for the splash. */
+    const uint32_t col = rgb_override ? rgb_override
+                                      : (d->has_score ? band_colour(score) : HUD_DIM);
+
+    /* The context line carries what is under pressure and how hard this
+     * receiver is looking. It used to live on the top rim, which is where the
+     * activity ribbon now is - a text run and a bar chart sharing an arc is
+     * how you get a screen that looks broken. */
+    set_text(s_ctx, lens ? lens : "");
+    set_text(s_big, d->big);
+    set_text(s_band, d->band);
+    set_text(s_detail, d->detail);
+    set_text_colour(s_big, col);
+    set_text_colour(s_band, col);
+
+    /* Prefer the specific finding over the generic advice: "sequence counter
+     * went backwards" tells an operator something "the shape looks wrong"
+     * does not. */
+    const bool specific = d->why[0] != '\0';
+    set_text(s_why, specific ? d->why : d->advice);
+    set_text_colour(s_why, specific ? col : HUD_DIM);
+
+    set_arc_value(s_arc, score);
+    set_arc_colour(s_arc, col);
+    /* What the caps took away, thin and inset. Zero when nothing was taken,
+     * so the trace only appears when it has something to say. */
+    set_arc_value(s_ghost, (d->raw_score > d->score) ? (int)d->raw_score : 0);
+    set_ceiling_tick(d->has_score ? (int)d->ceiling : 0);
+
+    for (unsigned i = 0; i < PHAROS_DISP_FAMILIES; i++) {
+        const bool lit = (d->families & (1u << i)) != 0;
+        set_text(s_fam_txt[i], d->fam_label[i] ? d->fam_label[i] : "");
+        set_text_colour(s_fam_txt[i], lit ? col : HUD_DENIED);
+        set_bg_colour(s_fam_box[i], lit ? HUD_PIP_ON : HUD_PIP_UP);
+    }
+
+    if (d->has_history) {
+        uint8_t peak = 0;
+        for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+            if (d->history[i] > peak) peak = d->history[i];
+        }
+        for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+            bar_set(i, d->history[i], col);
+        }
+        set_text(s_peak, peak ? "16s" : "");
+    } else {
+        for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+            bar_set(i, 0, HUD_DENIED);
+        }
+        set_text(s_peak, "");
+    }
 }
 
-void pharos_hud_update(const char *lens, const char *big, const char *band,
-                       const char *detail, int score, uint32_t rgb)
+void pharos_hud_splash(const char *version, bool fence_clean)
 {
-    pharos_hud_live(lens, big, band, detail, score, rgb);
+    if (!pharos_hud_create()) {
+        return;
+    }
+    struct pharos_lens_display d;
+    memset(&d, 0, sizeof(d));
+    snprintf(d.big, sizeof(d.big), "%s", "\xE2\x97\x89"); /* a filled ring: the lamp */
+    snprintf(d.band, sizeof(d.band), "%s",
+             fence_clean ? "receive-only" : "FENCE UNVERIFIED");
+    snprintf(d.detail, sizeof(d.detail), "%s", version ? version : "");
+    snprintf(d.advice, sizeof(d.advice), "%s",
+             fence_clean ? "tap the edges to browse" : "check the fence");
+    pharos_hud_live("PHAROS", &d, fence_clean ? HUD_GREEN : 0xE8503F);
 }
 
 void pharos_hud_colourbars(void)
@@ -441,9 +732,26 @@ void pharos_hud_colourbars(void)
     if (!scr) {
         return;
     }
-    /* Start from a clean screen: this is a measurement, not a HUD overlay. */
+    /* Start from a clean screen: this is a measurement, not a HUD overlay.
+     * Everything above is destroyed with it, so the pointers must go too or
+     * the next repaint writes into freed objects. */
     lv_obj_clean(scr);
     s_built = false;
+    s_page_browse = NULL;
+    s_page_live = NULL;
+    for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+        s_bar[i] = NULL;
+    }
+    for (unsigned i = 0; i < PHAROS_DISP_FAMILIES; i++) {
+        s_fam_box[i] = NULL;
+        s_fam_txt[i] = NULL;
+    }
+    s_field = s_ticks = s_pip = s_toast = NULL;
+    s_track = s_arc = s_ghost = s_ceiling = s_core = NULL;
+    s_ctx = s_big = s_band = s_detail = s_why = s_peak = s_bar_base = NULL;
+    s_ceiling_at = -1;
+    s_b_name = s_b_pos = s_b_summary = s_b_hint = s_b_arc = NULL;
+
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
 
@@ -456,6 +764,7 @@ void pharos_hud_colourbars(void)
     for (int i = 0; i < n; i++) {
         lv_obj_t *b = lv_obj_create(scr);
         lv_obj_remove_style_all(b);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_size(b, PR_W, h);
         lv_obj_set_pos(b, 0, i * h);
         lv_obj_set_style_bg_color(b, lv_color_hex(bar[i].rgb), 0);
@@ -469,24 +778,6 @@ void pharos_hud_colourbars(void)
                                 ? 0x000000 : 0xFFFFFF), 0);
         lv_label_set_text(t, bar[i].name);
         lv_obj_center(t);
-    }
-}
-
-void pharos_hud_splash(const char *version, bool fence_clean)
-{
-    if (!pharos_hud_create()) {
-        return;
-    }
-    pharos_hud_live("PHAROS", "\xE2\x97\x89", /* a filled ring: the lamp */
-                    fence_clean ? "receive-only" : "FENCE UNVERIFIED",
-                    version ? version : "", 0,
-                    fence_clean ? HUD_GREEN : 0xE8503F);
-    if (s_hint) {
-        lv_label_set_text(s_hint, "tap the edges to browse");
-    }
-    if (s_rx) {
-        lv_label_set_text(s_rx, fence_clean ? "fence clean" : "check the fence");
-        lv_obj_set_style_text_color(s_rx, lv_color_hex(fence_clean ? HUD_GREEN : 0xE8503F), 0);
     }
 }
 
@@ -501,59 +792,15 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
 {
     (void)name; (void)summary; (void)team; (void)index; (void)total; (void)rgb;
 }
-void pharos_hud_live(const char *lens, const char *big, const char *band,
-                     const char *detail, int score, uint32_t rgb)
+void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
+                     uint32_t rgb_override)
 {
-    (void)lens; (void)big; (void)band; (void)detail; (void)score; (void)rgb;
+    (void)lens; (void)d; (void)rgb_override;
 }
-void pharos_hud_update(const char *lens, const char *big, const char *band,
-                       const char *detail, int score, uint32_t rgb)
-{
-    (void)lens; (void)big; (void)band; (void)detail; (void)score; (void)rgb;
-}
-void pharos_hud_colourbars(void)
-{
-    lv_obj_t *scr = lv_screen_active();
-    if (!scr) {
-        return;
-    }
-    /* Start from a clean screen: this is a measurement, not a HUD overlay. */
-    lv_obj_clean(scr);
-    s_built = false;
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
-
-    static const struct { uint32_t rgb; const char *name; } bar[] = {
-        { 0xFF0000, "RED"   }, { 0x00FF00, "GREEN" }, { 0x0000FF, "BLUE"  },
-        { 0xFFFF00, "YELLOW"}, { 0xFFFFFF, "WHITE" }, { 0x000000, "BLACK" },
-    };
-    const int n = (int)(sizeof(bar) / sizeof(bar[0]));
-    const int h = PR_H / n;
-    for (int i = 0; i < n; i++) {
-        lv_obj_t *b = lv_obj_create(scr);
-        lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, PR_W, h);
-        lv_obj_set_pos(b, 0, i * h);
-        lv_obj_set_style_bg_color(b, lv_color_hex(bar[i].rgb), 0);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-
-        lv_obj_t *t = lv_label_create(b);
-        lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
-        /* Label in the opposite luminance so it is readable on its own patch. */
-        lv_obj_set_style_text_color(
-            t, lv_color_hex(bar[i].rgb == 0xFFFFFF || bar[i].rgb == 0xFFFF00
-                                ? 0x000000 : 0xFFFFFF), 0);
-        lv_label_set_text(t, bar[i].name);
-        lv_obj_center(t);
-    }
-}
-
 void pharos_hud_splash(const char *version, bool fence_clean)
 {
     (void)version; (void)fence_clean;
 }
 void pharos_hud_colourbars(void) {}
-void pharos_hud_ceiling(int ceiling) { (void)ceiling; }
-void pharos_hud_advice(const char *advice) { (void)advice; }
 
 #endif

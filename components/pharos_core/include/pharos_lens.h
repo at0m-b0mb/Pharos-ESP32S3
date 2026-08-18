@@ -33,14 +33,41 @@ typedef enum {
 
 /* A display-ready verdict. Fixed-size and self-contained: the UI must never
  * hold a pointer into a lens' state, which changes on another core. */
+/* How many evidence families the face can draw, and how many seconds of
+ * activity history the ribbon holds. Both are UI capacities, not engine ones:
+ * a lens with more families than this shows its strongest four. */
+#define PHAROS_DISP_FAMILIES 4
+#define PHAROS_DISP_HISTORY 16
+
 struct pharos_lens_display {
     char big[16];     /* the headline: a score, a grade, a word     */
     char band[24];    /* what that headline MEANS                   */
     char detail[48];  /* the supporting numbers                     */
     char advice[96];  /* what to do about it                        */
     uint8_t score;    /* 0..100, drives the gauge and its colour    */
+    uint8_t raw_score;/* what the evidence earned BEFORE the caps   */
     uint8_t ceiling;  /* the most this observation could have earned*/
     bool has_score;   /* false when the headline is not a score     */
+
+    /* WHY it thinks so, drawn as labelled pips rather than as anonymous dots.
+     * Bit i of `families` lights pip i; fam_label[i] names it and must point
+     * at storage that outlives the call - a string literal, in practice, never
+     * a buffer on the lens' stack. Leave the labels NULL to draw no pips. */
+    uint8_t families;
+    const char *fam_label[PHAROS_DISP_FAMILIES];
+
+    /* The last PHAROS_DISP_HISTORY seconds of activity, oldest first, each
+     * normalised to 0..255 by the lens against its own peak. A score says
+     * whether something is happening; this says what shape it is, which is
+     * the question an operator asks next. All zero draws a quiet timeline,
+     * which is itself information. */
+    uint8_t history[PHAROS_DISP_HISTORY];
+    bool has_history;
+
+    /* The one specific finding worth a line of glass - "sequence counter went
+     * backwards" rather than "the shape looks wrong". Empty when the lens has
+     * nothing more specific than its band advice to offer. */
+    char why[48];
 };
 
 typedef struct pharos_lens {
@@ -99,6 +126,20 @@ typedef struct pharos_lens {
      * numbers the reports and the console do. Returning false means "I have
      * nothing to say yet", and the UI says THAT rather than inventing a value. */
     bool (*display)(struct pharos_lens_display *out);
+
+    /* The centre tap, while this lens is RUNNING.
+     *
+     * In BROWSE the centre starts a lens; in LIVE it used to do nothing at
+     * all, and that hole had a real cost. The Watch engine's confidence
+     * ceiling is set by how much of the channel the receiver hears, so the
+     * single most useful thing an operator can do about a suspicious reading
+     * is stop hopping and stand still - and there was no control on the glass
+     * that did it. The only way to camp was a console command over USB, which
+     * is not a thing you do while holding the device up in a corridor.
+     *
+     * Called on the UI task, never on LVGL's, so it may do real work. NULL
+     * means the centre stays inert for this lens. */
+    void (*on_select)(void);
 } pharos_lens_t;
 
 /* Upper bound on registered lenses. Defined here (not just in the .c) because

@@ -340,8 +340,15 @@ static int cli_screen(int argc, char **argv)
             return 1;
         }
         pharos_hud_create();
-        pharos_hud_update("DIAG", "TEST", "screen test",
-                          "if you can read this, pixels work", 66, 0x3DDC84);
+        struct pharos_lens_display t;
+        memset(&t, 0, sizeof(t));
+        snprintf(t.big, sizeof(t.big), "TEST");
+        snprintf(t.band, sizeof(t.band), "screen test");
+        snprintf(t.detail, sizeof(t.detail), "if you can read this, pixels work");
+        t.score = 66;
+        t.ceiling = 96;
+        t.has_score = true;
+        pharos_hud_live("DIAG", &t, 0x3DDC84);
         pharos_bsp_display_unlock();
         printf("test pattern pushed - look at the panel\n");
         return 0;
