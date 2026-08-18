@@ -716,6 +716,103 @@ static void test_watch_ceiling_is_never_exceeded(void)
     }
 }
 
+
+/* ---- the two faults real air found ----------------------------------- */
+
+/* A retransmitted disconnect carries the SAME sequence number, by design: the
+ * retry bit is set precisely so the receiver can discard the duplicate. An
+ * access point retrying one frame therefore looked exactly like a tool
+ * blasting a hand-built one, and the first ambient capture this engine ever
+ * saw graded an empty room SUSPICIOUS with SEQ_FROZEN lit. */
+static void test_watch_retries_are_not_a_frozen_counter(void)
+{
+    banner("watch: retransmissions are not a frozen sequence counter");
+    pw_engine_t e;
+    pw_verdict_t v;
+    pw_context_t c = ctx_of(1000, 1000);
+
+    pw_reset(&e);
+    ap_t ap = mk_ap(0x30, -50, PHAROS_RSN_F_PRESENT, 2);
+    beacons(&e, &ap, 40, T0);
+
+    /* One genuine disconnect, retried fifteen times on the same counter. */
+    ap.seq = (uint16_t)((ap.seq + 1) & 0x0FFF);
+    for (int i = 0; i < 16; i++) {
+        pharos_ev_dot11_t d = frame(PHAROS_ST_DEAUTH, CLIENT1, ap.bssid, ap.rssi,
+                                    4, ap.seq, i ? PHAROS_DOT11_F_RETRY : 0, 0);
+        pw_observe(&e, &d, T0 + 4000000ull + (uint64_t)i * 3000ull);
+    }
+    pw_evaluate(&e, T0 + 9900000ull, &c, &v);
+
+    CHECK((v.forgery & PW_FORGE_SEQ_FROZEN) == 0,
+          "a retried frame is not a forgery (forgery=0x%02x)", v.forgery);
+}
+
+/* The duty correction divides by the share of the channel that was heard, and
+ * as that share approaches zero the quotient approaches nonsense. On hardware
+ * this read `est=33600.00/s dwell=0%` moments after the lens stopped camping,
+ * and the RATE family fired on an empty room. Below PW_MIN_CHANNEL_MS of
+ * observed channel time there is no denominator worth dividing by. */
+static void test_watch_no_rate_without_channel_time(void)
+{
+    banner("watch: no channel time, no rate");
+    pw_engine_t e;
+    pw_verdict_t v;
+
+    pw_reset(&e);
+    ap_t ap = mk_ap(0x31, -50, PHAROS_RSN_F_PRESENT, 2);
+    beacons(&e, &ap, 30, T0);
+    /* Spread thinly enough that no single second holds two, so the peak-second
+     * path - which is a direct measurement and rightly survives - contributes
+     * nothing and the extrapolation is the only thing under test. */
+    for (int i = 0; i < 5; i++) {
+        genuine_deauth(&e, &ap, CLIENT1, T0 + 3000000ull + (uint64_t)i * 1400000ull, 7);
+    }
+
+    /* A receiver that has barely visited this channel: 3 per mille of a ten
+     * second window is 30 ms of channel time, well under the floor. */
+    pw_context_t sliver = ctx_of(3, 1000);
+    pw_evaluate(&e, T0 + 9900000ull, &sliver, &v);
+    CHECK(v.notes & PW_NOTE_NO_RATE, "the engine declines to quote a rate");
+    CHECK_EQ(v.est_per_s_x100, 0);
+    CHECK_EQ(v.c_rate, 0);
+    CHECK((v.families & PW_FAM_RATE) == 0,
+          "and the rate family does not fire on a sliver");
+
+    /* Camped on the same evidence, the rate is quotable again. */
+    pw_context_t camped = ctx_of(1000, 1000);
+    pw_evaluate(&e, T0 + 9900000ull, &camped, &v);
+    CHECK((v.notes & PW_NOTE_NO_RATE) == 0, "camped, the rate stands");
+    CHECK(v.est_per_s_x100 > 0, "and it is a real number (%u)", v.est_per_s_x100);
+}
+
+/* The peak second is a COUNT, not an extrapolation - it is what this receiver
+ * actually heard inside one wall-clock second - so a thin dwell does not
+ * invalidate it and it must keep contributing even when the extrapolated rate
+ * is refused. Suppressing both would throw away the one rate signal that
+ * hopping cannot distort. */
+static void test_watch_peak_second_survives_thin_dwell(void)
+{
+    banner("watch: the peak second is a measurement and survives a thin dwell");
+    pw_engine_t e;
+    pw_verdict_t v;
+
+    pw_reset(&e);
+    ap_t ap = mk_ap(0x32, -50, PHAROS_RSN_F_PRESENT, 2);
+    beacons(&e, &ap, 30, T0);
+    /* Twenty in one second: heard, counted, not inferred. */
+    for (int i = 0; i < 20; i++) {
+        genuine_deauth(&e, &ap, CLIENT1, T0 + 4000000ull + (uint64_t)i * 40000ull, 7);
+    }
+    pw_context_t sliver = ctx_of(3, 1000);
+    pw_evaluate(&e, T0 + 9900000ull, &sliver, &v);
+
+    CHECK(v.notes & PW_NOTE_NO_RATE, "the extrapolation is still refused");
+    CHECK_EQ(v.est_per_s_x100, 0);
+    CHECK(v.peak_second >= 15, "the peak second was counted (%u)", v.peak_second);
+    CHECK(v.c_rate > 0, "and it still scores on what was actually heard");
+}
+
 void test_watch(void)
 {
     test_watch_ceiling();
@@ -738,5 +835,8 @@ void test_watch(void)
     test_watch_short_window();
     test_watch_pressure_channel();
     test_watch_vocabulary();
+    test_watch_retries_are_not_a_frozen_counter();
+    test_watch_no_rate_without_channel_time();
+    test_watch_peak_second_survives_thin_dwell();
     test_watch_ceiling_is_never_exceeded();
 }

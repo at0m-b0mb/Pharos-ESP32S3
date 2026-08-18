@@ -180,6 +180,24 @@ typedef enum {
 #define PW_NOTE_HARD         (1u << 4) /* a dwell-independent proof fired    */
 #define PW_NOTE_MFP_TARGET   (1u << 5) /* the victim network runs 802.11w    */
 #define PW_NOTE_PROTECTED    (1u << 6) /* some disconnects were MFP-protected */
+#define PW_NOTE_NO_RATE      (1u << 7) /* too little channel time to quote a rate */
+
+/* The least channel time, in milliseconds, that makes a duty-corrected rate
+ * worth quoting.
+ *
+ * The correction divides what was heard by the share of the channel that was
+ * listened to, and as that share approaches zero the quotient approaches
+ * nonsense. On the first hardware run this produced `est=33600.00/s dwell=0%`
+ * moments after the lens stopped camping - the receiver had just retuned, the
+ * decaying dwell window still held time spent elsewhere, and two frames became
+ * an estimate of thirty-three thousand a second. The RATE family duly fired on
+ * an empty room.
+ *
+ * A rate needs a denominator that was actually observed. Below this much
+ * channel time there is no denominator worth dividing by, so the engine quotes
+ * no rate at all and says so (PW_NOTE_NO_RATE) rather than extrapolating from
+ * a sliver. */
+#define PW_MIN_CHANNEL_MS 400u
 
 typedef struct {
     /* Per mille of wall time the receiver spent on the channel being judged.

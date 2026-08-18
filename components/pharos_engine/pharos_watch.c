@@ -551,6 +551,7 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
     uint32_t dom_hits = 0;
     int32_t dom_rssi_sum = 0;
     uint32_t dom_unprotected = 0;
+    uint32_t dom_nonretry = 0;
     uint16_t dom_seqs[16];
     unsigned dom_n_seqs = 0;
 
@@ -558,6 +559,7 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
         uint32_t hits = 0;
         int32_t rssi_sum = 0;
         uint32_t unprot = 0;
+        uint32_t nonretry = 0;
         uint16_t seqs[16];
         unsigned n_seqs = 0;
         for (unsigned i = 0; i < e->hit_count; i++) {
@@ -571,6 +573,20 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
             if (!(h->flags & PHAROS_DOT11_F_PROTECTED)) {
                 unprot++;
             }
+            /* RETRANSMISSIONS REUSE THE SEQUENCE NUMBER. That is not a
+             * forgery, it is 802.11 working: a frame the sender did not get
+             * acked is sent again with the retry bit set and the SAME counter
+             * value, precisely so the receiver can discard the duplicate.
+             *
+             * Counting them made an access point retrying one disconnect look
+             * exactly like a tool blasting a hand-built frame - and it did,
+             * on the first real air this engine ever saw: ambient traffic read
+             * SUSPICIOUS with SEQ_FROZEN lit. Retries are excluded from the
+             * distinct-value tally for that reason. */
+            if (h->flags & PHAROS_DOT11_F_RETRY) {
+                continue;
+            }
+            nonretry++;
             bool seen = false;
             for (unsigned q = 0; q < n_seqs; q++) {
                 if (seqs[q] == h->seq) { seen = true; break; }
@@ -583,6 +599,7 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
             dom_hits = hits;
             dom_rssi_sum = rssi_sum;
             dom_unprotected = unprot;
+            dom_nonretry = nonretry;
             dom_n_seqs = n_seqs;
             memcpy(dom_seqs, seqs, sizeof(seqs));
             memcpy(out->src, sources[s], 6);
@@ -617,8 +634,16 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
     /* Duty correction: scale what we heard by the share of the channel we were
      * listening to and the share of frames the bus kept. This is an
      * extrapolation, and it is the ONLY part of the score that hopping is
-     * allowed to inflate - which is why the ceiling exists to hold it back. */
-    {
+     * allowed to inflate - which is why the ceiling exists to hold it back.
+     *
+     * But it needs a denominator that was actually observed. See
+     * PW_MIN_CHANNEL_MS: below that much time on the channel there is nothing
+     * to divide by and the quotient is noise wearing a number's clothes. */
+    const uint32_t heard_ms = (uint32_t)(((uint64_t)elapsed_ms * dwell) / 1000ull);
+    if (heard_ms < PW_MIN_CHANNEL_MS) {
+        out->notes |= PW_NOTE_NO_RATE;
+        out->est_per_s_x100 = 0;
+    } else {
         const uint64_t num =
             (uint64_t)counted * 100ull * 1000ull * 1000ull * 1000ull;
         const uint64_t den =
@@ -632,7 +657,9 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
      * burst worth an alert. Above that we are into tool territory. */
     static const uint32_t rate_x[] = { 8, 50, 200, 800, 3000, 10000 };
     static const uint32_t rate_y[] = { 0,  7,  15,  23,   30,    34 };
-    uint32_t c_rate = interp(out->est_per_s_x100, rate_x, rate_y, 6);
+    uint32_t c_rate = (out->notes & PW_NOTE_NO_RATE)
+                          ? 0u
+                          : interp(out->est_per_s_x100, rate_x, rate_y, 6);
     /* The peak second is a measurement, not an extrapolation - it needs no
      * duty correction and it catches short bursts a ten-second mean flattens
      * into nothing. Take whichever reading is stronger. */
@@ -729,8 +756,9 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
     }
 
     /* A frozen counter is a property of the sender, so it is tested whether or
-     * not we ever heard the claimed AP beacon. */
-    if (dom_hits >= 8 && dom_n_seqs <= 2) {
+     * not we ever heard the claimed AP beacon. Judged on NON-RETRY frames
+     * only - see the note where they are counted. */
+    if (dom_nonretry >= 8 && dom_n_seqs <= 2) {
         out->forgery |= PW_FORGE_SEQ_FROZEN;
         forge += 12;
     }
