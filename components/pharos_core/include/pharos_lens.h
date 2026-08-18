@@ -70,6 +70,37 @@ struct pharos_lens_display {
     char why[48];
 };
 
+/* ---- the detail page -------------------------------------------------
+ *
+ * The live face answers "is something wrong, and how sure are you". That is
+ * the right thing to lead with, and it is deliberately one number.
+ *
+ * It is not the whole answer. A Census that grades the air around you and
+ * cannot then tell you WHICH networks it graded is asking to be taken on
+ * trust, which is the one thing this project refuses to do anywhere else. So
+ * a lens may also offer rows: its own evidence, in its own words, reachable
+ * from the live view.
+ *
+ * A row has two columns because nearly every useful line is a thing and a
+ * judgement about it - a network and its grade, a family and its score, a
+ * device and how many names it leaked.
+ *
+ * The lens does not choose colours. It states a TONE and the HUD maps it onto
+ * the one palette, so that red means the same thing on every page. */
+typedef enum {
+    PHAROS_TONE_NEUTRAL = 0, /* ordinary text                    */
+    PHAROS_TONE_DIM,         /* context, units, secondary detail */
+    PHAROS_TONE_GOOD,        /* nothing to do here               */
+    PHAROS_TONE_WARN,        /* worth knowing                    */
+    PHAROS_TONE_BAD,         /* act on this                      */
+} pharos_tone_t;
+
+struct pharos_lens_row {
+    char left[26];  /* the thing          */
+    char right[12]; /* the judgement      */
+    pharos_tone_t tone;
+};
+
 typedef struct pharos_lens {
     const char *id;      /* stable slug, used in logs: "wifi.census" */
     const char *name;    /* shown on the dial: "Census"              */
@@ -140,6 +171,22 @@ typedef struct pharos_lens {
      * Called on the UI task, never on LVGL's, so it may do real work. NULL
      * means the centre stays inert for this lens. */
     void (*on_select)(void);
+
+    /* The detail page: this lens' own evidence, one row at a time.
+     *
+     * Fill row `index` (0-based across the whole list; the HUD does its own
+     * paging) and return true, or return false when there are no more. A lens
+     * with nothing to list leaves this NULL and the detail page is not offered
+     * for it.
+     *
+     * Runs on the UI task and must not block: take the snapshot lock with a
+     * zero or tiny timeout and give up rather than stalling the repaint. */
+    bool (*row)(unsigned index, struct pharos_lens_row *out);
+
+    /* Column headings for that page, e.g. "NETWORK" and "GRADE". Either may
+     * be NULL. */
+    const char *row_head_left;
+    const char *row_head_right;
 } pharos_lens_t;
 
 /* Upper bound on registered lenses. Defined here (not just in the .c) because

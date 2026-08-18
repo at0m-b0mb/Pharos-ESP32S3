@@ -122,6 +122,17 @@ static lv_obj_t *s_bar_base;
 static lv_obj_t *s_fam_box[PHAROS_DISP_FAMILIES];
 static lv_obj_t *s_fam_txt[PHAROS_DISP_FAMILIES];
 
+/* detail view: the lens' own evidence as a list */
+static lv_obj_t *s_page_detail;
+static lv_obj_t *s_d_title;
+static lv_obj_t *s_d_hl;
+static lv_obj_t *s_d_hr;
+static lv_obj_t *s_d_left[PHAROS_HUD_ROWS];
+static lv_obj_t *s_d_right[PHAROS_HUD_ROWS];
+static lv_obj_t *s_d_rule[PHAROS_HUD_ROWS];
+static lv_obj_t *s_d_page;
+static lv_obj_t *s_d_empty;
+
 /* browse view */
 static lv_obj_t *s_b_name;
 static lv_obj_t *s_b_pos;
@@ -229,6 +240,20 @@ static void set_bg_colour(lv_obj_t *o, uint32_t rgb)
         return;
     }
     lv_obj_set_style_bg_color(o, want, 0);
+}
+
+/* The one place a lens' stated tone becomes a colour, so that a red on the
+ * Census page means what a red on the Watch page means. */
+static uint32_t tone_colour(pharos_tone_t t)
+{
+    switch (t) {
+    case PHAROS_TONE_GOOD: return HUD_GREEN;
+    case PHAROS_TONE_WARN: return HUD_AMBER;
+    case PHAROS_TONE_BAD:  return HUD_RED;
+    case PHAROS_TONE_DIM:  return HUD_DIMMER;
+    case PHAROS_TONE_NEUTRAL:
+    default:               return HUD_TEXT;
+    }
 }
 
 static void show(lv_obj_t *o, bool on)
@@ -592,6 +617,44 @@ bool pharos_hud_create(void)
     s_b_hint = mk_label(s_page_browse, &lv_font_montserrat_16, HUD_DIMMER, 0, 130,
                         "tap centre to start");
 
+    /* ---- the DETAIL page ---- */
+
+    s_page_detail = mk_box(scr);
+    lv_obj_set_size(s_page_detail, PR_W, PR_H);
+    lv_obj_center(s_page_detail);
+
+    s_d_title = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_TEXT, 0, -150, "");
+    s_d_hl = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, -110, -122, "");
+    s_d_hr = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER,  132, -122, "");
+
+    /* Six rows. The left column is left-aligned at a fixed x so names line up
+     * and can be read down the page; the right column is right-aligned so the
+     * grades do too. A centred two-column list is unreadable. */
+    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
+        const int y = -92 + (int)i * 36;
+        s_d_left[i] = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_TEXT,
+                               -110, y, "");
+        lv_obj_set_style_text_align(s_d_left[i], LV_TEXT_ALIGN_LEFT, 0);
+        lv_obj_align(s_d_left[i], LV_ALIGN_CENTER, -110, y);
+
+        s_d_right[i] = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_TEXT,
+                                132, y, "");
+        lv_obj_set_style_text_align(s_d_right[i], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(s_d_right[i], LV_ALIGN_CENTER, 132, y);
+
+        /* A hairline under each row. Six unruled lines of small text on a
+         * round black face is a wall; the rules give the eye a track to
+         * follow across to the grade. */
+        s_d_rule[i] = mk_box(s_page_detail);
+        lv_obj_set_size(s_d_rule[i], 300, 1);
+        lv_obj_align(s_d_rule[i], LV_ALIGN_CENTER, 0, y + 17);
+        lv_obj_set_style_bg_color(s_d_rule[i], lv_color_hex(HUD_TRACK2), 0);
+        lv_obj_set_style_bg_opa(s_d_rule[i], LV_OPA_COVER, 0);
+    }
+
+    s_d_page  = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_DIMMER, 0, 148, "");
+    s_d_empty = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_DIM, 0, 0, "");
+
     /* ---- overlays ---- */
 
     s_toast = mk_label(scr, &lv_font_montserrat_20, HUD_TEXT, 0, 86, "");
@@ -599,11 +662,15 @@ bool pharos_hud_create(void)
 
     /* Navigation zones, added last so they sit above everything. Left and
      * right thirds step through the lenses; the centre is the action. */
-    mk_zone(scr, LV_ALIGN_LEFT_MID,  140, 400, PHAROS_NAV_PREV);
-    mk_zone(scr, LV_ALIGN_RIGHT_MID, 140, 400, PHAROS_NAV_NEXT);
-    mk_zone(scr, LV_ALIGN_CENTER,    160, 260, PHAROS_NAV_SELECT);
+    mk_zone(scr, LV_ALIGN_LEFT_MID,  140, 330, PHAROS_NAV_PREV);
+    mk_zone(scr, LV_ALIGN_RIGHT_MID, 140, 330, PHAROS_NAV_NEXT);
+    mk_zone(scr, LV_ALIGN_CENTER,    160, 230, PHAROS_NAV_SELECT);
+    /* The bottom strip: what did you actually find? Short, so it cannot eat
+     * the left/right thirds, and only meaningful while a lens is running. */
+    mk_zone(scr, LV_ALIGN_BOTTOM_MID, 200, 74, PHAROS_NAV_DETAIL);
 
     show(s_page_live, false);
+    show(s_page_detail, false);
     show(s_page_browse, true);
 
     s_built = true;
@@ -638,6 +705,7 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
     }
     toast_tick();
     show(s_page_live, false);
+    show(s_page_detail, false);
     show(s_page_browse, true);
 
     set_text(s_b_name, name ? name : "");
@@ -663,6 +731,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     }
     toast_tick();
     show(s_page_browse, false);
+    show(s_page_detail, false);
     show(s_page_live, true);
 
     if (!d) {
@@ -734,6 +803,55 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     }
 }
 
+void pharos_hud_detail(const char *lens, const char *head_left,
+                       const char *head_right,
+                       const struct pharos_lens_row *rows, unsigned n,
+                       unsigned page, unsigned pages)
+{
+    if (!s_built) {
+        return;
+    }
+    toast_tick();
+    show(s_page_browse, false);
+    show(s_page_live, false);
+    show(s_page_detail, true);
+
+    set_text(s_d_title, lens ? lens : "");
+    set_text(s_d_hl, head_left ? head_left : "");
+    set_text(s_d_hr, head_right ? head_right : "");
+
+    if (n > PHAROS_HUD_ROWS) {
+        n = PHAROS_HUD_ROWS;
+    }
+    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
+        const bool used = (i < n);
+        set_text(s_d_left[i], used ? rows[i].left : "");
+        set_text(s_d_right[i], used ? rows[i].right : "");
+        if (used) {
+            set_text_colour(s_d_left[i], HUD_TEXT);
+            set_text_colour(s_d_right[i], tone_colour(rows[i].tone));
+        }
+        show(s_d_rule[i], used);
+    }
+
+    /* An empty list is a finding, not a blank screen. */
+    const bool empty = (n == 0);
+    show(s_d_empty, empty);
+    if (empty) {
+        set_text(s_d_empty, "nothing heard yet");
+    }
+    show(s_d_hl, !empty);
+    show(s_d_hr, !empty);
+
+    if (pages > 1) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
+        set_text(s_d_page, buf);
+    } else {
+        set_text(s_d_page, "");
+    }
+}
+
 void pharos_hud_splash(const char *version, bool fence_clean)
 {
     if (!pharos_hud_create()) {
@@ -775,6 +893,10 @@ void pharos_hud_colourbars(void)
     s_ctx = s_big = s_band = s_detail = s_why = s_peak = s_bar_base = NULL;
     s_ceiling_at = -1;
     s_b_name = s_b_pos = s_b_summary = s_b_hint = s_b_arc = NULL;
+    s_page_detail = s_d_title = s_d_hl = s_d_hr = s_d_page = s_d_empty = NULL;
+    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
+        s_d_left[i] = s_d_right[i] = s_d_rule[i] = NULL;
+    }
 
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
@@ -820,6 +942,63 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
                      uint32_t rgb_override)
 {
     (void)lens; (void)d; (void)rgb_override;
+}
+void pharos_hud_detail(const char *lens, const char *head_left,
+                       const char *head_right,
+                       const struct pharos_lens_row *rows, unsigned n,
+                       unsigned page, unsigned pages)
+{
+    if (!s_built) {
+        return;
+    }
+    toast_tick();
+    show(s_page_browse, false);
+    show(s_page_live, false);
+    show(s_page_detail, true);
+
+    set_text(s_d_title, lens ? lens : "");
+    set_text(s_d_hl, head_left ? head_left : "");
+    set_text(s_d_hr, head_right ? head_right : "");
+
+    if (n > PHAROS_HUD_ROWS) {
+        n = PHAROS_HUD_ROWS;
+    }
+    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
+        const bool used = (i < n);
+        set_text(s_d_left[i], used ? rows[i].left : "");
+        set_text(s_d_right[i], used ? rows[i].right : "");
+        if (used) {
+            set_text_colour(s_d_left[i], HUD_TEXT);
+            set_text_colour(s_d_right[i], tone_colour(rows[i].tone));
+        }
+        show(s_d_rule[i], used);
+    }
+
+    /* An empty list is a finding, not a blank screen. */
+    const bool empty = (n == 0);
+    show(s_d_empty, empty);
+    if (empty) {
+        set_text(s_d_empty, "nothing heard yet");
+    }
+    show(s_d_hl, !empty);
+    show(s_d_hr, !empty);
+
+    if (pages > 1) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
+        set_text(s_d_page, buf);
+    } else {
+        set_text(s_d_page, "");
+    }
+}
+
+void pharos_hud_detail(const char *lens, const char *head_left,
+                       const char *head_right,
+                       const struct pharos_lens_row *rows, unsigned n,
+                       unsigned page, unsigned pages)
+{
+    (void)lens; (void)head_left; (void)head_right; (void)rows; (void)n;
+    (void)page; (void)pages;
 }
 void pharos_hud_splash(const char *version, bool fence_clean)
 {

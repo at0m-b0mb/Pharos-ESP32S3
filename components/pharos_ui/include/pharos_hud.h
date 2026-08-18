@@ -78,6 +78,7 @@ typedef enum {
     PHAROS_NAV_NEXT,
     PHAROS_NAV_SELECT,
     PHAROS_NAV_HOME,
+    PHAROS_NAV_DETAIL, /* the bottom strip: "show me what you actually found" */
 } pharos_nav_t;
 
 /* The callback is invoked from LVGL's task, so implementations MUST only
@@ -101,6 +102,18 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
  * `d` may be NULL, which draws the "running, nothing to report yet" face. */
 void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
                      uint32_t rgb_override);
+
+/* DETAIL: the active lens' own evidence, a page of rows at a time.
+ *
+ * `rows` points at `n` filled rows - already the page's worth, the caller does
+ * the slicing - and page/pages drive the indicator. n = 0 draws the empty
+ * state rather than a blank page, because a list with nothing in it is a
+ * finding too. */
+#define PHAROS_HUD_ROWS 6
+void pharos_hud_detail(const char *lens, const char *head_left,
+                       const char *head_right,
+                       const struct pharos_lens_row *rows, unsigned n,
+                       unsigned page, unsigned pages);
 
 /* The boot splash and the `screen test` command. */
 void pharos_hud_splash(const char *version, bool fence_clean);

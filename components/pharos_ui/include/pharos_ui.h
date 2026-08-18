@@ -24,6 +24,8 @@ extern "C" {
 #endif
 
 #include "pharos_aegis.h"
+/* pharos_nav_t lives here; the nav request below speaks in it. */
+#include "pharos_hud.h"
 
 /* The Aegis latch. The UI loop feeds it from whichever lens is active (see
  * pharos_lens_t::stage_report), so it accumulates findings across lens
@@ -36,6 +38,13 @@ extern "C" {
  * true means the request was filed, and it is applied within a tick. */
 bool pharos_ui_request_lens(const char *id);
 void pharos_ui_request_stop(void);
+
+/* File a navigation intent from another task - the console, a test harness,
+ * anything that is not a finger. The UI task applies it on its next tick, on
+ * exactly the same path touch and the BOOT button use, so what is exercised
+ * here is what an operator would get. Added because the touch-only paths
+ * could not otherwise be tested without a hand on the glass. */
+void pharos_ui_request_nav(pharos_nav_t what);
 
 bool pharos_ui_aegis_snapshot(pa_verdict_t *out);
 void pharos_ui_aegis_ack(void);

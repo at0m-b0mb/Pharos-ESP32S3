@@ -24,7 +24,6 @@
 #include "pharos_radio.h"
 #include "pharos_report.h"
 
-static const char *TAG = "lens.probe";
 
 #define PROBE_RING 512
 

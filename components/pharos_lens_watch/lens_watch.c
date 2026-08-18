@@ -418,6 +418,109 @@ static bool k_watch_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* Watch's detail page is the CASE FILE: every number the verdict was built
+ * from, in the order an operator would want to argue with it.
+ *
+ * The live face says 85/96 FLOOD LIKELY and lights four pips. This says what
+ * each pip is worth, what the rate and burst actually were, who the frames
+ * claim to be from, and how far off that claim is. A score you cannot
+ * interrogate is a number to be believed; this is the evidence behind it. */
+static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
+{
+    pw_verdict_t v;
+    if (!pharos_lens_watch_snapshot(&v)) {
+        return false;
+    }
+    char buf[32];
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "rate");
+        snprintf(out->right, sizeof(out->right), "%u/34", v.c_rate);
+        out->tone = (v.families & PW_FAM_RATE) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "targeting shape");
+        snprintf(out->right, sizeof(out->right), "%u/22", v.c_shape);
+        out->tone = (v.families & PW_FAM_SHAPE) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "forgery");
+        snprintf(out->right, sizeof(out->right), "%u/30", v.c_forgery);
+        out->tone = (v.families & PW_FAM_FORGERY) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "aftermath");
+        snprintf(out->right, sizeof(out->right), "%u/18", v.c_aftermath);
+        out->tone = (v.families & PW_FAM_AFTERMATH) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "seen in window");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.observed);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 5:
+        snprintf(out->left, sizeof(out->left), "busiest second");
+        snprintf(out->right, sizeof(out->right), "%u/s", (unsigned)v.peak_second);
+        out->tone = v.peak_second >= 20 ? PHAROS_TONE_BAD : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 6:
+        snprintf(out->left, sizeof(out->left), "longest burst");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.max_burst);
+        out->tone = v.max_burst >= 8 ? PHAROS_TONE_WARN : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 7:
+        snprintf(out->left, sizeof(out->left), "aimed at everyone");
+        snprintf(out->right, sizeof(out->right), "%u%%",
+                 (unsigned)(v.broadcast_permil / 10));
+        out->tone = v.broadcast_permil >= 500 ? PHAROS_TONE_WARN : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 8:
+        snprintf(out->left, sizeof(out->left), "distinct victims");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.distinct_victims);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 9:
+        snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 v.src[0], v.src[1], v.src[2], v.src[3], v.src[4], v.src[5]);
+        snprintf(out->left, sizeof(out->left), "claims to be");
+        snprintf(out->right, sizeof(out->right), "%.11s", buf + 6);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 10:
+        /* The level split, against the beacon's OWN spread - the number that
+         * makes it evidence rather than a coincidence. */
+        snprintf(out->left, sizeof(out->left), "level vs its beacon");
+        snprintf(out->right, sizeof(out->right), "%ddB/%d", (int)v.rssi_delta,
+                 (int)v.rssi_spread);
+        out->tone = (v.forgery & PW_FORGE_RSSI_SPLIT) ? PHAROS_TONE_BAD
+                                                      : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 11:
+        snprintf(out->left, sizeof(out->left), "counter violations");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.seq_violations);
+        out->tone = v.seq_violations ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
+        return true;
+    case 12:
+        snprintf(out->left, sizeof(out->left), "clients came back");
+        snprintf(out->right, sizeof(out->right), "%u/%u",
+                 (unsigned)v.rejoins_after, (unsigned)v.rejoins);
+        out->tone = v.rejoins_after ? PHAROS_TONE_BAD : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 13:
+        snprintf(out->left, sizeof(out->left), "reason code");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.dominant_reason);
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    case 14:
+        snprintf(out->left, sizeof(out->left), "earned / allowed");
+        snprintf(out->right, sizeof(out->right), "%u/%u", v.raw_score, v.ceiling);
+        out->tone = (v.raw_score > v.score) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static const pharos_lens_t k_watch = {
     .id = "wifi.watch",
     .name = "Watch",
@@ -435,6 +538,9 @@ static const pharos_lens_t k_watch = {
     .stage_report = k_watch_stage,
     .display = k_watch_display,
     .on_select = watch_select,
+    .row = k_watch_row,
+    .row_head_left = "EVIDENCE",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_watch);

@@ -142,17 +142,25 @@ void pharos_ui_aegis_ack(void)
  *
  * So the callback records an intent and returns. The UI task, which owns the
  * lens lifecycle already, performs it on the next tick. */
-typedef enum { VIEW_BROWSE = 0, VIEW_LIVE } view_t;
+typedef enum { VIEW_BROWSE = 0, VIEW_LIVE, VIEW_DETAIL } view_t;
 
 static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
 static unsigned s_order_n;
 static unsigned s_cursor;
 static view_t s_view = VIEW_BROWSE;
+static unsigned s_detail_page;
 static volatile int s_nav_pending = -1; /* pharos_nav_t, or -1 for none */
 
 static void on_nav(pharos_nav_t what)
 {
     s_nav_pending = (int)what; /* record only - see the note above */
+}
+
+void pharos_ui_request_nav(pharos_nav_t what)
+{
+    /* Deliberately the same slot the touch callback writes, so a console-driven
+     * test cannot take a different path from a finger. */
+    on_nav(what);
 }
 
 /* Colour a lens by which team it serves, so the browser is readable at a
@@ -243,13 +251,47 @@ static void nav_apply(void)
     }
 
     switch ((pharos_nav_t)want) {
+    case PHAROS_NAV_DETAIL: {
+        /* Only meaningful while something is running and has rows to show. */
+        const pharos_lens_t *live = pharos_lens_active();
+        if (s_view == VIEW_DETAIL) {
+            s_view = VIEW_LIVE;
+            return;
+        }
+        if (s_view == VIEW_LIVE && live && live->row) {
+            s_detail_page = 0;
+            s_view = VIEW_DETAIL;
+            return;
+        }
+        if (s_view == VIEW_LIVE) {
+            if (pharos_bsp_display_lock(30)) {
+                pharos_hud_toast("no detail here");
+                pharos_bsp_display_unlock();
+            }
+        }
+        return;
+    }
     case PHAROS_NAV_NEXT:
+        /* In DETAIL the sides page the list rather than changing lens - you
+         * are reading, not browsing, and losing your place to a stray tap
+         * would make a long list unusable. */
+        if (s_view == VIEW_DETAIL) {
+            s_detail_page++;
+            return;
+        }
         s_cursor = (s_cursor + 1u) % s_order_n;
         break;
     case PHAROS_NAV_PREV:
+        if (s_view == VIEW_DETAIL) {
+            if (s_detail_page) s_detail_page--;
+            return;
+        }
         s_cursor = (s_cursor + s_order_n - 1u) % s_order_n;
         break;
     case PHAROS_NAV_SELECT: {
+        if (s_view == VIEW_DETAIL) {
+            return; /* the centre belongs to the list here */
+        }
         if (s_view == VIEW_LIVE) {
             /* The centre used to do nothing here, and that hole is why a
              * SUSPICIOUS Watch reading was a dead end: the way to raise the
@@ -288,6 +330,10 @@ static void nav_apply(void)
     }
     case PHAROS_NAV_HOME:
     default:
+        if (s_view == VIEW_DETAIL) {
+            s_view = VIEW_LIVE; /* one step back, not all the way out */
+            return;
+        }
         lens_halt();
         s_view = VIEW_BROWSE;
         ESP_LOGI(TAG, "stopped; back to browse");
@@ -427,10 +473,74 @@ static bool lens_launchable(const pharos_lens_t *l)
  * running, which is still the truth and still better than a black panel. */
 static uint32_t s_paints, s_paint_misses;
 
+/* Pull one page of the active lens' own rows and put them on the glass.
+ *
+ * The lens fills rows by absolute index and the HUD does the slicing, so a
+ * lens never has to know how tall the screen is. The row count is discovered
+ * by asking one past the end - lists here are tens of entries, not thousands,
+ * and a lens that would rather not be asked simply leaves ->row NULL. */
+static void paint_detail(const pharos_lens_t *active)
+{
+    struct pharos_lens_row rows[PHAROS_HUD_ROWS];
+    unsigned total = 0;
+
+    if (active && active->row) {
+        struct pharos_lens_row probe;
+        while (total < 240u) {
+            memset(&probe, 0, sizeof(probe));
+            if (!active->row(total, &probe)) {
+                break;
+            }
+            total++;
+        }
+    }
+
+    const unsigned pages = total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
+    if (s_detail_page >= pages) {
+        s_detail_page = 0;
+    }
+
+    unsigned n = 0;
+    if (active && active->row) {
+        const unsigned base = s_detail_page * PHAROS_HUD_ROWS;
+        for (; n < PHAROS_HUD_ROWS; n++) {
+            memset(&rows[n], 0, sizeof(rows[n]));
+            if (!active->row(base + n, &rows[n])) {
+                break;
+            }
+        }
+    }
+
+    char name[16];
+    unsigned k = 0;
+    if (active) {
+        for (; active->name[k] && k < sizeof(name) - 1; k++) {
+            const char c = active->name[k];
+            name[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+    }
+    name[k] = '\0';
+
+    pharos_hud_detail(name, active ? active->row_head_left : NULL,
+                      active ? active->row_head_right : NULL, rows, n,
+                      s_detail_page, pages);
+}
+
 static void paint(const pharos_lens_t *active)
 {
     if (s_view == VIEW_BROWSE) {
         return; /* the browse card is painted when the cursor moves */
+    }
+    if (s_view == VIEW_DETAIL) {
+        if (!pharos_bsp_display_lock(30)) {
+            s_paint_misses++;
+            return;
+        }
+        s_paints++;
+        pharos_hud_create();
+        paint_detail(active);
+        pharos_bsp_display_unlock();
+        return;
     }
     if (!pharos_bsp_display_lock(30)) {
         /* Counted, not ignored: a paint that never lands is exactly what a

@@ -287,6 +287,72 @@ static int cli_diag(int argc, char **argv)
 }
 
 /* `rotate` - which way is up on a round device is the operator's call. */
+/* Drive the screen exactly as a finger would.
+ *
+ * The touch zones are the only way to reach several views, which made them the
+ * only paths that could not be exercised without a hand on the glass - and so
+ * the only ones whose bugs reached the operator first. This files the SAME
+ * intent the touch callback files, applied by the same UI task on the same
+ * tick, so what is tested here is what a tap actually does. */
+/* Print exactly what the DETAIL page is showing.
+ *
+ * The screen is the product, and until now the only way to check what was on
+ * it was to photograph it. This asks the active lens for the same rows the HUD
+ * asks for, through the same callback, so a wrong column or a truncated name
+ * shows up in a log instead of in somebody's hand. */
+static int cli_rows(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const pharos_lens_t *l = pharos_lens_active();
+    if (!l) {
+        printf("no lens running\n");
+        return 1;
+    }
+    if (!l->row) {
+        printf("%s has no detail page\n", l->id);
+        return 0;
+    }
+    printf("%s detail - %s | %s\n", l->id,
+           l->row_head_left ? l->row_head_left : "",
+           l->row_head_right ? l->row_head_right : "");
+    static const char *tone[] = { "", "dim", "GOOD", "WARN", "BAD" };
+    struct pharos_lens_row r;
+    unsigned i = 0;
+    for (; i < 240u; i++) {
+        memset(&r, 0, sizeof(r));
+        if (!l->row(i, &r)) {
+            break;
+        }
+        printf("  %2u  %-26s %-11s %s\n", i, r.left, r.right,
+               (r.tone < 5) ? tone[r.tone] : "");
+    }
+    printf("  (%u rows, %u page(s) of %u)\n", i,
+           i ? (i + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS : 1u, PHAROS_HUD_ROWS);
+    return 0;
+}
+
+static int cli_nav(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("nav <detail|next|prev|select|home>\n");
+        return 1;
+    }
+    const char *w = argv[1];
+    pharos_nav_t n;
+    if (strcmp(w, "detail") == 0)      n = PHAROS_NAV_DETAIL;
+    else if (strcmp(w, "next") == 0)   n = PHAROS_NAV_NEXT;
+    else if (strcmp(w, "prev") == 0)   n = PHAROS_NAV_PREV;
+    else if (strcmp(w, "select") == 0) n = PHAROS_NAV_SELECT;
+    else if (strcmp(w, "home") == 0)   n = PHAROS_NAV_HOME;
+    else {
+        printf("unknown direction: %s\n", w);
+        return 1;
+    }
+    pharos_ui_request_nav(n);
+    printf("nav %s filed\n", w);
+    return 0;
+}
+
 static int cli_rotate(int argc, char **argv)
 {
     if (argc < 2) {
@@ -425,6 +491,22 @@ void pharos_console_start(void)
         .func = &cli_rotate,
     };
     esp_console_cmd_register(&rotate);
+
+    const esp_console_cmd_t nav = {
+        .command = "nav",
+        .help = "drive the screen as a finger would",
+        .hint = "<detail|next|prev|select|home>",
+        .func = &cli_nav,
+    };
+    esp_console_cmd_register(&nav);
+
+    const esp_console_cmd_t rows = {
+        .command = "rows",
+        .help = "print what the detail page is showing for the active lens",
+        .hint = NULL,
+        .func = &cli_rows,
+    };
+    esp_console_cmd_register(&rows);
 
     const esp_console_cmd_t lens = {
         .command = "lens",

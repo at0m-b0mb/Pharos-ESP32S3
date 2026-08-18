@@ -354,6 +354,85 @@ static bool k_census_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* THE LIST. This is what the operator actually came for.
+ *
+ * A grade on the front is a summary, and a summary you cannot open is a claim
+ * rather than a finding. Census knows every network it heard, its channel, how
+ * strong it is and exactly why it scored what it did - so it can say so.
+ *
+ * Sorted worst-first, because the softest network in the room is the one you
+ * do something about, and it is the one the headline grade came from.
+ *
+ * Runs on the UI task, so the lock is taken with a zero timeout: a detail page
+ * that stalls the repaint to be complete is a worse trade than one that
+ * redraws a frame later. */
+static bool k_census_row(unsigned index, struct pharos_lens_row *out)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    /* Rank with the ENGINE's own comparator, not a hand-rolled one.
+     *
+     * The first version of this sorted by grade ascending, which put
+     * PC_GRADE_UNGRADED - enum value 0 - at the very top, so the list opened
+     * with seven rows of "--" and the actual findings were pushed onto page
+     * two. pc_compare() already knows better: ungraded last because it is
+     * unknown rather than good, then worst grade first, then strongest
+     * signal. Its comment says so in as many words, which is what makes
+     * duplicating it here a mistake rather than a shortcut.
+     *
+     * The table itself is never reordered - it belongs to the analytics core
+     * and this is only a view of it. */
+    unsigned order[CENSUS_MAX_AP];
+    const unsigned n = s_n_aps;
+    for (unsigned i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    for (unsigned i = 1; i < n; i++) {
+        const unsigned key = order[i];
+        unsigned j = i;
+        while (j > 0 &&
+               pc_compare(&s_aps[key], &s_grades[key],
+                          &s_aps[order[j - 1]], &s_grades[order[j - 1]]) < 0) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = key;
+    }
+
+    bool ok = false;
+    if (index < n) {
+        const pc_ap_t *ap = &s_aps[order[index]];
+        const pc_verdict_t *v = &s_grades[order[index]];
+
+        /* Name, then where it is and how loud - a network you cannot locate is
+         * not actionable. A hidden SSID is named as hidden rather than left
+         * blank, because "no name" is itself the finding. */
+        char name[16];
+        if (ap->hidden || ap->ssid_len == 0) {
+            snprintf(name, sizeof(name), "<hidden>");
+        } else {
+            snprintf(name, sizeof(name), "%.14s", ap->ssid);
+        }
+        /* Padded AND truncated to 14: the pad keeps the columns aligned down
+         * the page, and without the precision a long SSID would push the
+         * channel and level off the end of the row. */
+        snprintf(out->left, sizeof(out->left), "%-14.14s c%-2u %d", name,
+                 (unsigned)ap->channel, (int)ap->rssi);
+        snprintf(out->right, sizeof(out->right), "%s", pc_grade_name(v->grade));
+
+        /* The tone is the grade, so the column reads as a traffic light down
+         * the page without anyone having to know the letters. */
+        if (v->grade >= PC_GRADE_A)        out->tone = PHAROS_TONE_GOOD;
+        else if (v->grade >= PC_GRADE_C)   out->tone = PHAROS_TONE_WARN;
+        else if (v->grade == PC_GRADE_UNGRADED) out->tone = PHAROS_TONE_DIM;
+        else                               out->tone = PHAROS_TONE_BAD;
+        ok = true;
+    }
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
 static const pharos_lens_t k_census = {
     .id = "wifi.census",
     .name = "Census",
@@ -369,6 +448,9 @@ static const pharos_lens_t k_census = {
     .on_event = census_event,
     .ingest = census_ingest,
     .display = k_census_display,
+    .row = k_census_row,
+    .row_head_left = "NETWORK   CH  dBm",
+    .row_head_right = "GRADE",
 };
 
 /* Aegis: Twin speaks for the IMPERSONATE stage. Census itself reports nothing -
