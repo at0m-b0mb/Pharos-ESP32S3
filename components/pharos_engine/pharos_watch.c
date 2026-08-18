@@ -380,6 +380,32 @@ uint8_t pw_pressure_channel(const pw_engine_t *e, uint64_t now_us,
     return best_n ? best : 0;
 }
 
+void pw_history(const pw_engine_t *e, uint64_t now_us,
+                uint16_t out[PW_WINDOW_SLOTS])
+{
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(uint16_t) * PW_WINDOW_SLOTS);
+    if (!e) {
+        return;
+    }
+    const uint32_t now_sec = (uint32_t)(now_us / 1000000ull);
+    for (unsigned i = 0; i < PW_WINDOW_SLOTS; i++) {
+        /* out[0] is the oldest second in the window, out[n-1] is now. A slot
+         * whose stamp does not match the second it would represent was never
+         * written in this window and is genuinely zero, not missing. */
+        const uint32_t want = now_sec + 1u + i - PW_WINDOW_SLOTS;
+        if (want > now_sec) {
+            continue; /* the device has not been up this long */
+        }
+        const pw_slot_t *s = &e->slots[want % PW_WINDOW_SLOTS];
+        if (s->sec == want) {
+            out[i] = (uint16_t)(s->disconnects > 0xFFFFu ? 0xFFFFu : s->disconnects);
+        }
+    }
+}
+
 /* ---- scoring -------------------------------------------------------- */
 
 void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,

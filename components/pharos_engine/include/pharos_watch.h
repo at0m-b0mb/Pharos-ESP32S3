@@ -312,6 +312,17 @@ uint8_t pw_ceiling(const pw_context_t *ctx);
 uint8_t pw_pressure_channel(const pw_engine_t *e, uint64_t now_us,
                             uint32_t window_ms);
 
+/* The last PW_WINDOW_SLOTS seconds of disconnect counts, oldest first, with
+ * seconds that were never written filled in as zero.
+ *
+ * A single score answers "is this happening"; the history answers "what shape
+ * is it", which is the question an operator actually asks next. A steady
+ * trickle and a single violent burst can produce the same ten-second mean and
+ * they are not the same event. The engine already keeps these slots to do its
+ * own arithmetic - this only lets the screen show them. */
+void pw_history(const pw_engine_t *e, uint64_t now_us,
+                uint16_t out[PW_WINDOW_SLOTS]);
+
 const char *pw_band_name(pw_band_t band);
 const char *pw_band_advice(pw_band_t band);
 /* One short line naming the strongest forgery test that fired, for the UI.
