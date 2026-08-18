@@ -927,6 +927,19 @@ const char *pw_band_advice(pw_band_t band)
     }
 }
 
+const char *pw_band_hint(pw_band_t band)
+{
+    /* Kept under PW_HINT_MAX_CHARS. Count before you edit. */
+    switch (band) {
+    case PW_BAND_QUIET:      return "Nothing in view yet.";
+    case PW_BAND_BACKGROUND: return "Normal roaming and timeouts.";
+    case PW_BAND_ELEVATED:   return "More than housekeeping.";
+    case PW_BAND_SUSPICIOUS: return "Shape is wrong. Camp to confirm.";
+    case PW_BAND_LIKELY:     return "Forged disconnects. Keep the log.";
+    default:                 return "";
+    }
+}
+
 const char *pw_forgery_name(uint8_t forgery_mask)
 {
     /* Strongest first: the operator should be told the best reason, not the

@@ -813,6 +813,38 @@ static void test_watch_peak_second_survives_thin_dwell(void)
     CHECK(v.c_rate > 0, "and it still scores on what was actually heard");
 }
 
+
+/* The round screen gives about 318 px on the hint line, which is roughly forty
+ * characters at the size it is drawn. A string that does not fit is not a
+ * softer warning, it is a clipped one - the device showed
+ * "...connect traffic in view. This receiver hears one channel at..." to a
+ * real operator. So the limit is a test, not a guideline. */
+static void test_watch_hints_fit_the_glass(void)
+{
+    banner("watch: every on-screen hint fits on one line");
+    for (int b = PW_BAND_QUIET; b <= PW_BAND_LIKELY; b++) {
+        const char *h = pw_band_hint((pw_band_t)b);
+        CHECK(h && *h, "band %d has a hint", b);
+        CHECK(strlen(h) <= PW_HINT_MAX_CHARS,
+              "hint for %s is %u chars, limit %u: \"%s\"",
+              pw_band_name((pw_band_t)b), (unsigned)strlen(h),
+              (unsigned)PW_HINT_MAX_CHARS, h);
+        /* The long form is still allowed to be a full sentence - it goes to
+         * reports and the info card, where there is room. */
+        CHECK(pw_band_advice((pw_band_t)b) != NULL, "and a long form exists");
+    }
+    /* The forgery findings share that line, so they answer to it too. */
+    const uint8_t all[] = { PW_FORGE_MFP_PROOF, PW_FORGE_MFP_HINT,
+                            PW_FORGE_SEQ_ORDER, PW_FORGE_SEQ_FROZEN,
+                            PW_FORGE_RSSI_SPLIT, PW_FORGE_GHOST };
+    for (unsigned i = 0; i < sizeof(all); i++) {
+        const char *n = pw_forgery_name(all[i]);
+        CHECK(n && strlen(n) <= PW_HINT_MAX_CHARS,
+              "forgery name %u is %u chars: \"%s\"", i,
+              (unsigned)(n ? strlen(n) : 0), n ? n : "(null)");
+    }
+}
+
 void test_watch(void)
 {
     test_watch_ceiling();
@@ -835,6 +867,7 @@ void test_watch(void)
     test_watch_short_window();
     test_watch_pressure_channel();
     test_watch_vocabulary();
+    test_watch_hints_fit_the_glass();
     test_watch_retries_are_not_a_frozen_counter();
     test_watch_no_rate_without_channel_time();
     test_watch_peak_second_survives_thin_dwell();

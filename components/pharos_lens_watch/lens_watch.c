@@ -355,7 +355,9 @@ static bool k_watch_display(struct pharos_lens_display *o)
 
     snprintf(o->big, sizeof(o->big), "%u", v.score);
     snprintf(o->band, sizeof(o->band), "%s", pw_band_name(v.band));
-    snprintf(o->advice, sizeof(o->advice), "%s", pw_band_advice(v.band));
+    /* The SHORT form. The panel has ~40 characters on that line and the full
+     * sentence was being clipped at both ends on real hardware. */
+    snprintf(o->advice, sizeof(o->advice), "%s", pw_band_hint(v.band));
     o->score = v.score;
     o->raw_score = v.raw_score;
     o->ceiling = v.ceiling;

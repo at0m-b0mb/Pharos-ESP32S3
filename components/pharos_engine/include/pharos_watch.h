@@ -342,7 +342,23 @@ void pw_history(const pw_engine_t *e, uint64_t now_us,
                 uint16_t out[PW_WINDOW_SLOTS]);
 
 const char *pw_band_name(pw_band_t band);
+
+/* The full sentence, for reports and the lens info card, where there is room
+ * for a clause. */
 const char *pw_band_advice(pw_band_t band);
+
+/* The SAME advice, short enough to survive a round screen.
+ *
+ * The glass gives about 330 px on the line under the evidence pips, which at
+ * the 16 px the panel actually draws it is roughly 34 characters. pw_band_advice()'s longest is 73 and it was simply
+ * clipped at both ends on the device - the operator saw
+ * "...connect traffic in view. This receiver hears one channel at..." and no
+ * amount of good intent in the wording survives that. Anything shown on the
+ * panel comes from here; anything written to a report comes from above.
+ *
+ * Every string is asserted to fit in test_watch_hints_fit_the_glass. */
+#define PW_HINT_MAX_CHARS 34
+const char *pw_band_hint(pw_band_t band);
 /* One short line naming the strongest forgery test that fired, for the UI.
  * Returns NULL when none did. */
 const char *pw_forgery_name(uint8_t forgery_mask);

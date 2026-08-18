@@ -45,17 +45,34 @@
  * VOID is true black on purpose: an unlit AMOLED pixel emits nothing at all,
  * which is both the deepest contrast available and the only shade with no
  * quantisation noise whatsoever. */
+/* THE FIELD IS TRUE BLACK, AND ON THIS PANEL THAT IS NOT A STYLE CHOICE.
+ *
+ * The face used to sit on a "lifted" disc of 0x081C29 - a very dark teal - to
+ * read as an instrument rather than as text floating in space. On an LCD that
+ * is a reasonable trick. On an AMOLED it throws away the one thing the panel
+ * does better than anything else: an unlit pixel emits NOTHING, which is both
+ * infinite contrast and zero power.
+ *
+ * It also looked bad in a way that only a photograph of the real device
+ * revealed. 0x081C29 in RGB565 is (1, 7, 5) out of (31, 63, 31) - so few
+ * levels that neighbouring shades of it band visibly, and a whole 462 px disc
+ * of it photographs as a flat blue wash with the arcs sitting in it like
+ * holes. What was meant to read as a machined instrument face read as a
+ * screen with the brightness wrong.
+ *
+ * Black field, lit rim, lit content. Everything that emits light now means
+ * something. */
 #define HUD_VOID   0x000000
-#define HUD_FIELD  0x081C29
-#define HUD_RIM    0x215163
-#define HUD_TRACK  0x102839
-#define HUD_TRACK2 0x081418
-#define HUD_PIP_ON 0x102839
-#define HUD_PIP_UP 0x081418
+#define HUD_FIELD  0x000000 /* true black: the panel's best feature   */
+#define HUD_RIM    0x2A6B80 /* the only structural line that emits    */
+#define HUD_TRACK  0x18384A /* gauge groove: visible, never competing */
+#define HUD_TRACK2 0x0A1C26
+#define HUD_PIP_ON 0x1B4257 /* a lit pip must read as LIT             */
+#define HUD_PIP_UP 0x0A1620
 #define HUD_TEXT   0xE7F7F7
-#define HUD_DIM    0x7BA6B5
-#define HUD_DIMMER 0x4A798C
-#define HUD_DENIED 0x213C4A
+#define HUD_DIM    0x94BECC
+#define HUD_DIMMER 0x6693A6
+#define HUD_DENIED 0x3A5A6B
 #define HUD_GHOST  0x2A4257
 #define HUD_CYAN   0x21B6C6
 #define HUD_AMBER  0xFFC34A
@@ -419,6 +436,8 @@ bool pharos_hud_create(void)
     /* The instrument face: a slightly lifted disc inside the void, with a rim
      * line. This is what makes it read as an instrument rather than as text on
      * a black background. */
+    /* Black disc, lit rim. The disc still exists so the face has a defined
+     * edge and so a repaint has something to clear to, but it emits nothing. */
     s_field = mk_box(scr);
     lv_obj_set_size(s_field, 462, 462);
     lv_obj_center(s_field);
@@ -426,7 +445,7 @@ bool pharos_hud_create(void)
     lv_obj_set_style_bg_color(s_field, lv_color_hex(HUD_FIELD), 0);
     lv_obj_set_style_bg_opa(s_field, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_field, lv_color_hex(HUD_RIM), 0);
-    lv_obj_set_style_border_width(s_field, 1, 0);
+    lv_obj_set_style_border_width(s_field, 2, 0);
 
     /* 24 bezel ticks, every sixth long and cyan - the instrument's compass. */
     s_ticks = lv_scale_create(scr);
@@ -443,7 +462,7 @@ bool pharos_hud_create(void)
     lv_scale_set_label_show(s_ticks, false);
     lv_obj_set_style_length(s_ticks, 7, LV_PART_ITEMS);
     lv_obj_set_style_line_width(s_ticks, 2, LV_PART_ITEMS);
-    lv_obj_set_style_line_color(s_ticks, lv_color_hex(HUD_RIM), LV_PART_ITEMS);
+    lv_obj_set_style_line_color(s_ticks, lv_color_hex(HUD_TRACK), LV_PART_ITEMS);
     lv_obj_set_style_length(s_ticks, 12, LV_PART_INDICATOR);
     lv_obj_set_style_line_width(s_ticks, 3, LV_PART_INDICATOR);
     lv_obj_set_style_line_color(s_ticks, lv_color_hex(HUD_CYAN), LV_PART_INDICATOR);
@@ -484,9 +503,9 @@ bool pharos_hud_create(void)
     }
 
     /* Track, then the capped-away ghost, then the score. */
-    s_track = mk_arc(s_page_live, 332, 20, HUD_TRACK2, 100);
-    s_ghost = mk_arc(s_page_live, 288, 4, HUD_GHOST, 0);
-    s_arc = mk_arc(s_page_live, 332, 16, HUD_CYAN, 0);
+    s_track = mk_arc(s_page_live, 332, 22, HUD_TRACK, 100);
+    s_ghost = mk_arc(s_page_live, 286, 5, HUD_GHOST, 0);
+    s_arc = mk_arc(s_page_live, 332, 18, HUD_CYAN, 0);
 
     /* The ceiling: a hard stop drawn as a short TICK across the arc, not as a
      * second band of colour. The old face drew it as a fat arc behind the
@@ -509,31 +528,43 @@ bool pharos_hud_create(void)
     lv_obj_set_style_bg_color(s_core, lv_color_hex(HUD_VOID), 0);
     lv_obj_set_style_bg_opa(s_core, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_core, lv_color_hex(HUD_TRACK), 0);
-    lv_obj_set_style_border_width(s_core, 1, 0);
+    lv_obj_set_style_border_width(s_core, 2, 0);
 
-    s_peak   = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIMMER, 0, -128, "");
-    s_ctx    = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIMMER, 0,  -52, "");
+    /* Sizes are the ones the panel actually has compiled in (12/16/18/20/22/
+     * 24/26/48 - there is no 14). Everything that was 12 px is now 16: on a
+     * 1.75 inch 466 px circle, 12 px is about 1.6 mm of cap height and it
+     * reads as pixel mush at arm's length, which is exactly the "not sharp"
+     * the operator reported. */
+    s_ctx    = mk_label(s_page_live, &lv_font_montserrat_16, HUD_DIMMER, 0,  -54, "");
     s_big    = mk_label(s_page_live, &lv_font_montserrat_48, HUD_TEXT,   0,   -4, "--");
-    s_band   = mk_label(s_page_live, &lv_font_montserrat_20, HUD_CYAN,   0,   44, "");
-    s_detail = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIM,    0,   88, "");
-    s_why    = mk_label(s_page_live, &lv_font_montserrat_12, HUD_DIM,    0,  158, "");
+    s_band   = mk_label(s_page_live, &lv_font_montserrat_22, HUD_CYAN,   0,   46, "");
+    s_detail = mk_label(s_page_live, &lv_font_montserrat_16, HUD_DIM,    0,   90, "");
+    s_why    = mk_label(s_page_live, &lv_font_montserrat_16, HUD_DIM,    0,  152, "");
+    /* The ribbon's scale label was "16s", which told the operator nothing they
+     * could act on and put a third tiny string in the busiest part of the
+     * face. The ribbon is a shape, and a shape does not need a legend. */
+    s_peak   = NULL;
 
     /* The evidence pips: four labelled boxes, not four anonymous dots. Naming
      * them is the whole improvement - "why does it think so" becomes
      * answerable from the glass instead of from the manual. */
     {
-        const int w = 74, gap = 8, h = 26;
+        const int w = 80, gap = 6, h = 30;
         const int total = 4 * w + 3 * gap;
         for (unsigned i = 0; i < PHAROS_DISP_FAMILIES; i++) {
             const int dx = -total / 2 + (int)i * (w + gap) + w / 2;
             s_fam_box[i] = mk_box(s_page_live);
             lv_obj_set_size(s_fam_box[i], w, h);
-            lv_obj_align(s_fam_box[i], LV_ALIGN_CENTER, dx, 125);
-            lv_obj_set_style_radius(s_fam_box[i], 6, 0);
+            lv_obj_align(s_fam_box[i], LV_ALIGN_CENTER, dx, 118);
+            lv_obj_set_style_radius(s_fam_box[i], 8, 0);
             lv_obj_set_style_bg_color(s_fam_box[i], lv_color_hex(HUD_PIP_UP), 0);
             lv_obj_set_style_bg_opa(s_fam_box[i], LV_OPA_COVER, 0);
-            s_fam_txt[i] = mk_label(s_page_live, &lv_font_montserrat_12,
-                                    HUD_DENIED, dx, 125, "");
+            /* A hairline so an unlit pip is still a SLOT rather than a void -
+             * four holes in black read as nothing at all. */
+            lv_obj_set_style_border_color(s_fam_box[i], lv_color_hex(HUD_TRACK), 0);
+            lv_obj_set_style_border_width(s_fam_box[i], 1, 0);
+            s_fam_txt[i] = mk_label(s_page_live, &lv_font_montserrat_16,
+                                    HUD_DENIED, dx, 118, "");
         }
     }
 
@@ -545,13 +576,13 @@ bool pharos_hud_create(void)
 
     s_b_arc = mk_arc(s_page_browse, 332, 16, HUD_CYAN, 0);
     s_b_name = mk_label(s_page_browse, &lv_font_montserrat_26, HUD_TEXT, 0, -60, "");
-    s_b_pos  = mk_label(s_page_browse, &lv_font_montserrat_16, HUD_DIMMER, 0, -22, "");
+    s_b_pos  = mk_label(s_page_browse, &lv_font_montserrat_18, HUD_DIMMER, 0, -22, "");
     /* The one place a wrap is worth its cost: this text is static for as long
      * as the cursor sits on a lens, so it re-lays-out on a cursor move and
      * never during a repaint. */
     s_b_summary = lv_label_create(s_page_browse);
     lv_obj_remove_flag(s_b_summary, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_text_font(s_b_summary, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_b_summary, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_b_summary, lv_color_hex(HUD_DIM), 0);
     lv_obj_set_style_text_align(s_b_summary, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_b_summary, LV_LABEL_LONG_WRAP);
@@ -640,7 +671,6 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
         set_text(s_band, "starting");
         set_text(s_detail, "");
         set_text(s_why, "");
-        set_text(s_peak, "");
         set_arc_value(s_arc, 0);
         set_arc_value(s_ghost, 0);
         set_ceiling_tick(0);
@@ -694,19 +724,13 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     }
 
     if (d->has_history) {
-        uint8_t peak = 0;
-        for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
-            if (d->history[i] > peak) peak = d->history[i];
-        }
         for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
             bar_set(i, d->history[i], col);
         }
-        set_text(s_peak, peak ? "16s" : "");
     } else {
         for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
             bar_set(i, 0, HUD_DENIED);
         }
-        set_text(s_peak, "");
     }
 }
 

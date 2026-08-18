@@ -44,9 +44,9 @@
  * palette (pharos_ui/pharos_hud.c) is what makes the gallery images and the
  * panel the same product rather than two approximations of one. */
 #define C_VOID    "#000000"
-#define C_FIELD   "#081C29"
-#define C_FIELD2  "#102839"
-#define C_RIM     "#215163"
+#define C_FIELD   "#000000"  /* true black: see the note in pharos_hud.c */
+#define C_FIELD2  "#18384A"
+#define C_RIM     "#2A6B80"
 #define C_CYAN    "#21B6C6"
 #define C_CYAN_HI "#7BEBF7"
 #define C_AMBER   "#FFC34A"
@@ -54,9 +54,9 @@
 #define C_RED     "#E75142"
 #define C_GREEN   "#39DB84"
 #define C_TEXT    "#E7F7F7"
-#define C_DIM     "#7BA6B5"
-#define C_DIMMER  "#4A798C"
-#define C_DENIED  "#213C4A"
+#define C_DIM     "#94BECC"
+#define C_DIMMER  "#6693A6"
+#define C_DENIED  "#3A5A6B"
 
 /* ---- display list ---------------------------------------------------- */
 
@@ -275,9 +275,12 @@ static int wrap(int dy, int size, const char *col, const char *s, int max_lines)
 
 static void panel_base(void)
 {
+    /* Black disc, lit rim. On the AMOLED the disc emits nothing at all - see
+     * the long note on HUD_FIELD in pharos_ui/pharos_hud.c for why a "lifted"
+     * instrument face is the wrong instinct on this panel. */
     disc(PR_CX, PR_CY, PR_R, C_VOID);
     disc(PR_CX, PR_CY, PR_R - 2, C_FIELD);
-    ring(PR_CX, PR_CY, PR_RIM_R - 4, 1, C_RIM);
+    ring(PR_CX, PR_CY, PR_RIM_R - 4, 2, C_RIM);
 }
 
 /* 24 rim ticks, the instrument's bezel. */
@@ -395,20 +398,11 @@ static void screen_lamp_room(void)
  *   element has one job.
  */
 
-/* The gauge's one-line fallback, used when no forgery test has a specific
- * finding to report. Deliberately shorter than pw_band_advice(): the full
- * sentence lives on the lens info card, where there is room for it. */
-static const char *hud_summary(pw_band_t band)
-{
-    switch (band) {
-    case PW_BAND_QUIET:      return "Nothing in view. One channel at a time.";
-    case PW_BAND_BACKGROUND: return "Normal roaming and idle timeouts.";
-    case PW_BAND_ELEVATED:   return "More than housekeeping. Camp to sharpen.";
-    case PW_BAND_SUSPICIOUS: return "Shape is wrong, nothing proves it yet.";
-    case PW_BAND_LIKELY:     return "Sustained forged deauth. Keep the log.";
-    default:                 return "";
-    }
-}
+/* The one-line fallback now comes from the ENGINE (pw_band_hint), not from a
+ * copy kept here. The renderer used to carry its own shorter phrasing, which
+ * meant the documentation screenshots and the device could drift apart - and
+ * the device's own strings were the ones being clipped on the glass. One
+ * source, one wording, one length budget, asserted by the host tests. */
 
 /* Sixteen radial bars around the top of the dial: one per second of the
  * engine's own window, height proportional to that second's disconnect count.
@@ -467,15 +461,15 @@ static void watch_families(const pw_verdict_t *v, const char *col)
         { PW_FAM_FORGERY,   "FORGE" },
         { PW_FAM_AFTERMATH, "AFTER" },
     };
-    const int w = 74, gap = 8, h = 26;
+    const int w = 80, gap = 6, h = 30;
     const int total = 4 * w + 3 * gap;
-    const int top = PR_CY + 112;
+    const int top = PR_CY + 103;
 
     for (unsigned i = 0; i < 4; i++) {
         const int x = PR_CX - total / 2 + (int)i * (w + gap);
         const bool lit = (v->families & fam[i].bit) != 0;
-        roundrect(x, top, w, h, 6, lit ? "#12283A" : "#0A1620");
-        text(x + w / 2, top + h / 2 + 5, 13, 'c', lit ? col : C_DENIED,
+        roundrect(x, top, w, h, 8, lit ? "#1B4257" : "#0A1620");
+        text(x + w / 2, top + h / 2 + 6, 16, 'c', lit ? col : C_DENIED,
              fam[i].label);
     }
 }
@@ -500,12 +494,12 @@ static void screen_watch(const char *name, const pw_verdict_t *v,
     const float A0 = 225.0f, SWEEP = 270.0f;
     const int R = PR_RING_R - 14;
 
-    arc(PR_CX, PR_CY, R, 20, A0, SWEEP, "#08131C");
-    arc(PR_CX, PR_CY, R, 16, A0, SWEEP, "#12283A");
+    arc(PR_CX, PR_CY, R, 22, A0, SWEEP, "#0A1C26");
+    arc(PR_CX, PR_CY, R, 18, A0, SWEEP, "#18384A");
     /* One colour, fading up out of the track. The old cyan-to-band gradient
      * read as if the first half of the score were somehow benign; it is one
      * number and it should look like one. */
-    garc(PR_CX, PR_CY, R, 16, A0, SWEEP * (float)v->score / 100.0f, "#1B3A4E", col);
+    garc(PR_CX, PR_CY, R, 18, A0, SWEEP * (float)v->score / 100.0f, "#1B3A4E", col);
 
     /* What the caps took away, as a thin inner trace. The old screen drew
      * this as a second fat arc behind the score, where it read as a bug -
@@ -543,20 +537,20 @@ static void screen_watch(const char *name, const pw_verdict_t *v,
         } else {
             snprintf(buf, sizeof(buf), "%s", mode_short);
         }
-        text(PR_CX, PR_CY - 52, 13, 'c', C_DIMMER, buf);
+        text(PR_CX, PR_CY - 54, 16, 'c', C_DIMMER, buf);
     }
     {
         char buf[16];
         snprintf(buf, sizeof(buf), "%u", v->score);
-        glowtext(PR_CX, PR_CY - 4, 62, 'c', col, buf);
+        glowtext(PR_CX, PR_CY - 4, 60, 'c', col, buf);
     }
     /* The band word is what a person actually reads, so it gets the widest
      * type the core can hold without touching the ring. */
     {
         const char *word = pw_band_name(v->band);
-        const int size = fit_text_at(PR_CX, PR_CY + 44, (unsigned)strlen(word),
+        const int size = fit_text_at(PR_CX, PR_CY + 46, (unsigned)strlen(word),
                                      PR_CORE_R + 2, 22);
-        text(PR_CX, PR_CY + 44, size ? size : 14, 'c', col, word);
+        text(PR_CX, PR_CY + 46, size ? size : 16, 'c', col, word);
     }
 
     /* --- the supporting numbers, one line, no packing -------------------- */
@@ -567,7 +561,7 @@ static void screen_watch(const char *name, const pw_verdict_t *v,
         char buf[64];
         snprintf(buf, sizeof(buf), "%u seen  -  %u/s  -  ceil %u", v->observed,
                  v->est_per_s_x100 / 100, v->ceiling);
-        text(PR_CX, PR_CY + 88, 13, 'c', C_DIM, buf);
+        text(PR_CX, PR_CY + 90, 16, 'c', C_DIM, buf);
     }
 
     /* --- the evidence ---------------------------------------------------- */
@@ -579,27 +573,17 @@ static void screen_watch(const char *name, const pw_verdict_t *v,
          * counter went backwards" tells an operator something that
          * "the shape looks wrong" does not. */
         const char *why = pw_forgery_name(v->forgery);
-        const char *line_s = why ? why : hud_summary(v->band);
-        const unsigned cap = pd_label_capacity(13, 158, PR_SAFE_R - 8);
+        const char *line_s = why ? why : pw_band_hint(v->band);
+        const unsigned cap = pd_label_capacity(16, 152, PR_SAFE_R - 8);
         char buf[64];
         snprintf(buf, sizeof(buf), "%.*s", (int)(cap < sizeof(buf) - 1 ? cap
                                                                        : sizeof(buf) - 1),
                  line_s);
-        text(PR_CX, PR_CY + 158, 13, 'c', why ? col : C_DIM, buf);
+        text(PR_CX, PR_CY + 152, 16, 'c', why ? col : C_DIM, buf);
     }
 
     /* The ribbon's own scale, printed once where it cannot be mistaken for a
      * reading: this is what the tallest bar means. */
-    {
-        uint16_t peak = 0;
-        for (unsigned i = 0; i < nhist; i++) {
-            if (hist[i] > peak) peak = hist[i];
-        }
-        char buf[24];
-        snprintf(buf, sizeof(buf), "peak %u", peak);
-        text(PR_CX, PR_CY - 128, 12, 'c', C_DIMMER, buf);
-    }
-
     rim_status(74, col);
 }
 
