@@ -59,6 +59,7 @@ static uint8_t s_camp_channel;
 static uint32_t s_lock_ms;    /* time left camped, 0 = surveying   */
 static uint32_t s_survey_ms;  /* time spent surveying since a lock */
 static bool s_manual;         /* the operator took the wheel       */
+static uint32_t s_log_accum_ms;
 
 static bool watch_mount(void)
 {
@@ -120,18 +121,57 @@ static void watch_tick(uint32_t dt_ms)
     }
     const uint64_t now = (uint64_t)esp_timer_get_time();
     const uint8_t chan = pharos_radio_channel();
+    /* Fifteen seconds, not ten.
+     *
+     * Real deauthentication tools fire in bursts with gaps between them -
+     * aireplay-ng's default is 64 frames per round - and a ten-second window
+     * can land entirely inside a gap. On hardware, against a live flood, the
+     * verdict blinked FLOOD LIKELY -> QUIET -> FLOOD LIKELY as the window
+     * rolled across those gaps. An alarm that switches itself off between
+     * bursts is an alarm the operator misses.
+     *
+     * The engine keeps PW_WINDOW_SLOTS (16) seconds of per-second counts
+     * anyway, so widening the window to fifteen costs nothing and spans the
+     * gap. It is also the honest fix rather than latching a stale verdict on
+     * the glass: the number still describes a window that actually happened. */
     pw_context_t ctx = {
         .dwell_permil = pharos_radio_dwell_permil(chan),
         .bus_yield_permil = pharos_bus_yield_permil(&s_bus),
-        .window_ms = 10000,
+        .window_ms = 15000,
     };
     pw_verdict_t v;
     pw_evaluate(&s_engine, now, &ctx, &v);
 
-    if (v.band != s_verdict.band) {
-        ESP_LOGI(TAG, "%s score=%u/%u fam=0x%02x forge=0x%02x est=%u.%02u/s dwell=%u%%",
-                 pw_band_name(v.band), v.score, v.ceiling, v.families, v.forgery,
-                 v.est_per_s_x100 / 100, v.est_per_s_x100 % 100, ctx.dwell_permil / 10);
+    /* Log on a band change, and also once a second while anything above
+     * BACKGROUND is in view - a band that sits still is exactly when the
+     * operator most wants the supporting numbers, and "it said SUSPICIOUS
+     * once and then went quiet" is not a usable field report. */
+    s_log_accum_ms += dt_ms;
+    const bool interesting = (v.band >= PW_BAND_ELEVATED);
+    if (v.band != s_verdict.band || (interesting && s_log_accum_ms >= 2000u)) {
+        if (v.band != s_verdict.band) {
+            s_log_accum_ms = 0;
+        } else {
+            s_log_accum_ms = 0;
+        }
+        const char *why = pw_forgery_name(v.forgery);
+        ESP_LOGI(TAG,
+                 "%s %u/%u ch%u \"%s\" fam=0x%02x est=%u.%02u/s peak=%u obs=%u "
+                 "bcast=%u%% victims=%u burst=%u src=%02x:%02x:%02x:%02x:%02x:%02x "
+                 "rssi d=%d/s=%d seqv=%u rejoin=%u/%u dwell=%u%% %s",
+                 pw_band_name(v.band), v.score, v.ceiling,
+                 (unsigned)(v.channel ? v.channel : chan),
+                 v.ssid[0] ? v.ssid : "?",
+                 v.families,
+                 v.est_per_s_x100 / 100, v.est_per_s_x100 % 100,
+                 (unsigned)v.peak_second, (unsigned)v.observed,
+                 (unsigned)(v.broadcast_permil / 10), (unsigned)v.distinct_victims,
+                 (unsigned)v.max_burst,
+                 v.src[0], v.src[1], v.src[2], v.src[3], v.src[4], v.src[5],
+                 (int)v.rssi_delta, (int)v.rssi_spread,
+                 (unsigned)v.seq_violations,
+                 (unsigned)v.rejoins_after, (unsigned)v.rejoins,
+                 ctx.dwell_permil / 10, why ? why : "");
     }
     s_verdict = v;
     const uint8_t pressure = v.channel;
@@ -149,6 +189,10 @@ static void watch_tick(uint32_t dt_ms)
             ESP_LOGI(TAG, "lock expired; back to survey");
             watch_survey_now();
             s_survey_ms = 0;
+        } else if (v.band >= PW_BAND_ELEVATED) {
+            /* Still worth watching: hold the channel rather than letting the
+             * timer drop us back into a survey mid-event. */
+            s_lock_ms = WATCH_LOCK_MS;
         }
         return;
     }
