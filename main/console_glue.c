@@ -15,6 +15,7 @@
 
 #include "esp_console.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include <stdlib.h>
@@ -257,6 +258,10 @@ static int cli_diag(int argc, char **argv)
            pharos_bsp_display_lock(50) ? (pharos_bsp_display_unlock(), "acquired")
                                        : "COULD NOT ACQUIRE");
     printf("  hud     : %s\n", pharos_hud_present() ? "built" : "NOT BUILT");
+    printf("internal  : %u KB free (DMA-capable; the display flush and the "
+           "wifi driver compete for this)\n",
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL |
+                                              MALLOC_CAP_DMA) / 1024));
     printf("psram free: %u KB\n", (unsigned)(st.psram_free / 1024));
     printf("heap free : %u B (min %u)\n",
            (unsigned)esp_get_free_heap_size(),

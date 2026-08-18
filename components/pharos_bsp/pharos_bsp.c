@@ -131,6 +131,98 @@ static pharos_bsp_status_t s_last;
  * pharos_bsp_init() once the panel is confirmed up. */
 static void rotation_restore(void);
 
+/* ---- draw buffers in INTERNAL RAM -----------------------------------
+ *
+ * THE PANEL DROPPING FRAMES, AND WHY IT ONLY EVER HAPPENED WHILE NAVIGATING.
+ *
+ *     panel_io_spi_tx_color(395): spi transmit (queue) color failed
+ *     panel_co5300_draw_bitmap(292): send color data failed
+ *     esp_lvgl:bridge_v9: Draw bitmap failed: ESP_ERR_NO_MEM
+ *
+ * A rendered frame that never reaches the glass, which from the outside is a
+ * screen that tears, stalls and shows stale content - reported, accurately, as
+ * "screen glitches".
+ *
+ * It is NOT the transaction queue. esp_lcd calls spi_device_queue_trans() with
+ * portMAX_DELAY, so a full queue BLOCKS; it cannot return this error. The
+ * failure is one layer further down. The vendor BSP puts LVGL's draw buffers
+ * in PSRAM, and the SPI master cannot always DMA straight out of PSRAM - when
+ * the source is not cache-line aligned in BOTH address and length it allocates
+ * a bounce buffer, the size of the whole transfer, from INTERNAL DMA-capable
+ * RAM, and copies through it. LVGL flushes whatever rectangle happens to be
+ * dirty, so those lengths are arbitrary and almost every flush bounces.
+ *
+ * Internal RAM is the scarce one on this board. Bringing the Wi-Fi driver up
+ * or down allocates tens of kilobytes of it at once - dynamic rx buffers,
+ * static rx buffers at 1600 bytes each, tx buffers, the driver task stack -
+ * and Pharos tears the radio down and back up on EVERY lens change. So while
+ * the operator taps through the dial, the bounce buffer loses a race against
+ * the Wi-Fi driver and the frame is dropped.
+ *
+ * That is not a theory. Of 207 dropped frames captured from the device while
+ * the dial was being navigated by hand, 193 - ninety-three percent - fell
+ * within 400 ms of a radio init or deinit, and none at all appeared while a
+ * lens simply ran. Switching lenses slowly from the console never reproduced
+ * it, which is exactly why this survived the earlier testing.
+ *
+ * The fix is to stop needing a bounce buffer at all. Draw buffers allocated in
+ * internal DMA-capable RAM are a legal DMA source as they are, so the flush
+ * goes straight out of them: no allocation on the flush path, nothing to fail,
+ * and nothing Wi-Fi can take away.
+ *
+ * The cost is internal RAM, so the size is negotiated rather than assumed: try
+ * a comfortable buffer, fall back through smaller ones, and if none of them
+ * fit keep the vendor's PSRAM pair rather than leaving the display worse off.
+ * Fewer rows only means more transfers per repaint, and transfers are cheap -
+ * it is the ALLOCATION that was failing.
+ *
+ * The vendor's PSRAM buffers stay allocated; LVGL does not own them and there
+ * is no supported way to hand them back. That leaks about 93 KB of PSRAM once,
+ * at boot, out of roughly 6 MB - deliberately, and far cheaper than forking a
+ * managed component. */
+static void display_buffers_to_internal(lv_display_t *disp)
+{
+    if (!disp) {
+        return;
+    }
+    /* Descending ladder. 466 px * 2 bytes = 932 bytes a row. */
+    static const int rows[] = { 48, 40, 32, 24, 16, 12 };
+
+    const size_t before =
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+
+    for (unsigned i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        const size_t bytes = (size_t)BSP_LCD_H_RES * (size_t)rows[i] * 2u;
+        /* Leave the system a working margin; a display buffer that consumes
+         * the last of internal RAM only moves the failure somewhere worse. */
+        if (before < (bytes * 2u) + 48u * 1024u) {
+            continue;
+        }
+        void *b1 = heap_caps_aligned_alloc(64, bytes,
+                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        void *b2 = heap_caps_aligned_alloc(64, bytes,
+                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (!b1 || !b2) {
+            if (b1) heap_caps_free(b1);
+            if (b2) heap_caps_free(b2);
+            continue;
+        }
+        lv_display_set_buffers(disp, b1, b2, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
+        ESP_LOGI(TAG,
+                 "draw buffers: 2 x %ux%u in INTERNAL DMA RAM (%u KB each); "
+                 "flushes no longer bounce, so a busy radio cannot drop a frame. "
+                 "internal free %u -> %u KB",
+                 (unsigned)BSP_LCD_H_RES, (unsigned)rows[i],
+                 (unsigned)(bytes / 1024), (unsigned)(before / 1024),
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL |
+                                                    MALLOC_CAP_DMA) / 1024));
+        return;
+    }
+    ESP_LOGW(TAG, "not enough internal DMA RAM for draw buffers (%u KB free) - "
+                  "keeping the vendor's PSRAM pair; expect dropped frames while "
+                  "the radio restarts", (unsigned)(before / 1024));
+}
+
 bool pharos_bsp_init(pharos_bsp_status_t *out)
 {
     pharos_bsp_status_t st;
@@ -201,6 +293,16 @@ bool pharos_bsp_init(pharos_bsp_status_t *out)
     }
 
     if (st.display_ok) {
+        /* Before anything is drawn: move the draw buffers into internal DMA
+         * RAM so a flush never has to allocate. Under the LVGL lock, because
+         * the adapter's task is already running. */
+        if (bsp_display_lock(1000) == ESP_OK) {
+            display_buffers_to_internal(disp);
+            bsp_display_unlock();
+        } else {
+            ESP_LOGW(TAG, "could not take the LVGL lock to move the draw "
+                          "buffers; keeping the vendor's PSRAM pair");
+        }
         /* Idempotent, and cheap insurance: on an AMOLED brightness IS emission,
          * so a panel at zero is indistinguishable from a broken one. */
         bsp_display_brightness_set(100);
