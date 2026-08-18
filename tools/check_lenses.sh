@@ -67,8 +67,30 @@ ELF="${1:-}"
 if [ -n "$ELF" ] && [ -f "$ELF" ]; then
   echo
   echo "[3] every lens id is present in the linked image: $ELF"
+
+  # Read the image ONCE.
+  #
+  # This used to be `strings "$ELF" | grep -qxF "$id"` inside the loop, and
+  # under `set -o pipefail` that is a trap: grep -q exits the instant it finds
+  # a match, strings then dies of SIGPIPE with status 141, and pipefail
+  # promotes 141 to the status of the whole pipeline. The `if` takes the else
+  # branch and the audit reports a lens as DISCARDED while it is sitting right
+  # there in the image.
+  #
+  # It is timing-dependent - whether strings has finished writing before grep
+  # gives up on it varies with the file, the platform and the pipe buffer -
+  # which is the worst possible property for an audit: it passed in CI and
+  # failed on a developer's machine on the same commit. Reading once into a
+  # variable removes the pipeline, and incidentally replaces sixteen passes
+  # over a 15 MB ELF with one.
+  #
+  # The failure was in the safe direction here (a false FAIL blocks a release
+  # rather than shipping a broken one) and pipefail can only ever make a
+  # status MORE non-zero, so no audit in this repo could have false-PASSED
+  # from it. It still had to go.
+  ELF_STRINGS=$(strings -a "$ELF" 2>/dev/null)
   for id in $IDS; do
-    if strings -a "$ELF" 2>/dev/null | grep -qxF "$id"; then
+    if grep -qxF "$id" <<< "$ELF_STRINGS"; then
       ok "$id"
     else
       bad "$id is NOT in the image - the lens was discarded at link time"
