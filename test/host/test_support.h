@@ -38,6 +38,7 @@ void test_region(void);
 /* Suites defined in test_range.c */
 void test_range_determinism(void);
 void test_range_flood(void);
+void test_range_proven(void);
 void test_range_calm_and_roaming(void);
 void test_range_probe_leak(void);
 void test_range_vocabulary(void);
@@ -73,5 +74,8 @@ void test_squall(void);
 
 /* Suite defined in test_vigil.c */
 void test_vigil(void);
+
+/* Suite defined in test_watch.c */
+void test_watch(void);
 
 #endif /* PHAROS_TEST_SUPPORT_H */

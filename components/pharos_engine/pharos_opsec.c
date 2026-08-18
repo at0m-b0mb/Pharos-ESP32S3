@@ -12,29 +12,40 @@ static po_grade_t grade_of(uint8_t camped_score, unsigned families)
 
 /* The dominant tell is the family that contributed the most points to the
  * camped verdict. Ties resolve toward the tell a red-teamer can most readily
- * do something about: identity, then targeting, then rate. */
+ * do something about: forgery first (it is the one under the operator's
+ * control), then shape, then rate. Aftermath is deliberately last in the tie
+ * order because it is the one tell an attacker CANNOT suppress - the clients
+ * coming back is the attack working. */
 static po_tell_t dominant_tell(const pw_verdict_t *v)
 {
     uint8_t best = 0;
     po_tell_t tell = PO_TELL_NONE;
-    if (v->c_rate > best)     { best = v->c_rate;     tell = PO_TELL_RATE; }
-    if (v->c_target >= best)  { best = v->c_target;   tell = PO_TELL_TARGET; }
-    if (v->c_identity >= best){ best = v->c_identity; tell = PO_TELL_IDENTITY; }
-    if (v->c_reason > best)   { best = v->c_reason;   tell = PO_TELL_REASON; }
+    if (v->c_aftermath > best) { best = v->c_aftermath; tell = PO_TELL_AFTERMATH; }
+    if (v->c_rate > best)      { best = v->c_rate;      tell = PO_TELL_RATE; }
+    if (v->c_shape >= best)    { best = v->c_shape;     tell = PO_TELL_SHAPE; }
+    if (v->c_forgery >= best)  { best = v->c_forgery;   tell = PO_TELL_FORGERY; }
+    if (v->c_reason > best)    { best = v->c_reason;    tell = PO_TELL_REASON; }
     return best ? tell : PO_TELL_NONE;
 }
 
 static const char *guidance_for(po_tell_t tell, const pw_verdict_t *v)
 {
     switch (tell) {
-    case PO_TELL_TARGET:
-        return "Broadcast targeting is your loudest tell - it lights the "
-               "targeting family instantly. A defender reads ff:ff:ff:ff:ff:ff "
-               "as an attack; real disconnects are unicast.";
-    case PO_TELL_IDENTITY:
-        return "You are heard at a different signal level than the AP you "
-               "claim to be. To a camped receiver, that address mismatch is "
-               "unforgeable evidence of a second transmitter.";
+    case PO_TELL_SHAPE:
+        return "Broadcast targeting and tight per-victim bursts are your "
+               "loudest tell. A defender reads ff:ff:ff:ff:ff:ff as an attack, "
+               "and no access point sends sixteen frames to one client in half "
+               "a second; real disconnects are unicast and sparse.";
+    case PO_TELL_FORGERY:
+        return "The frames do not hold up as coming from the AP they name - "
+               "wrong signal level, a sequence counter that does not follow "
+               "the AP's own, or no protection on a network that requires it. "
+               "That last one is a contradiction, not a measurement: it does "
+               "not go away when the defender stops standing still.";
+    case PO_TELL_AFTERMATH:
+        return "The clients you knocked off came straight back, and the "
+               "reassociation spike is tied to your burst. This is the tell "
+               "you cannot design away - it is the attack succeeding.";
     case PO_TELL_RATE:
         return "Raw volume carries the score. Rate alone caps below the alarm "
                "band, but it is what a defender notices first and what widens "
@@ -68,7 +79,7 @@ void po_assess(const pw_verdict_t *camped, const pw_verdict_t *hopping,
     }
 
     unsigned families = 0;
-    for (unsigned b = 0; b < 3; b++) {
+    for (unsigned b = 0; b < 4; b++) {
         if (camped->families & (1u << b)) families++;
     }
     out->families_lit = (uint8_t)families;
@@ -126,10 +137,11 @@ const char *po_grade_name(po_grade_t g)
 const char *po_tell_name(po_tell_t t)
 {
     switch (t) {
-    case PO_TELL_RATE:     return "frame rate";
-    case PO_TELL_TARGET:   return "broadcast targeting";
-    case PO_TELL_IDENTITY: return "spoofed identity";
-    case PO_TELL_REASON:   return "reason-code monoculture";
+    case PO_TELL_RATE:      return "frame rate";
+    case PO_TELL_SHAPE:     return "broadcast targeting";
+    case PO_TELL_FORGERY:   return "forged identity";
+    case PO_TELL_AFTERMATH: return "the clients came back";
+    case PO_TELL_REASON:    return "reason-code monoculture";
     case PO_TELL_NONE:
     default:               return "no dominant tell";
     }

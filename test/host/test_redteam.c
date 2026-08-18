@@ -241,18 +241,20 @@ void test_opsec(void)
     }
     /* OPSEC guidance is defensive - it explains detectability, never how to
      * evade. A greppable guard against the tool's purpose drifting. */
-    static const po_tell_t tells[] = { PO_TELL_RATE, PO_TELL_TARGET,
-                                       PO_TELL_IDENTITY, PO_TELL_REASON, PO_TELL_NONE };
-    for (unsigned i = 0; i < 5; i++) {
+    static const po_tell_t tells[] = { PO_TELL_RATE, PO_TELL_SHAPE,
+                                       PO_TELL_FORGERY, PO_TELL_AFTERMATH,
+                                       PO_TELL_REASON, PO_TELL_NONE };
+    for (unsigned i = 0; i < sizeof(tells) / sizeof(tells[0]); i++) {
         pw_verdict_t fake;
         memset(&fake, 0, sizeof(fake));
         fake.score = 80;
         fake.families = 0x7;
         switch (tells[i]) {
         case PO_TELL_RATE:     fake.c_rate = 40; break;
-        case PO_TELL_TARGET:   fake.c_target = 22; break;
-        case PO_TELL_IDENTITY: fake.c_identity = 22; break;
-        case PO_TELL_REASON:   fake.c_reason = 12; break;
+        case PO_TELL_SHAPE:    fake.c_shape = 22; break;
+        case PO_TELL_FORGERY:  fake.c_forgery = 30; break;
+        case PO_TELL_AFTERMATH: fake.c_aftermath = 18; break;
+        case PO_TELL_REASON:   fake.c_reason = 10; break;
         default: break;
         }
         po_assess(&fake, NULL, &r2);

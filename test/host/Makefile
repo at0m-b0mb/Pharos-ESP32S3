@@ -32,6 +32,7 @@ SRCS := \
   test_aegis.c \
   test_squall.c \
   test_vigil.c \
+  test_watch.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \

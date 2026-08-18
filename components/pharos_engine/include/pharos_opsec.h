@@ -47,8 +47,9 @@ typedef enum {
 typedef enum {
     PO_TELL_NONE = 0,
     PO_TELL_RATE,      /* the sheer volume of frames             */
-    PO_TELL_TARGET,    /* broadcast / broad targeting            */
-    PO_TELL_IDENTITY,  /* spoofing an address it cannot match    */
+    PO_TELL_SHAPE,     /* broadcast targeting, or burst runs     */
+    PO_TELL_FORGERY,   /* claiming an address it cannot sustain  */
+    PO_TELL_AFTERMATH, /* the clients it knocked off came back   */
     PO_TELL_REASON,    /* a monoculture of reason codes          */
 } po_tell_t;
 
