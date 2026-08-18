@@ -40,7 +40,9 @@ Most hobby RF tools answer "is there an attack?" with a confident yes/no. Pharos
 
 So every verdict Pharos produces carries a **confidence ceiling** derived from how much of the channel it actually heard. A deauth flood reads `FLOOD LIKELY` when you camp on its channel and only `SUSPICIOUS` when you keep hopping — the same traffic, a different honesty. There is no band named "safe". Absence of evidence on a receiver that hears 7% of the air is not evidence of absence, and the firmware never pretends otherwise.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 5,164 host checks assert, among much else, that no single loud reading can raise an alarm on its own and that hopping can never reach the top band.
+But the ceiling has to punish the **right** thing, and that distinction is the heart of the Watch engine. Hopping weakens an *extrapolated rate* — you heard 7% of a second and multiplied by fourteen. It does not weaken a **contradiction**. If a network advertises that its management frames are cryptographically protected (802.11w), then an *unprotected* deauthentication frame claiming to come from it is forged, and hearing it during a 200 ms visit makes it no less forged. Evidence like that is dwell-independent, and Pharos says so: such a verdict raises its own ceiling to 88 and may alarm while hopping. Nothing ever reaches 100.
+
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 5,602 host checks assert, among much else, that volume and targeting shape **together** can never reach the alarm band — a busy network is not an attack — and that every forgery test has a benign twin it must refuse to fire on.
 
 ## What it looks like
 
@@ -49,15 +51,27 @@ Every screenshot below is **generated from the firmware's own code** — the rea
 by the real training scenarios. Nothing here is a mock-up drawn in a design tool.
 
 <p align="center">
-  <img src="assets/screens/watch_camped.png" width="46%" alt="Watch, camped: FLOOD LIKELY">
-  <img src="assets/screens/watch_hopping.png" width="46%" alt="Watch, hopping: SUSPICIOUS">
+  <img src="assets/screens/watch_camped.png" width="31%" alt="Watch, camped: FLOOD LIKELY at 77">
+  <img src="assets/screens/watch_hopping.png" width="31%" alt="Watch, hopping: SUSPICIOUS at 60">
+  <img src="assets/screens/watch_proven.png" width="31%" alt="Watch, hopping, proven forgery: FLOOD LIKELY at 88">
 </p>
 
-**This pair is the whole argument.** Identical event stream, both sides. Camped
-on the channel, the Watch engine reaches `FLOOD LIKELY` at 88. Hopping across
-1–13, the same evidence tops out at `SUSPICIOUS` — the red `CEIL 60` tick is the
-hard stop, and the dim arc past it is the score that was **earned and then taken
-away** because a receiver hearing 7% of a channel is not entitled to claim it.
+**These three are the whole argument.** The first two are the *identical event
+stream*. Camped on the channel the Watch engine reaches `FLOOD LIKELY` at 77;
+hopping across 1–13 the same evidence tops out at `SUSPICIOUS`, with the red
+ceiling tick sitting right on the score — you are not entitled to claim more.
+That attacker rode the access point's own sequence counter and gave away only
+its position, which is a *measurement*, and measurements are what hopping ruins.
+
+The third is a different attack against a network that **requires** protected
+management frames. The unprotected disconnects are then a contradiction rather
+than an estimate, so the same hopping receiver alarms at 88.
+
+Around the top of each face, sixteen bars are the last sixteen seconds of
+disconnect traffic — because a steady trickle and one violent burst produce the
+same ten-second average and are not the same event. The four pips name the
+evidence: `RATE`, `SHAPE`, `FORGE`, `AFTER`. The line at the bottom is the
+single most specific thing the engine can say.
 
 <p align="center">
   <img src="assets/branding/gallery.png" width="100%" alt="Pharos screen gallery">
@@ -79,7 +93,7 @@ A **lens** is one tool. The dial is built from whatever lenses are compiled in; 
 | Lens | Team | What it does |
 |------|------|--------------|
 | **Spectrum** | 🔵 recon | 2.4 GHz airtime waterfall — the map you read the others against. States, permanently, that it is deaf above 2.4 GHz. |
-| **Watch** | 🔵 detect | Grades deauthentication / disassociation floods across three evidence families, with a confidence ceiling. The headliner. |
+| **Watch** | 🔵 detect | Grades deauthentication / disassociation floods across four evidence families — rate, targeting shape, forgery, and whether the clients actually came back — with a confidence ceiling. The headliner. |
 | **Census** | 🔵 audit | Grades every nearby network A+…F on what it would take to break in — auth, 802.11w, cipher, WPS. |
 | **Twin** | 🔵 detect | Finds the rogue AP wearing a name that belongs to someone else — and scores BSSID multiplicity at *zero*, because roaming is not an attack. |
 | **Karma** | 🔵 detect | Catches the rogue AP that answers to *any* name a passing phone asks for — while scoring a legitimate multi-SSID deployment at zero. |

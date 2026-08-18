@@ -1,5 +1,112 @@
 # Changelog
 
+## v2.0.0-watch — 2026-08-18
+
+The deauthentication detector rewritten end to end: the engine, its screen, and
+the checks that were supposed to be guarding both.
+
+### Fixed: the detector could not alarm in the posture it ships in
+
+v1's arithmetic was sound and its tests passed, and in the field it was useless.
+Hopping 13 channels put the confidence ceiling at ~60; the identity family
+needed beacons the receiver was rarely on-channel to hear; so at most two
+families could fire, two families capped at 74, and 74 was above the ceiling
+anyway. `FLOOD LIKELY` was arithmetically unreachable, and nothing on the glass
+let the operator change posture.
+
+The fix is not a lower bar. The ceiling was punishing the wrong thing. Hopping
+weakens an **extrapolated rate** — you heard 7% of a second and multiplied by
+fourteen. It does not weaken a **contradiction**. An unprotected deauth claiming
+to come from a network that *requires* protected management frames is forged,
+and hearing it during a 200 ms visit makes it no less forged. Such a verdict now
+raises its own ceiling to 88 and may alarm while hopping. Nothing reaches 100.
+
+### New: four evidence families instead of three
+
+| Family | Max | What it reads |
+|---|---|---|
+| `RATE` | 34 | Duty-corrected rate plus the peak second, anchored on Kismet's DEAUTHFLOOD thresholds (5/min, 2/sec burst) |
+| `SHAPE` | 22 | Broadcast share, victim spread, and per-victim burst runs — no AP sends sixteen frames to one client in half a second |
+| `FORGERY` | 30 | 802.11w contradiction, sequence-**order** violation, signal level against the beacon's own spread, ghost BSSID |
+| `AFTERMATH` | 18 | The reassociation stampede that follows a disconnect burst — the one test that still works on the low-volume targeted attacks volume thresholds miss |
+
+The sequence test checks **order, not gap size**, and that is the point: frames
+the receiver never heard widen gaps but can never reverse them, so it does not
+inherit the false-positive rate the literature reports for gap thresholds. It is
+bounded by the access point's own measured counter rate, so a busy AP is never
+accused. Both negatives are asserted in the tests.
+
+Reaching the alarm band needs three families, which — with only two of the four
+being volume-shaped — necessarily includes forgery or aftermath. **A busy network
+is not an attack**, asserted as an invariant rather than as arithmetic.
+
+### New: the operator can finally stand still
+
+The way to raise the ceiling is to stop hopping, and no control on the glass did
+it — the centre tap was inert while a lens was running, and camping needed a
+console command over USB. Lenses may now claim the centre tap; Watch camps on
+the channel carrying the traffic. It also locks on by itself for twenty seconds
+when the rate family fires, then releases. The operator's tap always wins.
+
+### Fixed: the screen flickered and broke
+
+Four distinct causes, all in `pharos_hud.c`:
+
+1. Neither the screen nor the touch zones ever had `LV_OBJ_FLAG_SCROLLABLE`
+   removed, and `lv_obj_create()` sets it. Content is laid out past the screen's
+   bounds, so a drag — or a smeared tap, which on round glass is most of them —
+   **scrolled the whole face away with no way back**. That is the "breaks" half.
+2. `pharos_hud_live()` hid the summary label and `pharos_hud_advice()`, called
+   immediately after it in the same repaint, showed it again. Every frame.
+3. `lv_label_set_text()` marks a label dirty whether or not the string differs,
+   so eight labels and three arcs were rewritten 5×/second with identical
+   content, under a 210 px opaque disc that then had to be recomposited.
+4. The advice label wrapped, so its height changed with its text and the
+   invalidated region moved around under the arc.
+
+Now: two page containers switched only on an actual view change, every widget
+written through a dirty check, no wrapping text on the live face, and scrolling
+removed everywhere. **A steady reading invalidates nothing at all.** The
+three-call API is one call, because that is what let the calls disagree.
+
+### New: the face answers four questions instead of one
+
+One ring for how bad, a sixteen-second ribbon for what shape over time (a steady
+trickle and one violent burst have the same ten-second mean and are not the same
+event), four **labelled** pips — `RATE` `SHAPE` `FORGE` `AFTER` — for what the
+evidence is, and one unwrapped line for what to do. The ceiling is a tick across
+the arc rather than a second band of colour competing with the score.
+
+### Fixed: three faults in the audits themselves
+
+- **The fence's ELF stage has never run.** `check_tx_fence.sh` read the ELF path
+  from `$1`, fifty lines after `set -- $BLE_VALS` reassigned the positional
+  parameters. `$1` was the string `y`, `[ -f y ]` was false, and the linked-image
+  audit skipped silently. That stage is cited in the README and CI runs it on
+  every build.
+- **And when it ran, it condemned a clean image**, demanding a `__wrap_` trap for
+  every transmit primitive when their *absence* is the stronger result: `--wrap`
+  only rewrites references, so an uncalled primitive is never linked at all. It
+  now looks for the real breach — primitive present, trap absent — with a
+  positive control so it cannot pass by proving nothing.
+- **`pipefail` + `strings | grep -q` reported present lenses as discarded.**
+  `grep -q` exits on first match, the producer dies of SIGPIPE (141), `pipefail`
+  promotes it. Timing-dependent: it passed in CI and failed locally on the same
+  commit. Both sites now match from a here-string.
+
+None of this could produce a false *pass* — `pipefail` only makes a status more
+non-zero, and the fence was intact throughout. But an audit that skips itself,
+and one that fails on correct output, are worth less than no audit, because they
+are believed.
+
+### Verification
+
+5,602 host checks · 0 render bounds violations · all four audits green against
+the linked ELF · ESP-IDF v5.5 build clean with zero warnings · 49% of the app
+partition free.
+
+*Never tested against a live deauthentication attack on real hardware.*
+
 ## v1.9.0 — 2026-08-14
 
 ### Fixed: changing lens rebooted the device
