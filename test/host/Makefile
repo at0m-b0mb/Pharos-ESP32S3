@@ -33,9 +33,11 @@ SRCS := \
   test_squall.c \
   test_vigil.c \
   test_watch.c \
+  test_acoustic.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \
+  $(ROOT)/components/pharos_engine/pharos_acoustic.c \
   $(ROOT)/components/pharos_engine/pharos_aegis.c \
   $(ROOT)/components/pharos_engine/pharos_census.c \
   $(ROOT)/components/pharos_engine/pharos_console.c \

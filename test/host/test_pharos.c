@@ -385,6 +385,7 @@ int main(void)
     test_dot11_header();
     test_dot11_ies();
     test_watch();
+    test_acoustic();
     test_census();
     test_twin();
     test_report();
