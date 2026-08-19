@@ -140,6 +140,102 @@ bool pharos_lens_probe_report(char *buf, size_t cap, prt_redact_t redact, uint32
 
 static struct pharos_bus *probe_ingest(void) { return &s_bus; }
 
+
+/* ---- what Probe actually knows ---------------------------------------
+ *
+ * Probe had no display at all, so the screen showed a frame counter while the
+ * engine sat on a table of devices and the network names each one was
+ * shouting. The headline is the WORST-exposed device, because the point of
+ * this lens is that somebody in the room is broadcasting where they live and
+ * work to anyone with an antenna.
+ *
+ * The detail page names them. That is uncomfortable, and it is the entire
+ * value: "a device here leaks 6 networks" is an abstraction nobody acts on,
+ * and seeing your own home network's name on a stranger's screen is not. */
+static bool k_probe_display(struct pharos_lens_display *o)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    const unsigned n = s_engine.n_devices;
+    pp_verdict_t worst;
+    memset(&worst, 0, sizeof(worst));
+    unsigned leaky = 0;
+    for (unsigned i = 0; i < n; i++) {
+        pp_verdict_t v;
+        pp_grade_device(&s_engine.devices[i], &v);
+        if (v.networks) {
+            leaky++;
+        }
+        if (v.exposure > worst.exposure) {
+            worst = v;
+        }
+    }
+    xSemaphoreGive(s_lock);
+
+    if (!n) {
+        snprintf(o->big, sizeof(o->big), "--");
+        snprintf(o->band, sizeof(o->band), "listening");
+        snprintf(o->detail, sizeof(o->detail), "no probe requests yet");
+        snprintf(o->advice, sizeof(o->advice), "Phones probe when unlocked.");
+        o->has_score = false;
+        return true;
+    }
+    snprintf(o->big, sizeof(o->big), "%u", worst.exposure);
+    snprintf(o->band, sizeof(o->band), "%s", pp_grade_name(worst.grade));
+    snprintf(o->detail, sizeof(o->detail), "%u devices  %u leaking names", n, leaky);
+    snprintf(o->advice, sizeof(o->advice), "%s",
+             leaky ? "Names announced to everyone." : "Nothing named yet.");
+    if (worst.networks) {
+        snprintf(o->why, sizeof(o->why), "worst leaks %u network names",
+                 (unsigned)worst.networks);
+    }
+    o->score = worst.exposure;
+    o->ceiling = 100;
+    o->has_score = true;
+    return true;
+}
+
+/* One row per device, then the networks that device named. The names are the
+ * finding; a count is not. */
+static bool k_probe_row(unsigned index, struct pharos_lens_row *out)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    bool ok = false;
+    unsigned row = 0;
+    for (unsigned i = 0; i < s_engine.n_devices && !ok; i++) {
+        const pp_device_t *d = &s_engine.devices[i];
+        if (row == index) {
+            pp_verdict_t v;
+            pp_grade_device(d, &v);
+            snprintf(out->left, sizeof(out->left), "%02x:%02x:%02x  %u seen",
+                     d->addr[3], d->addr[4], d->addr[5], (unsigned)d->probes);
+            snprintf(out->right, sizeof(out->right), "%s", pp_grade_name(v.grade));
+            out->tone = (v.exposure >= 60) ? PHAROS_TONE_BAD
+                      : (v.exposure >= 30) ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
+            ok = true;
+            break;
+        }
+        row++;
+        for (unsigned k = 0; k < d->n_networks && !ok; k++) {
+            if (row == index) {
+                /* Indented, because it belongs to the device above it. */
+                snprintf(out->left, sizeof(out->left), "  \"%.18s\"", d->networks[k]);
+                snprintf(out->right, sizeof(out->right), "%.11s",
+                         pp_place_name((pp_place_t)d->places[k]));
+                out->tone = PHAROS_TONE_WARN;
+                ok = true;
+                break;
+            }
+            row++;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
 static const pharos_lens_t k_probe = {
     .id = "wifi.probe",
     .name = "Probe",
@@ -153,6 +249,10 @@ static const pharos_lens_t k_probe = {
     .on_stop = probe_stop,
     .on_event = probe_event,
     .ingest = probe_ingest,
+    .display = k_probe_display,
+    .row = k_probe_row,
+    .row_head_left = "DEVICE / NETWORK",
+    .row_head_right = "GRADE",
 };
 
 PHAROS_LENS_REGISTER(&k_probe);

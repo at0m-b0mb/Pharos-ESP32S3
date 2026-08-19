@@ -121,6 +121,7 @@ void pharos_bsp_display_unlock(void) {}
  * pulled in transitively by the board header, but name it so the dependency
  * is visible rather than accidental. */
 #include "esp_lv_adapter.h"
+#include "driver/i2c_master.h"
 #include "nvs.h"
 
 static const char *TAG = "bsp";
@@ -340,18 +341,142 @@ void pharos_bsp_display_unlock(void)
     bsp_display_unlock();
 }
 
+/* ---- AXP2101 -------------------------------------------------------
+ *
+ * The power-management chip, on the same I2C bus as the touch controller and
+ * the IMU, at 0x34. The vendor BSP brings the bus up and hands out a handle
+ * but does not talk to the PMU at all, so this does.
+ *
+ * Everything here is PROBED, never assumed. The chip ID is read first and a
+ * wrong answer means the reading is reported ABSENT rather than guessed at -
+ * a fabricated battery percentage on a security tool is exactly the kind of
+ * small lie that makes an operator stop believing the large truths. The old
+ * implementation was honest about this in the only way it could be: it
+ * returned false and said so in a comment. Now it can do better.
+ *
+ * Register map, from the AXP2101 datasheet:
+ *   0x00 STATUS1  bit3 = battery present
+ *   0x01 STATUS2  bits[6:5] = 0 standby, 1 charging, 2 discharging
+ *   0x03 CHIP_ID  = 0x4A on this part
+ *   0x30 ADC_EN   bit0 = VBAT channel
+ *   0x34/0x35     VBAT, 14-bit, already in millivolts
+ *   0xA4 SOC      fuel-gauge percentage, 0..100
+ */
+#define AXP_ADDR      0x34
+#define AXP_REG_ST1   0x00
+#define AXP_REG_ST2   0x01
+#define AXP_REG_ID    0x03
+#define AXP_REG_ADCEN 0x30
+#define AXP_REG_VBATH 0x34
+#define AXP_REG_SOC   0xA4
+#define AXP_CHIP_ID   0x4A
+
+static i2c_master_dev_handle_t s_axp;
+static bool s_axp_probed;
+static bool s_axp_present;
+
+static bool axp_rd(uint8_t reg, uint8_t *val, size_t n)
+{
+    if (!s_axp) {
+        return false;
+    }
+    return i2c_master_transmit_receive(s_axp, &reg, 1, val, n,
+                                       pdMS_TO_TICKS(50)) == ESP_OK;
+}
+
+static bool axp_wr(uint8_t reg, uint8_t val)
+{
+    if (!s_axp) {
+        return false;
+    }
+    const uint8_t b[2] = { reg, val };
+    return i2c_master_transmit(s_axp, b, sizeof(b), pdMS_TO_TICKS(50)) == ESP_OK;
+}
+
+static void axp_probe(void)
+{
+    if (s_axp_probed) {
+        return;
+    }
+    s_axp_probed = true;
+
+    i2c_master_bus_handle_t bus = bsp_i2c_get_handle();
+    if (!bus) {
+        ESP_LOGW(TAG, "no I2C bus handle; battery telemetry unavailable");
+        return;
+    }
+    const i2c_device_config_t cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = AXP_ADDR,
+        .scl_speed_hz = 100000,
+    };
+    if (i2c_master_bus_add_device(bus, &cfg, &s_axp) != ESP_OK) {
+        ESP_LOGW(TAG, "could not attach to the PMU at 0x%02X", AXP_ADDR);
+        return;
+    }
+    uint8_t id = 0;
+    if (!axp_rd(AXP_REG_ID, &id, 1)) {
+        ESP_LOGW(TAG, "PMU at 0x%02X did not answer; battery unavailable", AXP_ADDR);
+        return;
+    }
+    if (id != AXP_CHIP_ID) {
+        /* Something is there, but it is not the part this code understands.
+         * Reporting its registers as a battery percentage would be inventing
+         * a number, so it does not. */
+        ESP_LOGW(TAG, "0x%02X answered with chip id 0x%02X, expected 0x%02X - "
+                      "not reading it as a battery", AXP_ADDR, id, AXP_CHIP_ID);
+        return;
+    }
+    /* Turn the battery-voltage ADC channel on; without it VBAT reads zero and
+     * a zero would look like a flat pack rather than a disabled converter. */
+    uint8_t adcen = 0;
+    if (axp_rd(AXP_REG_ADCEN, &adcen, 1)) {
+        axp_wr(AXP_REG_ADCEN, (uint8_t)(adcen | 0x01));
+    }
+    s_axp_present = true;
+    ESP_LOGI(TAG, "AXP2101 found at 0x%02X; battery telemetry live", AXP_ADDR);
+}
+
 bool pharos_bsp_battery(pwr_battery_t *out)
 {
     if (!out) {
         return false;
     }
     memset(out, 0, sizeof(*out));
-    /* AXP2101 telemetry lands with the PMU driver; until then the power
-     * planner is told the reading is absent rather than given a fabricated
-     * charge. */
-    out->present = false;
     out->capacity_mah = PHAROS_BOARD_BATTERY_MAH;
-    return false;
+
+    axp_probe();
+    if (!s_axp_present) {
+        out->present = false;
+        return false;
+    }
+
+    uint8_t st1 = 0, st2 = 0, soc = 0, vb[2] = { 0, 0 };
+    if (!axp_rd(AXP_REG_ST1, &st1, 1) || !axp_rd(AXP_REG_ST2, &st2, 1)) {
+        return false;
+    }
+    out->present = (st1 & 0x08) != 0;
+    /* bits[6:5]: 0 standby, 1 charging, 2 discharging */
+    out->charging = (((st2 >> 5) & 0x03) == 0x01);
+
+    if (axp_rd(AXP_REG_VBATH, vb, 2)) {
+        /* 14 bits across two registers, already in millivolts. */
+        out->mv = (uint16_t)((((uint16_t)vb[0] & 0x3F) << 8) | vb[1]);
+    }
+    if (axp_rd(AXP_REG_SOC, &soc, 1) && soc <= 100u) {
+        out->soc_pct = soc;
+    } else if (out->mv) {
+        /* No fuel gauge answer: fall back to the pack curve, and be clear in
+         * the only way code can be - a linear 3.3-4.2 V map is a rough guide,
+         * not a gauge. Callers see a percentage either way; the difference is
+         * that this one cannot be better than approximate. */
+        const int mv = (int)out->mv;
+        int pct = (mv - 3300) * 100 / (4200 - 3300);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        out->soc_pct = (uint8_t)pct;
+    }
+    return out->present;
 }
 
 static int s_rotation;
