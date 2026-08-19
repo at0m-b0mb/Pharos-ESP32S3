@@ -117,6 +117,7 @@ static lv_obj_t *s_band;
 static lv_obj_t *s_detail;
 static lv_obj_t *s_why;
 static lv_obj_t *s_peak;
+static lv_obj_t *s_sim;   /* the SIMULATION banner */
 static lv_obj_t *s_bar[PHAROS_DISP_HISTORY];
 static lv_obj_t *s_bar_base;
 static lv_obj_t *s_fam_box[PHAROS_DISP_FAMILIES];
@@ -560,6 +561,12 @@ bool pharos_hud_create(void)
      * 1.75 inch 466 px circle, 12 px is about 1.6 mm of cap height and it
      * reads as pixel mush at arm's length, which is exactly the "not sharp"
      * the operator reported. */
+    /* The drill banner. Amber, above the reading, and impossible to miss -
+     * it exists because a training lens showed "FLOOD LIKELY 77" and was read
+     * as a real attack on a real building. */
+    s_sim    = mk_label(s_page_live, &lv_font_montserrat_16, HUD_AMBER, 0, -96,
+                        "SIMULATION - NOT THIS ROOM");
+    lv_obj_add_flag(s_sim, LV_OBJ_FLAG_HIDDEN);
     s_ctx    = mk_label(s_page_live, &lv_font_montserrat_16, HUD_DIMMER, 0,  -54, "");
     s_big    = mk_label(s_page_live, &lv_font_montserrat_48, HUD_TEXT,   0,   -4, "--");
     s_band   = mk_label(s_page_live, &lv_font_montserrat_22, HUD_CYAN,   0,   46, "");
@@ -763,6 +770,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     show(s_page_live, true);
 
     if (!d) {
+        show(s_sim, false);
         set_text(s_ctx, lens ? lens : "");
         set_text(s_big, "--");
         set_text(s_band, "starting");
@@ -792,6 +800,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
      * receiver is looking. It used to live on the top rim, which is where the
      * activity ribbon now is - a text run and a bar chart sharing an arc is
      * how you get a screen that looks broken. */
+    show(s_sim, d->simulated);
     set_text(s_ctx, lens ? lens : "");
     set_text(s_big, d->big);
     set_text(s_band, d->band);
@@ -919,6 +928,7 @@ void pharos_hud_colourbars(void)
     s_field = s_ticks = s_pip = s_toast = NULL;
     s_track = s_arc = s_ghost = s_ceiling = s_core = NULL;
     s_ctx = s_big = s_band = s_detail = s_why = s_peak = s_bar_base = NULL;
+    s_sim = NULL;
     s_ceiling_at = -1;
     s_b_name = s_b_pos = s_b_summary = s_b_hint = s_b_arc = NULL;
     s_page_detail = s_d_title = s_d_hl = s_d_hr = s_d_page = s_d_empty = NULL;

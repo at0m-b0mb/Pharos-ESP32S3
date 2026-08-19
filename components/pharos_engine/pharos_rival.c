@@ -581,6 +581,9 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
             snprintf(out->worst_name, sizeof(out->worst_name), "%s", d->name);
             out->worst_rssi = d->best_rssi;
             out->worst_addresses = d->addresses;
+            out->worst_age_s = (uint32_t)((now_us > d->last_us)
+                                              ? (now_us - d->last_us) / 1000000ull
+                                              : 0ull);
         }
     }
     /* Give the headline the steadiest name for that kind rather than whichever
@@ -705,6 +708,12 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
  * flood of "Flipper" plus random bytes. */
 bool prv_device_at(const prv_state_t *s, unsigned index, prv_device_t *out)
 {
+    return prv_device_at_now(s, index, 0, out);
+}
+
+bool prv_device_at_now(const prv_state_t *s, unsigned index, uint64_t now_us,
+                       prv_device_t *out)
+{
     if (!s || !out) {
         return false;
     }
@@ -721,6 +730,12 @@ bool prv_device_at(const prv_state_t *s, unsigned index, prv_device_t *out)
         for (unsigned i = 0; i < s->n; i++) {
             const prv_device_t *d = &s->dev[i];
             if (!d->in_use || (int)d->kind != rank) {
+                continue;
+            }
+            /* The list must agree with the count above it: a device the
+             * verdict has dropped as stale cannot still have a row. */
+            if (now_us && now_us > d->last_us &&
+                now_us - d->last_us > PRV_STALE_US) {
                 continue;
             }
             present = true;

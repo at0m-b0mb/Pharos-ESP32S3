@@ -96,6 +96,20 @@ typedef enum {
 #define PRV_SPAM_ADVS    20  /* ...over at least this many advertisements */
 #define PRV_SPAM_WINDOW_US 4000000ull
 
+/* HOW LONG A DEVICE STAYS ON THE LIST AFTER IT STOPS TRANSMITTING.
+ *
+ * A Flipper that has been switched off is not in the room, and a lens that
+ * goes on reporting it is telling the operator something false - the exact
+ * failure this project refuses everywhere else. But dropping it the instant a
+ * single advertisement is missed would make the list flicker, because BLE
+ * advertisers are intermittent and a passive listener misses plenty.
+ *
+ * Thirty seconds is long enough to ride out the gaps and short enough that
+ * "there is a Flipper here" stops being said within half a minute of it
+ * leaving. The row carries how long ago it was last heard, so a fading entry
+ * is visible as one rather than presented as current. */
+#define PRV_STALE_US 30000000ull
+
 /* Presence is capped here. Owning a tool is not an offence, and a lens that
  * alarms on the mere sight of one teaches its operator to ignore it. */
 #define PRV_CAP_PRESENCE_ONLY 55
@@ -182,6 +196,7 @@ typedef struct {
     uint8_t n_flipper;
     uint8_t n_pwnagotchi;
     uint16_t worst_addresses; /* address rotation by the most capable device */
+    uint32_t worst_age_s;     /* how long since the most capable was heard  */
     uint8_t n_wifi_tools;
     prv_kind_t worst_kind;
     uint8_t worst_addr[6];
@@ -252,6 +267,12 @@ prv_kind_t prv_classify_adv(const uint8_t *data, uint8_t len,
                             const char **colour);
 
 bool prv_device_at(const prv_state_t *s, unsigned index, prv_device_t *out);
+
+/* The same, but dropping anything not heard within PRV_STALE_US of now_us, so
+ * the list cannot disagree with the count the verdict reported. Pass now_us=0
+ * to list everything ever seen. */
+bool prv_device_at_now(const prv_state_t *s, unsigned index, uint64_t now_us,
+                       prv_device_t *out);
 
 const char *prv_kind_name(prv_kind_t k);
 const char *prv_kind_note(prv_kind_t k); /* what that hardware can actually do */

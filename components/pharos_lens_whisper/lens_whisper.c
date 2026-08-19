@@ -71,12 +71,39 @@ static int16_t s_win[WHISPER_WIN];
 static void whisper_task(void *arg)
 {
     (void)arg;
+    unsigned reads = 0, fails = 0;
     while (s_run) {
-        const int got = esp_codec_dev_read(s_mic, s_win, (int)sizeof(s_win));
-        if (got <= 0) {
+        /* esp_codec_dev_read RETURNS A STATUS, NOT A BYTE COUNT.
+         *
+         * Its header says so plainly - "ESP_CODEC_DEV_OK: Read success" - and
+         * ESP_CODEC_DEV_OK is zero. This loop was written as
+         *
+         *     if (got <= 0) { skip }
+         *
+         * which reads the success code as failure and discards every window.
+         * The screen said "MIC SILENT - cannot hear" and the detail page said
+         * "windows heard: 0" while the ES7210 was up, unmuted and delivering
+         * audio the whole time. Nothing was wrong with the hardware; the lens
+         * was throwing away everything it asked for.
+         *
+         * On success the driver has filled the whole buffer, so the count is
+         * what was requested. */
+        const int rc = esp_codec_dev_read(s_mic, s_win, (int)sizeof(s_win));
+        if (rc != ESP_CODEC_DEV_OK) {
+            fails++;
+            if ((fails % 50u) == 1u) {
+                ESP_LOGW(TAG, "microphone read failed: %d (%u ok, %u failed)",
+                         rc, reads, fails);
+            }
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
+        if (reads == 0) {
+            ESP_LOGI(TAG, "microphone delivering %u samples a window",
+                     (unsigned)(sizeof(s_win) / sizeof(int16_t)));
+        }
+        reads++;
+        const int got = (int)sizeof(s_win);
         const unsigned n = (unsigned)got / sizeof(int16_t);
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
             pac_observe(&s_engine, s_win, n, WHISPER_RATE);

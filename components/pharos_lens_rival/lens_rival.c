@@ -369,7 +369,10 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
      * where it is context about a finding rather than an item in a list. */
     const unsigned k = index - 6u;
     prv_device_t d;
-    if (!prv_device_at(&s_engine, k, &d)) {
+    /* Stale-aware, so the list cannot show hardware the count above it has
+     * already dropped - a Flipper that has been switched off must stop being
+     * reported, and within half a minute it does. */
+    if (!prv_device_at_now(&s_engine, k, (uint64_t)esp_timer_get_time(), &d)) {
         return false;
     }
     /* Prefer the device's own name over its address: "Flipper R3ghon" is

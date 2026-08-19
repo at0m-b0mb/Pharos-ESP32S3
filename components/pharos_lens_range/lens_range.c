@@ -140,6 +140,8 @@ static bool k_range_display(struct pharos_lens_display *o)
     o->raw_score = v.raw_score;
     o->ceiling = v.ceiling;
     o->has_score = true;
+    /* A drill, not the room. See pharos_lens_display::simulated. */
+    o->simulated = true;
     return true;
 }
 

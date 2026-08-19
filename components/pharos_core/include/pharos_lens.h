@@ -68,6 +68,20 @@ struct pharos_lens_display {
      * backwards" rather than "the shape looks wrong". Empty when the lens has
      * nothing more specific than its band advice to offer. */
     char why[48];
+
+    /* THIS READING IS A SIMULATION, NOT THE ROOM.
+     *
+     * The training lenses play synthesised attacks through the real engines,
+     * which is the point of them - a learner sees the same arithmetic the
+     * field uses. But they therefore produce the same words: Range shows
+     * "FLOOD LIKELY 77" and Footprint "BLARING 77", and an operator who
+     * glances at one has no way to know the building is fine. That happened,
+     * and it is the worst failure this project can have: a drill mistaken for
+     * an incident.
+     *
+     * A lens that is not measuring the actual air sets this, and the HUD marks
+     * it unmistakably on every frame. */
+    bool simulated;
 };
 
 /* ---- the detail page -------------------------------------------------

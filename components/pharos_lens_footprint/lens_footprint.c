@@ -171,6 +171,8 @@ static bool k_footprint_display(struct pharos_lens_display *o)
     o->score = r.camped_score;
     o->ceiling = c.ceiling ? c.ceiling : 100;
     o->has_score = true;
+    /* A drill, not the room. See pharos_lens_display::simulated. */
+    o->simulated = true;
     (void)h;
     return true;
 }
