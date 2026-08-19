@@ -121,6 +121,7 @@ typedef struct {
 
     uint8_t n_devices;
     uint8_t n_flipper;
+    uint8_t n_pwnagotchi;
     uint8_t n_wifi_tools;
     prv_kind_t worst_kind;
     uint8_t worst_addr[6];
@@ -136,10 +137,26 @@ void prv_reset(prv_state_t *s);
 void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
                      int8_t rssi, uint64_t t_us);
 
-/* A Wi-Fi network name from a beacon. Some of this hardware announces itself
- * as an access point rather than over Bluetooth. */
+/* A Wi-Fi beacon. Some of this hardware announces itself as an access point
+ * rather than over Bluetooth, and one of them - the Pwnagotchi - does not use
+ * an SSID at all.
+ *
+ * `whisper` is true when the beacon carried the Pwnagotchi advertisement
+ * elements (222 / 224-226). That, and the hardcoded de:ad:be:ef:de:ad source
+ * address, are two INDEPENDENT signals for the same device: forks change the
+ * address far more readily than they change the protocol, so either alone is
+ * enough and both together is stronger. `ssid` may be the unit's own name,
+ * which the radio lifts out of the whisper payload. */
+void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
+                        uint8_t ssid_len, bool whisper, int8_t rssi,
+                        uint64_t t_us);
+
+/* Kept as the plain-SSID form for callers with nothing else to offer. */
 void prv_observe_ssid(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
                       uint8_t ssid_len, int8_t rssi, uint64_t t_us);
+
+/* Is this the Pwnagotchi advertisement source address? */
+bool prv_is_pwnagotchi_addr(const uint8_t addr[6]);
 
 void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out);
 

@@ -49,6 +49,19 @@ typedef enum {
 #define PHAROS_DOT11_F_BROADCAST  (1u << 4) /* addr1 is ff:ff:ff:ff:ff:ff */
 #define PHAROS_DOT11_F_MFP_SEEN   (1u << 5) /* frame carried an MMIE      */
 #define PHAROS_DOT11_F_PMKID      (1u << 6) /* EAPOL M1 carried a PMKID KDE */
+/* The beacon carried Pwnagotchi "whisper" elements.
+ *
+ * A Pwnagotchi advertises itself to other Pwnagotchi with an ordinary 802.11
+ * beacon that has NO SSID and a set of non-standard information elements
+ * carrying a chunked JSON payload:
+ *
+ *   222 (0xDE) whisper payload      224 (0xE0) whisper identity
+ *   225 (0xE1) whisper signature    226 (0xE2) whisper stream header
+ *
+ * It also transmits from a hardcoded source address, de:ad:be:ef:de:ad. Two
+ * independent signals, which is why both are carried: forks change the address
+ * far more readily than they change the protocol. */
+#define PHAROS_DOT11_F_WHISPER    (1u << 7)
 
 /* RSN posture, distilled from the beacon's RSN element into one byte.
  *

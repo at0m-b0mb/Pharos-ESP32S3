@@ -238,6 +238,46 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             }
         }
         if (has_fixed) {
+            /* PWNAGOTCHI. A beacon with no SSID and information elements in
+             * the 222/224-226 range is the "whisper" advertisement a
+             * Pwnagotchi sends to find its peers - a real protocol riding on
+             * a beacon, which is why ordinary survey tools show nothing.
+             *
+             * Cheap to test: one bounded element walk on beacons only, and
+             * only after the SSID walk has already failed to find a name.
+             * The JSON payload carries the unit's chosen name, and since
+             * these beacons have no SSID the field is free to hold it - so
+             * every screen that already prints an SSID prints the
+             * Pwnagotchi's name instead of nothing. */
+            uint8_t w_len = 0;
+            const uint8_t *w = pharos_dot11_find_ie_from(body, blen, 12u, 222, &w_len);
+            if (!w) {
+                w = pharos_dot11_find_ie_from(body, blen, 12u, 224, &w_len);
+            }
+            if (w) {
+                ev.u.dot11.flags |= PHAROS_DOT11_F_WHISPER;
+                if (ev.u.dot11.ssid_len == 0 && w_len > 8u) {
+                    /* Pull "name":"..." out of the first payload chunk. A
+                     * scan rather than a parser: this is a hot path, the
+                     * payload is attacker-controlled, and a wrong answer here
+                     * costs a label rather than a verdict. */
+                    for (uint8_t k = 0; k + 8u < w_len; k++) {
+                        if (w[k] == '"' && w[k + 1] == 'n' && w[k + 2] == 'a' &&
+                            w[k + 3] == 'm' && w[k + 4] == 'e' && w[k + 5] == '"' &&
+                            w[k + 6] == ':' && w[k + 7] == '"') {
+                            uint8_t j = (uint8_t)(k + 8u);
+                            uint8_t n = 0;
+                            while (j < w_len && w[j] != '"' &&
+                                   n < PHAROS_EV_SSID_MAX) {
+                                ev.u.dot11.ssid[n++] = (char)w[j++];
+                            }
+                            ev.u.dot11.ssid_len = n;
+                            break;
+                        }
+                    }
+                }
+            }
+
             pharos_rsn_t rsn;
             memset(&rsn, 0, sizeof(rsn));
             if (pharos_dot11_rsn(body, blen, &rsn) && rsn.has_rsn) {

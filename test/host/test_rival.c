@@ -169,9 +169,77 @@ static void test_rival_listing_and_vocabulary(void)
     }
 }
 
+
+/* A Pwnagotchi is NOT found by name, and the first version of this lens tried
+ * to. Its advertisement is a beacon with NO SSID at all, carrying a chunked
+ * JSON payload in information elements 222 and 224-226, sent from a hardcoded
+ * de:ad:be:ef:de:ad. Two independent signals; either is sufficient. */
+static void test_rival_pwnagotchi(void)
+{
+    banner("rival: a Pwnagotchi has no SSID to match on");
+    static const uint8_t PWN[6]  = { 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD };
+    static const uint8_t OTHER[6] = { 0x02, 0x99, 0x88, 0x77, 0x66, 0x55 };
+
+    CHECK(prv_is_pwnagotchi_addr(PWN), "the advertisement address is known");
+    CHECK(!prv_is_pwnagotchi_addr(OTHER), "and nothing else matches it");
+
+    /* Signal one: the address, with no SSID and no whisper flag. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 8; i++) {
+            prv_observe_beacon(&s, PWN, NULL, 0, false, -55,
+                               T0 + (uint64_t)i * 500000ull);
+        }
+        prv_evaluate(&s, T0 + 4000000ull, &v);
+        CHECK_EQ(v.n_pwnagotchi, 1);
+        CHECK_EQ(v.worst_kind, PRV_KIND_PWNAGOTCHI);
+    }
+
+    /* Signal two: the whisper elements, from a DIFFERENT address - which is
+     * what a fork that changed the constant would look like. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 8; i++) {
+            prv_observe_beacon(&s, OTHER, "Sleepy", 6, true, -55,
+                               T0 + (uint64_t)i * 500000ull);
+        }
+        prv_evaluate(&s, T0 + 4000000ull, &v);
+        CHECK_EQ(v.n_pwnagotchi, 1);
+        /* The unit's own name, lifted out of the whisper payload by the radio,
+         * is what gets shown - a beacon with no SSID leaves the field free. */
+        CHECK(strcmp(v.worst_name, "Sleepy") == 0,
+              "the unit's name is carried through (got \"%s\")", v.worst_name);
+    }
+
+    /* An ORDINARY beacon from an ordinary access point must not be either. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 8; i++) {
+            prv_observe_beacon(&s, OTHER, "Sunset12", 8, false, -55,
+                               T0 + (uint64_t)i * 500000ull);
+        }
+        prv_evaluate(&s, T0 + 4000000ull, &v);
+        CHECK_EQ(v.n_pwnagotchi, 0);
+        CHECK_EQ(v.n_devices, 0);
+    }
+
+    /* The deauther's documented default access-point name. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        prv_observe_beacon(&s, OTHER, "pwned", 5, false, -40, T0);
+        prv_evaluate(&s, T0 + 1000000ull, &v);
+        CHECK_EQ(v.worst_kind, PRV_KIND_DEAUTHER);
+    }
+}
+
 void test_rival(void)
 {
     test_rival_names();
+    test_rival_pwnagotchi();
     test_rival_presence_is_capped();
     test_rival_spam_is_active();
     test_rival_busy_room_is_not_a_flood();

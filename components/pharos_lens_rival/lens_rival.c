@@ -107,11 +107,20 @@ static void rival_event(const pharos_event_t *ev)
         return;
     }
     const pharos_ev_dot11_t *f = &ev->u.dot11;
-    if (f->type != PHAROS_FT_MGMT || f->subtype != PHAROS_ST_BEACON ||
-        f->ssid_len == 0) {
+    if (f->type != PHAROS_FT_MGMT || f->subtype != PHAROS_ST_BEACON) {
         return;
     }
-    prv_observe_ssid(&s_engine, f->a2, f->ssid, f->ssid_len, f->rssi, ev->t_us);
+    /* NOT gated on ssid_len. A Pwnagotchi advertisement is a beacon with no
+     * SSID at all - dropping nameless beacons here is precisely how the first
+     * version of this lens managed to be blind to the device it claimed to
+     * find. The whisper flag comes from the radio, which spots the 222/224-226
+     * elements in the hot path and lifts the unit's name out of the payload. */
+    const bool whisper = (f->flags & PHAROS_DOT11_F_WHISPER) != 0;
+    if (!whisper && f->ssid_len == 0) {
+        return;
+    }
+    prv_observe_beacon(&s_engine, f->a2, f->ssid, f->ssid_len, whisper, f->rssi,
+                       ev->t_us);
 }
 
 static void rival_tick(uint32_t dt_ms)
@@ -152,6 +161,7 @@ static bool k_rival_display(struct pharos_lens_display *o)
         return false;
     }
     snprintf(o->big, sizeof(o->big), "%u", v.n_devices);
+    (void)v.n_pwnagotchi;
     snprintf(o->band, sizeof(o->band), "%s", prv_band_name(v.band));
     if (v.worst_kind != PRV_KIND_NONE) {
         snprintf(o->detail, sizeof(o->detail), "%.20s %ddBm",

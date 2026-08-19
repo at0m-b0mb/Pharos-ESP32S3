@@ -65,6 +65,9 @@ prv_kind_t prv_classify_name(const char *name, uint8_t len, bool ble)
     /* Boards whose NAME announces the attack. These are firmware defaults from
      * well-known deauthentication projects; somebody running one has gone out
      * of their way to install it. */
+    /* "pwned" is the ESP8266 deauther's default access-point name, straight
+     * from its own documentation; the rest are firmware names people install
+     * deliberately. All matched as CONTAINS because forks append serials. */
     static const char *k_deauth[] = { "pwned", "deauth", "marauder", "evilportal" };
     for (unsigned i = 0; i < sizeof(k_deauth) / sizeof(k_deauth[0]); i++) {
         if (ci_contains(name, len, k_deauth[i])) {
@@ -189,14 +192,39 @@ void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
     }
 }
 
-void prv_observe_ssid(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
-                      uint8_t ssid_len, int8_t rssi, uint64_t t_us)
+/* The address a Pwnagotchi transmits its advertisement from. Hardcoded in the
+ * project and unchanged across the common forks - but checked as ONE of two
+ * signals, never as the only one, because a constant in somebody else's source
+ * is exactly the kind of thing that changes without warning. */
+bool prv_is_pwnagotchi_addr(const uint8_t addr[6])
 {
-    if (!s || !bssid || !ssid || ssid_len == 0) {
+    static const uint8_t k_pwn[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD };
+    return addr && memcmp(addr, k_pwn, 6) == 0;
+}
+
+void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
+                        uint8_t ssid_len, bool whisper, int8_t rssi,
+                        uint64_t t_us)
+{
+    if (!s || !bssid) {
         return;
     }
     note_time(s, t_us);
-    const prv_kind_t kind = prv_classify_name(ssid, ssid_len, false);
+
+    prv_kind_t kind = PRV_KIND_NONE;
+    /* THE PWNAGOTCHI TEST, AND WHY IT IS NOT A NAME MATCH.
+     *
+     * A Pwnagotchi advertisement is a beacon with NO SSID carrying a chunked
+     * JSON payload in information elements 222 and 224-226, sent from
+     * de:ad:be:ef:de:ad. Matching on the word "pwnagotchi" in an SSID - which
+     * is what this lens did first - could never have worked, because there is
+     * no SSID in the frame at all. Either signal is sufficient; the radio
+     * lifts the unit's own name out of the payload so it can be shown. */
+    if (whisper || prv_is_pwnagotchi_addr(bssid)) {
+        kind = PRV_KIND_PWNAGOTCHI;
+    } else if (ssid && ssid_len) {
+        kind = prv_classify_name(ssid, ssid_len, false);
+    }
     if (kind == PRV_KIND_NONE) {
         return;
     }
@@ -211,11 +239,17 @@ void prv_observe_ssid(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
     if (rssi > d->best_rssi) {
         d->best_rssi = rssi;
     }
-    if (d->name[0] == '\0') {
+    if (d->name[0] == '\0' && ssid && ssid_len) {
         const uint8_t n = ssid_len > PR_NAME_MAX ? PR_NAME_MAX : ssid_len;
         memcpy(d->name, ssid, n);
         d->name[n] = '\0';
     }
+}
+
+void prv_observe_ssid(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
+                      uint8_t ssid_len, int8_t rssi, uint64_t t_us)
+{
+    prv_observe_beacon(s, bssid, ssid, ssid_len, false, rssi, t_us);
 }
 
 /* ---- scoring --------------------------------------------------------- */
@@ -261,6 +295,9 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
         out->n_devices++;
         if (d->kind == PRV_KIND_FLIPPER) {
             out->n_flipper++;
+        }
+        if (d->kind == PRV_KIND_PWNAGOTCHI) {
+            out->n_pwnagotchi++;
         }
         if (!d->ble) {
             out->n_wifi_tools++;
