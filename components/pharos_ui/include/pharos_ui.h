@@ -23,6 +23,15 @@
 extern "C" {
 #endif
 
+/* Where the screen is, for the console.
+ *
+ * `rows` printed the list but not which row the centre tap would act on, so
+ * the one thing that had to be verified by hand - does the cursor move, does
+ * it open the right thing - was the one thing a log could not show. Returns
+ * the cursor's absolute row index, or -1 when the detail page is not up.
+ * `opened` receives the row currently expanded, or -1. */
+int pharos_ui_detail_cursor(int *opened);
+
 #include "pharos_aegis.h"
 /* pharos_nav_t lives here; the nav request below speaks in it. */
 #include "pharos_hud.h"

@@ -433,6 +433,216 @@ static bool k_census_row(unsigned index, struct pharos_lens_row *out)
     return ok;
 }
 
+/* OPENING ONE NETWORK.
+ *
+ * The list answers "which is worst". This answers "why", which is the question
+ * anybody who intends to DO something has to ask next - a grade nobody can
+ * interrogate is a claim rather than a finding.
+ *
+ * Everything here is what was actually heard in the beacon, not a lookup: the
+ * cipher offered, whether management frames are protected, whether WPS is
+ * advertised, and - the one that matters most - the specific ceiling that
+ * stopped the grade going higher, which is the single thing to fix. */
+static bool k_census_expand(unsigned row, unsigned sub,
+                            struct pharos_lens_row *out)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    unsigned order[CENSUS_MAX_AP];
+    const unsigned n = s_n_aps;
+    for (unsigned i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    for (unsigned i = 1; i < n; i++) {
+        const unsigned key = order[i];
+        unsigned j = i;
+        while (j > 0 &&
+               pc_compare(&s_aps[key], &s_grades[key],
+                          &s_aps[order[j - 1]], &s_grades[order[j - 1]]) < 0) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = key;
+    }
+    if (row >= n) {
+        xSemaphoreGive(s_lock);
+        return false;
+    }
+    const pc_ap_t ap = s_aps[order[row]];
+    const pc_verdict_t v = s_grades[order[row]];
+    xSemaphoreGive(s_lock);
+
+    out->tone = PHAROS_TONE_NEUTRAL;
+    switch (sub) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "network");
+        snprintf(out->right, sizeof(out->right), "%.11s",
+                 (ap.hidden || !ap.ssid_len) ? "<hidden>" : ap.ssid);
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "grade");
+        snprintf(out->right, sizeof(out->right), "%s  %u",
+                 pc_grade_name(v.grade), v.score);
+        out->tone = (v.grade >= PC_GRADE_A)      ? PHAROS_TONE_GOOD
+                  : (v.grade >= PC_GRADE_C)      ? PHAROS_TONE_WARN
+                  : (v.grade == PC_GRADE_UNGRADED) ? PHAROS_TONE_DIM
+                                                   : PHAROS_TONE_BAD;
+        return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "address");
+        snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                 ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "channel / signal");
+        snprintf(out->right, sizeof(out->right), "%u / %d", (unsigned)ap.channel,
+                 (int)ap.rssi);
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "authentication");
+        if (!ap.privacy && !ap.rsn.has_rsn) {
+            snprintf(out->right, sizeof(out->right), "OPEN");
+            out->tone = PHAROS_TONE_BAD;
+        } else if (ap.rsn.has_sae) {
+            snprintf(out->right, sizeof(out->right), "WPA3");
+            out->tone = PHAROS_TONE_GOOD;
+        } else if (ap.rsn.has_owe) {
+            snprintf(out->right, sizeof(out->right), "OWE");
+            out->tone = PHAROS_TONE_WARN;
+        } else if (ap.akm_8021x) {
+            snprintf(out->right, sizeof(out->right), "802.1X");
+            out->tone = PHAROS_TONE_GOOD;
+        } else if (ap.rsn.has_rsn) {
+            snprintf(out->right, sizeof(out->right), "WPA2 PSK");
+            out->tone = PHAROS_TONE_WARN;
+        } else {
+            snprintf(out->right, sizeof(out->right), "WEP/WPA1");
+            out->tone = PHAROS_TONE_BAD;
+        }
+        return true;
+    case 5:
+        /* The one that decides whether a deauthentication flood works here. */
+        snprintf(out->left, sizeof(out->left), "802.11w (MFP)");
+        if (ap.rsn.mfp_required) {
+            snprintf(out->right, sizeof(out->right), "required");
+            out->tone = PHAROS_TONE_GOOD;
+        } else if (ap.rsn.mfp_capable) {
+            snprintf(out->right, sizeof(out->right), "optional");
+            out->tone = PHAROS_TONE_WARN;
+        } else {
+            snprintf(out->right, sizeof(out->right), "NONE");
+            out->tone = PHAROS_TONE_BAD;
+        }
+        return true;
+    case 6:
+        snprintf(out->left, sizeof(out->left), "cipher");
+        snprintf(out->right, sizeof(out->right), "%s",
+                 ap.tkip_pairwise ? "TKIP" : (ap.ccmp_pairwise ? "CCMP" : "none"));
+        out->tone = ap.tkip_pairwise ? PHAROS_TONE_BAD
+                  : (ap.ccmp_pairwise ? PHAROS_TONE_GOOD : PHAROS_TONE_WARN);
+        return true;
+    case 7:
+        snprintf(out->left, sizeof(out->left), "WPS");
+        snprintf(out->right, sizeof(out->right), "%s",
+                 ap.wps_pin ? "PIN" : (ap.wps_present ? "on" : "off"));
+        out->tone = ap.wps_pin ? PHAROS_TONE_BAD
+                  : (ap.wps_present ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD);
+        return true;
+    case 8:
+        snprintf(out->left, sizeof(out->left), "hidden name");
+        snprintf(out->right, sizeof(out->right), "%s", ap.hidden ? "yes" : "no");
+        /* Amber either way when hidden: hiding an SSID is not security, and a
+         * green tick here would suggest it were. */
+        out->tone = ap.hidden ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 9:
+        snprintf(out->left, sizeof(out->left), "beacons heard");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)ap.beacons);
+        out->tone = (ap.beacons < 3u) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 10: {
+        /* THE ONE THING TO FIX.
+         *
+         * This read "nothing" on a network graded C with two amber rows above
+         * it, which is worse than saying nothing at all - it told somebody
+         * their network was fine while the page said otherwise. The cause: it
+         * only looked at the CAPS, and a network can lose most of its points
+         * to ordinary deductions without tripping a single ceiling.
+         *
+         * So caps first, because a ceiling is the hardest bound, and then the
+         * component that actually lost the most of its allowance. */
+        snprintf(out->left, sizeof(out->left), "fix first");
+        const uint8_t c = v.caps_applied;
+        const char *w = (c & PC_CAP_OPEN)    ? "add a key"
+                      : (c & PC_CAP_WEP)     ? "drop WEP"
+                      : (c & PC_CAP_WPA1)    ? "drop WPA1"
+                      : (c & PC_CAP_TKIP)    ? "drop TKIP"
+                      : (c & PC_CAP_WPS_PIN) ? "kill WPS"
+                      : (c & PC_CAP_NO_MFP)  ? "turn on 11w"
+                                             : NULL;
+        if (!w) {
+            /* Points lost, out of each component's own allowance. */
+            const int lost_auth = 45 - (int)v.c_auth;
+            const int lost_mfp = 25 - (int)v.c_mfp;
+            const int lost_ciph = 15 - (int)v.c_cipher;
+            const int lost_exp = 15 - (int)v.c_exposure;
+            int worst = lost_auth;
+            w = "use WPA3";
+            if (lost_mfp > worst) { worst = lost_mfp; w = "turn on 11w"; }
+            if (lost_ciph > worst) { worst = lost_ciph; w = "the cipher"; }
+            if (lost_exp > worst) {
+                worst = lost_exp;
+                /* Exposure is WPS and the hidden-SSID theatre; name whichever
+                 * of them this network is actually doing. */
+                w = ap.wps_present ? "kill WPS" : "stop hiding";
+            }
+            if (worst <= 0) {
+                w = "nothing";
+            }
+        }
+        snprintf(out->right, sizeof(out->right), "%s", w);
+        out->tone = (v.grade >= PC_GRADE_A) ? PHAROS_TONE_GOOD : PHAROS_TONE_BAD;
+        return true;
+    }
+    case 11:
+        /* Where the points went, so "fix first" is a conclusion rather than an
+         * assertion. 45/25/15/15 are the engine's own allowances. */
+        snprintf(out->left, sizeof(out->left), "auth + 11w, of 70");
+        snprintf(out->right, sizeof(out->right), "%u+%u",
+                 (unsigned)(v.c_auth > 45u ? 45u : v.c_auth),
+                 (unsigned)(v.c_mfp > 25u ? 25u : v.c_mfp));
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    case 12:
+        snprintf(out->left, sizeof(out->left), "cipher + rest, of 30");
+        snprintf(out->right, sizeof(out->right), "%u+%u",
+                 (unsigned)(v.c_cipher > 15u ? 15u : v.c_cipher),
+                 (unsigned)(v.c_exposure > 15u ? 15u : v.c_exposure));
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    case 13:
+        if (!(v.notes & (PC_NOTE_TRANSITION | PC_NOTE_THIN | PC_NOTE_HIDDEN |
+                         PC_NOTE_OWE | PC_NOTE_ENTERPRISE))) {
+            return false;
+        }
+        snprintf(out->left, sizeof(out->left), "%.25s",
+                 (v.notes & PC_NOTE_TRANSITION) ? "WPA3 falls back to WPA2"
+               : (v.notes & PC_NOTE_OWE)        ? "encrypted, open to all"
+               : (v.notes & PC_NOTE_ENTERPRISE) ? "802.1X: keys per user"
+               : (v.notes & PC_NOTE_THIN)       ? "graded on few beacons"
+                                                : "hiding a name is not it");
+        snprintf(out->right, sizeof(out->right), "note");
+        out->tone = (v.notes & (PC_NOTE_TRANSITION | PC_NOTE_THIN))
+                        ? PHAROS_TONE_WARN
+                        : PHAROS_TONE_DIM;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static const pharos_lens_t k_census = {
     .id = "wifi.census",
     .name = "Census",
@@ -451,6 +661,7 @@ static const pharos_lens_t k_census = {
     .row = k_census_row,
     .row_head_left = "NETWORK   CH  dBm",
     .row_head_right = "GRADE",
+    .row_expand = k_census_expand,
 };
 
 /* Aegis: Twin speaks for the IMPERSONATE stage. Census itself reports nothing -

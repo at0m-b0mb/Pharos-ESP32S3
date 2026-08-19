@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "lens_system.c"
     INCLUDE_DIRS "."
-    REQUIRES pharos_core pharos_engine pharos_radio pharos_bsp pharos_audio
+    REQUIRES pharos_core pharos_engine pharos_radio pharos_bsp pharos_audio pharos_ui
     PRIV_REQUIRES esp_app_format esp_timer
 
     # A lens registers itself from a constructor, so nothing in the project

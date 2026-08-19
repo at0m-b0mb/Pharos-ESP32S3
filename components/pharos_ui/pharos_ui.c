@@ -31,6 +31,7 @@
 #include "pharos_bus.h"
 #include "pharos_dial.h"
 #include "pharos_hud.h"
+#include "pharos_theme.h"
 #include "pharos_radio.h"
 #include "pharos_lens.h"
 
@@ -143,13 +144,18 @@ void pharos_ui_aegis_ack(void)
  *
  * So the callback records an intent and returns. The UI task, which owns the
  * lens lifecycle already, performs it on the next tick. */
-typedef enum { VIEW_BROWSE = 0, VIEW_LIVE, VIEW_DETAIL } view_t;
+typedef enum { VIEW_BROWSE = 0, VIEW_LIVE, VIEW_DETAIL, VIEW_OPENED } view_t;
 
 static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
 static unsigned s_order_n;
 static unsigned s_cursor;
 static view_t s_view = VIEW_BROWSE;
 static unsigned s_detail_page;
+/* Which row the centre tap would open, as an absolute index across the whole
+ * list. The page shown follows it, so moving the cursor off the bottom turns
+ * the page rather than making the operator do both. */
+static unsigned s_detail_cursor;
+static unsigned s_opened_row;
 static volatile int s_nav_pending = -1; /* pharos_nav_t, or -1 for none */
 
 static void on_nav(pharos_nav_t what)
@@ -261,6 +267,7 @@ static void nav_apply(void)
         }
         if (s_view == VIEW_LIVE && live && live->row) {
             s_detail_page = 0;
+            s_detail_cursor = 0;
             s_view = VIEW_DETAIL;
             return;
         }
@@ -273,10 +280,15 @@ static void nav_apply(void)
         return;
     }
     case PHAROS_NAV_NEXT:
-        /* In DETAIL the sides page the list rather than changing lens - you
+        /* In DETAIL the sides move the CURSOR rather than changing lens - you
          * are reading, not browsing, and losing your place to a stray tap
-         * would make a long list unusable. */
+         * would make a long list unusable. The page follows the cursor, so
+         * nobody has to move both. */
         if (s_view == VIEW_DETAIL) {
+            s_detail_cursor++;
+            return;
+        }
+        if (s_view == VIEW_OPENED) {
             s_detail_page++;
             return;
         }
@@ -284,14 +296,34 @@ static void nav_apply(void)
         break;
     case PHAROS_NAV_PREV:
         if (s_view == VIEW_DETAIL) {
+            if (s_detail_cursor) s_detail_cursor--;
+            return;
+        }
+        if (s_view == VIEW_OPENED) {
             if (s_detail_page) s_detail_page--;
             return;
         }
         s_cursor = (s_cursor + s_order_n - 1u) % s_order_n;
         break;
     case PHAROS_NAV_SELECT: {
+        if (s_view == VIEW_OPENED) {
+            s_view = VIEW_DETAIL; /* close it again */
+            s_detail_page = 0;
+            return;
+        }
         if (s_view == VIEW_DETAIL) {
-            return; /* the centre belongs to the list here */
+            const pharos_lens_t *live = pharos_lens_active();
+            /* Change it if it is changeable, otherwise open it. A lens may
+             * offer both, row by row. */
+            if (live && live->row_edit && live->row_edit(s_detail_cursor)) {
+                return;
+            }
+            if (live && live->row_expand) {
+                s_opened_row = s_detail_cursor;
+                s_detail_page = 0;
+                s_view = VIEW_OPENED;
+            }
+            return;
         }
         if (s_view == VIEW_LIVE) {
             /* The centre used to do nothing here, and that hole is why a
@@ -331,6 +363,11 @@ static void nav_apply(void)
     }
     case PHAROS_NAV_HOME:
     default:
+        if (s_view == VIEW_OPENED) {
+            s_view = VIEW_DETAIL;
+            s_detail_page = 0;
+            return;
+        }
         if (s_view == VIEW_DETAIL) {
             s_view = VIEW_LIVE; /* one step back, not all the way out */
             return;
@@ -525,11 +562,75 @@ static void alarm_pump(const pharos_lens_t *active,
  * lens never has to know how tall the screen is. The row count is discovered
  * by asking one past the end - lists here are tens of entries, not thousands,
  * and a lens that would rather not be asked simply leaves ->row NULL. */
+/* The lens' name in capitals, in a static buffer - the HUD copies it. */
+static const char *lens_caps(const pharos_lens_t *active)
+{
+    static char name[16];
+    unsigned k = 0;
+    if (active) {
+        for (; active->name[k] && k < sizeof(name) - 1; k++) {
+            const char c = active->name[k];
+            name[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+    }
+    name[k] = '\0';
+    return name;
+}
+
+int pharos_ui_detail_cursor(int *opened)
+{
+    if (opened) {
+        *opened = (s_view == VIEW_OPENED) ? (int)s_opened_row : -1;
+    }
+    if (s_view != VIEW_DETAIL && s_view != VIEW_OPENED) {
+        return -1;
+    }
+    return (int)s_detail_cursor;
+}
+
 static void paint_detail(const pharos_lens_t *active)
 {
     struct pharos_lens_row rows[PHAROS_HUD_ROWS];
     unsigned total = 0;
 
+    /* THE OPENED ROW. A grade with no way to ask "why" is a claim rather than
+     * a finding, so a lens that can say more about one of its rows gets a page
+     * to say it on. */
+    const bool opened = (s_view == VIEW_OPENED);
+    if (opened && active && active->row_expand) {
+        struct pharos_lens_row probe;
+        while (total < 240u) {
+            memset(&probe, 0, sizeof(probe));
+            if (!active->row_expand(s_opened_row, total, &probe)) {
+                break;
+            }
+            total++;
+        }
+        const unsigned pages =
+            total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
+        if (s_detail_page >= pages) {
+            s_detail_page = pages - 1u;
+        }
+        unsigned n = 0;
+        const unsigned base = s_detail_page * PHAROS_HUD_ROWS;
+        for (; n < PHAROS_HUD_ROWS; n++) {
+            memset(&rows[n], 0, sizeof(rows[n]));
+            if (!active->row_expand(s_opened_row, base + n, &rows[n])) {
+                break;
+            }
+        }
+        /* Head the page with the row you opened, so a page of numbers is
+         * never orphaned from the thing it describes. */
+        memset(&probe, 0, sizeof(probe));
+        const bool named = active->row && active->row(s_opened_row, &probe);
+        pharos_hud_detail(lens_caps(active), named ? probe.left : "DETAIL",
+                          "\xEF\x81\x93", rows, n, s_detail_page, pages, -1,
+                          false);
+        return;
+    }
+
+    /* The list. The lens fills rows by absolute index and the HUD does the
+     * slicing, so a lens never has to know how tall the screen is. */
     if (active && active->row) {
         struct pharos_lens_row probe;
         while (total < 240u) {
@@ -541,10 +642,11 @@ static void paint_detail(const pharos_lens_t *active)
         }
     }
 
-    const unsigned pages = total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
-    if (s_detail_page >= pages) {
-        s_detail_page = 0;
+    if (total && s_detail_cursor >= total) {
+        s_detail_cursor = total - 1u;
     }
+    s_detail_page = total ? (s_detail_cursor / PHAROS_HUD_ROWS) : 0u;
+    const unsigned pages = total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
 
     unsigned n = 0;
     if (active && active->row) {
@@ -557,19 +659,37 @@ static void paint_detail(const pharos_lens_t *active)
         }
     }
 
-    char name[16];
-    unsigned k = 0;
-    if (active) {
-        for (; active->name[k] && k < sizeof(name) - 1; k++) {
-            const char c = active->name[k];
-            name[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
-        }
-    }
-    name[k] = '\0';
-
-    pharos_hud_detail(name, active ? active->row_head_left : NULL,
+    const int focus = total ? (int)(s_detail_cursor % PHAROS_HUD_ROWS) : -1;
+    pharos_hud_detail(lens_caps(active), active ? active->row_head_left : NULL,
                       active ? active->row_head_right : NULL, rows, n,
-                      s_detail_page, pages);
+                      s_detail_page, pages, focus,
+                      active && (active->row_expand || active->row_edit));
+}
+
+/* Apply a theme change wherever the paint loop next happens to be.
+ *
+ * The lens that changes the theme runs on this task but must not reach into
+ * the HUD - a settings screen knowing how to rebuild the face is the kind of
+ * coupling that means the NEXT settings screen has to know it too. So the
+ * lens moves a number, and the one place that owns the face notices. */
+static void theme_sync(void)
+{
+    static unsigned seen = (unsigned)-1;
+    const unsigned now = pharos_theme_index();
+    if (seen == now) {
+        return;
+    }
+    const bool first = (seen == (unsigned)-1);
+    seen = now;
+    if (!first) {
+        /* The browse card is painted on view entry rather than per frame, and
+         * a theme can only be changed from a lens' detail page, so by the time
+         * anyone gets back to BROWSE it has been repainted anyway. */
+        pharos_hud_rebuild();
+        /* And nothing the teardown raised is a real intent. Tearing the face
+         * down and building it again is not a thing a finger did. */
+        s_nav_pending = -1;
+    }
 }
 
 static void paint(const pharos_lens_t *active)
@@ -577,13 +697,14 @@ static void paint(const pharos_lens_t *active)
     if (s_view == VIEW_BROWSE) {
         return; /* the browse card is painted when the cursor moves */
     }
-    if (s_view == VIEW_DETAIL) {
+    if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
         if (!pharos_bsp_display_lock(30)) {
             s_paint_misses++;
             return;
         }
         s_paints++;
         pharos_hud_create();
+        theme_sync();
         paint_detail(active);
         pharos_bsp_display_unlock();
         return;
@@ -602,6 +723,7 @@ static void paint(const pharos_lens_t *active)
      * Without this, a single missed lock at boot would leave the panel blank
      * for the whole session. */
     pharos_hud_create();
+    theme_sync();
 
     if (!active) {
         struct pharos_lens_display idle;

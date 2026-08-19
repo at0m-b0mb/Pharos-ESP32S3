@@ -64,6 +64,12 @@ extern "C" {
 
 bool pharos_hud_create(void);
 
+/* Build the face again from scratch, which is how a theme change is applied.
+ * Caller holds the display lock. Safe to call before create(); it does
+ * nothing. See the comment on the definition for why this is a rebuild rather
+ * than a walk over the widgets. */
+void pharos_hud_rebuild(void);
+
 /* Have the widgets actually been built? Reported by the `diag` command: a
  * panel that is up with no HUD on it is a different fault from a dark one. */
 bool pharos_hud_present(void);
@@ -113,7 +119,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
 void pharos_hud_detail(const char *lens, const char *head_left,
                        const char *head_right,
                        const struct pharos_lens_row *rows, unsigned n,
-                       unsigned page, unsigned pages);
+                       unsigned page, unsigned pages, int focus, bool openable);
 
 /* The boot splash and the `screen test` command. */
 void pharos_hud_splash(const char *version, bool fence_clean);

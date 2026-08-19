@@ -18,6 +18,7 @@
 #include "sdkconfig.h"
 
 #include "pharos_hud.h"
+#include "pharos_theme.h"
 
 #if !defined(PHAROS_HOST) && defined(CONFIG_PHAROS_HAS_VENDOR_BSP)
 
@@ -62,23 +63,32 @@
  *
  * Black field, lit rim, lit content. Everything that emits light now means
  * something. */
-#define HUD_VOID   0x000000
-#define HUD_FIELD  0x000000 /* true black: the panel's best feature   */
-#define HUD_RIM    0x2A6B80 /* the only structural line that emits    */
-#define HUD_TRACK  0x18384A /* gauge groove: visible, never competing */
-#define HUD_TRACK2 0x0A1C26
-#define HUD_PIP_ON 0x1B4257 /* a lit pip must read as LIT             */
-#define HUD_PIP_UP 0x0A1620
-#define HUD_TEXT   0xE7F7F7
-#define HUD_DIM    0x94BECC
-#define HUD_DIMMER 0x6693A6
-#define HUD_DENIED 0x3A5A6B
-#define HUD_GHOST  0x2A4257
-#define HUD_CYAN   0x21B6C6
-#define HUD_AMBER  0xFFC34A
-#define HUD_ORANGE 0xEF9239
-#define HUD_RED    0xE75142
-#define HUD_GREEN  0x39DB84
+#define HUD_VOID   0x000000u
+#define HUD_FIELD  0x000000u /* true black: the panel's best feature  */
+
+/* The chrome comes from the chosen theme; see pharos_theme.h. These stay
+ * macros so that every call site below reads exactly as it did when they were
+ * constants - the point of the change is that the VALUES move, not the code. */
+#define HUD_RIM    (pharos_theme()->rim)
+#define HUD_TRACK  (pharos_theme()->track)
+#define HUD_TRACK2 (pharos_theme()->track2)
+#define HUD_PIP_ON (pharos_theme()->pip_on)
+#define HUD_PIP_UP (pharos_theme()->pip_up)
+#define HUD_TEXT   (pharos_theme()->text)
+#define HUD_DIM    (pharos_theme()->dim)
+#define HUD_DIMMER (pharos_theme()->dimmer)
+#define HUD_DENIED (pharos_theme()->denied)
+#define HUD_GHOST  (pharos_theme()->ghost)
+#define HUD_CYAN   (pharos_theme()->accent)
+
+/* The verdict. Fixed, in every theme, deliberately: the tone contract is the
+ * reason a red means the same thing on the Census page as on the Watch page,
+ * and a palette that could restyle danger would be a way to make the device
+ * lie quietly. */
+#define HUD_AMBER  0xFFC34Au
+#define HUD_ORANGE 0xEF9239u
+#define HUD_RED    0xE75142u
+#define HUD_GREEN  0x39DB84u
 
 /* The same thresholds the renderer uses, so a screenshot and the panel agree
  * about what a number means. */
@@ -712,6 +722,46 @@ bool pharos_hud_create(void)
     return true;
 }
 
+/* A theme change, applied by building the face again.
+ *
+ * The alternative - walking every widget and re-setting the colours it was
+ * given at construction - is faster and wrong: it is a second list of which
+ * widget takes which colour, kept in a different function from the first, and
+ * the failure mode when they drift is one line on the screen still wearing the
+ * old palette. Whereas a rebuild cannot miss anything, because there is only
+ * ever one description of the face.
+ *
+ * The cost is one full repaint, on a change a person makes by hand. That is an
+ * easy trade. The caller holds the display lock. */
+void pharos_hud_rebuild(void)
+{
+    lv_obj_t *scr = lv_screen_active();
+    if (!s_built || !scr) {
+        return;
+    }
+    /* Drop any gesture in flight FIRST. The zones are about to be destroyed
+     * and immediately recreated at the same coordinates, and an input device
+     * still holding a press over one of them can land the release on its
+     * replacement - which is a tap nobody made, on a face nobody was looking
+     * at yet. It cost a lens switch the first time the theme changed. */
+    lv_indev_reset(NULL, NULL);
+
+    lv_obj_clean(scr);
+    s_built = false;
+
+    /* Every pointer above just became dangling, and the dirty checks read the
+     * widgets themselves - except these, which are caches OUTSIDE them and
+     * would otherwise suppress the first paint of the new face. */
+    s_ceiling_at = -1;
+    for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+        s_bar_level[i] = 0;
+        s_bar_rgb[i] = 0;
+    }
+    s_toast_until_ms = 0;
+
+    pharos_hud_create();
+}
+
 static void toast_tick(void)
 {
     if (s_toast && s_toast_until_ms && lv_tick_get() > s_toast_until_ms) {
@@ -843,7 +893,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
 void pharos_hud_detail(const char *lens, const char *head_left,
                        const char *head_right,
                        const struct pharos_lens_row *rows, unsigned n,
-                       unsigned page, unsigned pages)
+                       unsigned page, unsigned pages, int focus, bool openable)
 {
     if (!s_built) {
         return;
@@ -868,7 +918,16 @@ void pharos_hud_detail(const char *lens, const char *head_left,
             set_text_colour(s_d_left[i], HUD_TEXT);
             set_text_colour(s_d_right[i], tone_colour(rows[i].tone));
         }
+        /* The focused row's rule brightens rather than the text changing
+         * colour: the tone column already carries meaning, and overriding it
+         * to show a cursor would make a network look worse than it graded. */
         show(s_d_rule[i], used);
+        if (used && s_d_rule[i]) {
+            const bool on = ((int)i == focus);
+            lv_obj_set_style_bg_color(s_d_rule[i],
+                                      lv_color_hex(on ? HUD_CYAN : HUD_TRACK2), 0);
+            lv_obj_set_height(s_d_rule[i], on ? 2 : 1);
+        }
     }
 
     /* An empty list is a finding, not a blank screen. */
@@ -880,12 +939,18 @@ void pharos_hud_detail(const char *lens, const char *head_left,
     show(s_d_hl, !empty);
     show(s_d_hr, !empty);
 
-    if (pages > 1) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
+    {
+        char buf[32];
+        if (pages > 1 && openable) {
+            snprintf(buf, sizeof(buf), "%u / %u   tap to open", page + 1u, pages);
+        } else if (pages > 1) {
+            snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
+        } else if (openable) {
+            snprintf(buf, sizeof(buf), "tap to open");
+        } else {
+            buf[0] = '\0';
+        }
         set_text(s_d_page, buf);
-    } else {
-        set_text(s_d_page, "");
     }
 }
 
@@ -914,6 +979,13 @@ void pharos_hud_colourbars(void)
     /* Start from a clean screen: this is a measurement, not a HUD overlay.
      * Everything above is destroyed with it, so the pointers must go too or
      * the next repaint writes into freed objects. */
+    /* Drop any gesture in flight FIRST. The zones are about to be destroyed
+     * and immediately recreated at the same coordinates, and an input device
+     * still holding a press over one of them can land the release on its
+     * replacement - which is a tap nobody made, on a face nobody was looking
+     * at yet. It cost a lens switch the first time the theme changed. */
+    lv_indev_reset(NULL, NULL);
+
     lv_obj_clean(scr);
     s_built = false;
     s_page_browse = NULL;
@@ -984,7 +1056,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
 void pharos_hud_detail(const char *lens, const char *head_left,
                        const char *head_right,
                        const struct pharos_lens_row *rows, unsigned n,
-                       unsigned page, unsigned pages)
+                       unsigned page, unsigned pages, int focus, bool openable)
 {
     if (!s_built) {
         return;
@@ -1009,7 +1081,16 @@ void pharos_hud_detail(const char *lens, const char *head_left,
             set_text_colour(s_d_left[i], HUD_TEXT);
             set_text_colour(s_d_right[i], tone_colour(rows[i].tone));
         }
+        /* The focused row's rule brightens rather than the text changing
+         * colour: the tone column already carries meaning, and overriding it
+         * to show a cursor would make a network look worse than it graded. */
         show(s_d_rule[i], used);
+        if (used && s_d_rule[i]) {
+            const bool on = ((int)i == focus);
+            lv_obj_set_style_bg_color(s_d_rule[i],
+                                      lv_color_hex(on ? HUD_CYAN : HUD_TRACK2), 0);
+            lv_obj_set_height(s_d_rule[i], on ? 2 : 1);
+        }
     }
 
     /* An empty list is a finding, not a blank screen. */
@@ -1021,19 +1102,25 @@ void pharos_hud_detail(const char *lens, const char *head_left,
     show(s_d_hl, !empty);
     show(s_d_hr, !empty);
 
-    if (pages > 1) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
+    {
+        char buf[32];
+        if (pages > 1 && openable) {
+            snprintf(buf, sizeof(buf), "%u / %u   tap to open", page + 1u, pages);
+        } else if (pages > 1) {
+            snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
+        } else if (openable) {
+            snprintf(buf, sizeof(buf), "tap to open");
+        } else {
+            buf[0] = '\0';
+        }
         set_text(s_d_page, buf);
-    } else {
-        set_text(s_d_page, "");
     }
 }
 
 void pharos_hud_detail(const char *lens, const char *head_left,
                        const char *head_right,
                        const struct pharos_lens_row *rows, unsigned n,
-                       unsigned page, unsigned pages)
+                       unsigned page, unsigned pages, int focus, bool openable)
 {
     (void)lens; (void)head_left; (void)head_right; (void)rows; (void)n;
     (void)page; (void)pages;

@@ -129,7 +129,11 @@ static bool k_range_display(struct pharos_lens_display *o)
     }
     snprintf(o->big, sizeof(o->big), "%u", v.score);
     snprintf(o->band, sizeof(o->band), "%s", pw_band_name(v.band));
-    snprintf(o->detail, sizeof(o->detail), "%.20s", pr_scenario_name(sc));
+    /* "FLOOD LIKELY 77" on a screen in a quiet building was read, reasonably,
+     * as an attack in progress. The banner above says SIMULATION; this line
+     * says the same thing in the grammar of the reading itself, so the number
+     * cannot be taken for a measurement even at a glance. */
+    snprintf(o->detail, sizeof(o->detail), "if real: %.20s", pr_scenario_name(sc));
     snprintf(o->advice, sizeof(o->advice), "%.34s", pr_scenario_teaches(sc));
     o->families = v.families;
     o->fam_label[0] = "RATE";

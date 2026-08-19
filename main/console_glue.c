@@ -428,6 +428,8 @@ static int cli_rows(int argc, char **argv)
            l->row_head_left ? l->row_head_left : "",
            l->row_head_right ? l->row_head_right : "");
     static const char *tone[] = { "", "dim", "GOOD", "WARN", "BAD" };
+    int opened = -1;
+    const int cursor = pharos_ui_detail_cursor(&opened);
     struct pharos_lens_row r;
     unsigned i = 0;
     for (; i < 240u; i++) {
@@ -435,11 +437,33 @@ static int cli_rows(int argc, char **argv)
         if (!l->row(i, &r)) {
             break;
         }
-        printf("  %2u  %-26s %-11s %s\n", i, r.left, r.right,
-               (r.tone < 5) ? tone[r.tone] : "");
+        /* The marker is the point of printing this at all: which row the
+         * centre tap would act on is the thing a photograph cannot settle. */
+        printf("%s %2u  %-26s %-11s %s\n", ((int)i == cursor) ? " >" : "  ", i,
+               r.left, r.right, (r.tone < 5) ? tone[r.tone] : "");
     }
     printf("  (%u rows, %u page(s) of %u)\n", i,
            i ? (i + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS : 1u, PHAROS_HUD_ROWS);
+    if (cursor < 0) {
+        printf("  detail page is not up (nav detail to open it)\n");
+    } else if (l->row_edit || l->row_expand) {
+        printf("  centre tap: %s row %d\n",
+               l->row_edit ? "changes or opens" : "opens", cursor);
+    }
+
+    /* And what the opened row is showing, since that is a second page nothing
+     * else can print. */
+    if (opened >= 0 && l->row_expand) {
+        printf("  -- row %d opened --\n", opened);
+        for (unsigned k = 0; k < 240u; k++) {
+            memset(&r, 0, sizeof(r));
+            if (!l->row_expand((unsigned)opened, k, &r)) {
+                break;
+            }
+            printf("     %2u  %-26s %-11s %s\n", k, r.left, r.right,
+                   (r.tone < 5) ? tone[r.tone] : "");
+        }
+    }
     return 0;
 }
 

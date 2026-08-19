@@ -201,6 +201,33 @@ typedef struct pharos_lens {
      * be NULL. */
     const char *row_head_left;
     const char *row_head_right;
+
+    /* OPENING A ROW.
+     *
+     * A list of networks with a grade against each answers "which is worst".
+     * It does not answer "why", and a grade nobody can interrogate is a claim
+     * rather than a finding - the thing this project refuses everywhere else.
+     *
+     * A lens that can say more about one of its rows fills this: `row` selects
+     * which row was opened, `sub` walks the lines of its expansion, same
+     * two-column shape. Return false to end the expansion. NULL means this
+     * lens' rows do not open, and the UI then leaves the centre tap alone. */
+    bool (*row_expand)(unsigned row, unsigned sub, struct pharos_lens_row *out);
+
+    /* CHANGING A ROW.
+     *
+     * The System page listed the alarm, the region and the screen rotation and
+     * let you change exactly one of them, by tapping the centre of the LIVE
+     * face and cycling blind through four volumes. Everything else was a
+     * console command over USB - which is not a thing anybody does while
+     * holding a round screen in a corridor.
+     *
+     * So a row may be editable: put the cursor on it and the centre tap
+     * advances that setting, in place, with the row itself as the readout.
+     * Return true when something changed, false when this row is not editable
+     * - the UI then falls through to row_expand, so a lens can have some rows
+     * that open and others that change. */
+    bool (*row_edit)(unsigned row);
 } pharos_lens_t;
 
 /* Upper bound on registered lenses. Defined here (not just in the .c) because

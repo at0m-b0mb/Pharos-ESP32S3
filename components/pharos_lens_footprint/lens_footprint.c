@@ -162,12 +162,16 @@ static bool k_footprint_display(struct pharos_lens_display *o)
 
     snprintf(o->big, sizeof(o->big), "%u", r.camped_score);
     snprintf(o->band, sizeof(o->band), "%s", po_grade_name(r.grade));
-    snprintf(o->detail, sizeof(o->detail), "%.14s  hop %u", pr_scenario_name(sc),
-             r.hopping_score);
+    /* Both numbers on this face were unlabelled: a big 77 that looks like a
+     * threat score but is a LOUDNESS, and "hop 60" beside it, which was read
+     * as gibberish - fairly, since nothing on the glass said whose 60 it was.
+     * Each one now says who is doing the scoring. */
+    snprintf(o->detail, sizeof(o->detail), "%s", "to a defender who camps");
+    snprintf(o->why, sizeof(o->why), "%.14s - a hopper scores %u",
+             pr_scenario_name(sc), r.hopping_score);
     snprintf(o->advice, sizeof(o->advice), "%s",
              r.invisible_to_hoppers ? "A hopping defender would miss it."
                                     : "A defender sees this either way.");
-    snprintf(o->why, sizeof(o->why), "%.47s", r.tell_name ? r.tell_name : "");
     o->score = r.camped_score;
     o->ceiling = c.ceiling ? c.ceiling : 100;
     o->has_score = true;
@@ -207,9 +211,11 @@ static bool k_footprint_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "%u", r.families_lit);
         out->tone = PHAROS_TONE_DIM; return true;
     case 4:
-        snprintf(out->left, sizeof(out->left), "loudest tell");
-        snprintf(out->right, sizeof(out->right), "%.11s",
-                 r.tell_name ? r.tell_name : "--");
+        /* The tell goes in the LEFT column: it is a phrase, and eleven
+         * characters of one is not a finding. */
+        snprintf(out->left, sizeof(out->left), "%.25s",
+                 r.tell_name ? r.tell_name : "no single tell");
+        snprintf(out->right, sizeof(out->right), "loudest");
         out->tone = PHAROS_TONE_BAD; return true;
     case 5:
         snprintf(out->left, sizeof(out->left), "hoppers miss it");

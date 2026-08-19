@@ -387,6 +387,7 @@ int main(void)
     test_watch();
     test_rival();
     test_acoustic();
+    test_theme();
     test_census();
     test_twin();
     test_report();

@@ -26,6 +26,7 @@
 #include "pharos_lens.h"
 #include "pharos_region.h"
 #include "pharos_audio.h"
+#include "pharos_theme.h"
 #include "pharos_ui.h"
 
 static const char *TAG = "pharos";
@@ -108,6 +109,11 @@ void app_main(void)
     /* The alarm. A detector you have to watch is half a detector - see
      * pharos_audio.h. Failure here is not fatal: the device runs silent. */
     pharos_audio_init();
+
+    /* The look the operator last chose, before the first frame is drawn -
+     * booting in Beacon and snapping to Nightwatch a second later is the
+     * device forgetting in public. */
+    pharos_theme_load();
 
     pharos_ui_run(&bsp, fence_ok);
 }

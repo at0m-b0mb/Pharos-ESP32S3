@@ -25,6 +25,7 @@
 #include "pharos_radio.h"
 #include "pharos_region.h"
 #include "pharos_report.h"
+#include "pharos_theme.h"
 
 static const char *TAG = "lens.system";
 
@@ -212,6 +213,29 @@ static void system_select(void)
              (unsigned)pharos_audio_volume());
 }
 
+/* THE SETTINGS THAT CAN BE CHANGED, FIRST.
+ *
+ * The five rows at the top are the ones a person came here to move; everything
+ * below them is the device reporting on itself. Putting them in that order
+ * means the cursor starts on something useful, which on a screen with three
+ * touch zones is the difference between a settings page and a status page. */
+enum {
+    ROW_THEME = 0,
+    ROW_BRIGHT,
+    ROW_ALARM,
+    ROW_VOLUME,
+    ROW_REGION,
+    ROW_EDITABLE_N, /* everything from here down is read-only */
+};
+
+/* Four steps, not a slider: a round screen has no slider, and on an AMOLED the
+ * difference between 100 and 90 is not worth a tap. */
+static const uint8_t k_bright_steps[] = { 100, 70, 40, 20 };
+#define BRIGHT_N ((unsigned)(sizeof(k_bright_steps) / sizeof(k_bright_steps[0])))
+
+static const uint8_t k_vol_steps[] = { 25, 50, 75, 100 };
+#define VOL_N ((unsigned)(sizeof(k_vol_steps) / sizeof(k_vol_steps[0])))
+
 static bool k_system_row(unsigned index, struct pharos_lens_row *out)
 {
     pwr_battery_t b;
@@ -219,17 +243,70 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
     const esp_app_desc_t *app = esp_app_get_description();
 
     switch (index) {
-    case 0:
+    case ROW_THEME:
+        snprintf(out->left, sizeof(out->left), "theme");
+        snprintf(out->right, sizeof(out->right), "%s", pharos_theme()->name);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case ROW_BRIGHT:
+        snprintf(out->left, sizeof(out->left), "brightness");
+        snprintf(out->right, sizeof(out->right), "%u%%",
+                 (unsigned)pharos_theme_brightness());
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case ROW_ALARM:
+        snprintf(out->left, sizeof(out->left), "alarm");
+        if (!pharos_audio_present()) {
+            snprintf(out->right, sizeof(out->right), "no codec");
+            out->tone = PHAROS_TONE_DIM;
+        } else if (!pharos_audio_enabled()) {
+            snprintf(out->right, sizeof(out->right), "MUTED");
+            /* Amber, not dim: a muted alarm on a watchdog is a thing the next
+             * person to pick this up needs to notice. */
+            out->tone = PHAROS_TONE_WARN;
+        } else {
+            snprintf(out->right, sizeof(out->right), "on");
+            out->tone = PHAROS_TONE_GOOD;
+        }
+        return true;
+    case ROW_VOLUME:
+        snprintf(out->left, sizeof(out->left), "speaker volume");
+        if (!pharos_audio_present()) {
+            snprintf(out->right, sizeof(out->right), "--");
+            out->tone = PHAROS_TONE_DIM;
+        } else {
+            snprintf(out->right, sizeof(out->right), "%u%%",
+                     (unsigned)pharos_audio_volume());
+            out->tone = pharos_audio_enabled() ? PHAROS_TONE_NEUTRAL
+                                               : PHAROS_TONE_DIM;
+        }
+        return true;
+    case ROW_REGION: {
+        snprintf(out->left, sizeof(out->left), "region");
+        /* The right column is 12 bytes; "World (1-13)" does not fit and was
+         * being cut mid-parenthesis. The channel span is its own row below. */
+        const char *rn = pharos_region_name(pharos_region_get());
+        char sh[12];
+        unsigned k = 0;
+        for (; rn[k] && rn[k] != ' ' && rn[k] != '(' && k < sizeof(sh) - 1; k++) {
+            sh[k] = rn[k];
+        }
+        sh[k] = '\0';
+        snprintf(out->right, sizeof(out->right), "%s", sh);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    }
+    case 5:
         snprintf(out->left, sizeof(out->left), "transmit fence");
         snprintf(out->right, sizeof(out->right), "%s", s.fence_ok ? "CLEAN" : "BROKEN");
         out->tone = s.fence_ok ? PHAROS_TONE_GOOD : PHAROS_TONE_BAD;
         return true;
-    case 1:
+    case 6:
         snprintf(out->left, sizeof(out->left), "transmit attempts");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)s.fence.tx_attempts);
         out->tone = s.fence.tx_attempts ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
         return true;
-    case 2:
+    case 7:
         snprintf(out->left, sizeof(out->left), "battery");
         if (have_batt && b.present) {
             snprintf(out->right, sizeof(out->right), "%u%%", (unsigned)b.soc_pct);
@@ -240,7 +317,7 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
             out->tone = PHAROS_TONE_DIM;
         }
         return true;
-    case 3:
+    case 8:
         snprintf(out->left, sizeof(out->left), "pack voltage");
         if (have_batt && b.mv) {
             snprintf(out->right, sizeof(out->right), "%u.%02uV",
@@ -251,55 +328,25 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
             out->tone = PHAROS_TONE_DIM;
         }
         return true;
-    case 4:
-        snprintf(out->left, sizeof(out->left), "alarm");
-        if (!pharos_audio_present()) {
-            snprintf(out->right, sizeof(out->right), "no codec");
-            out->tone = PHAROS_TONE_DIM;
-        } else if (!pharos_audio_enabled()) {
-            snprintf(out->right, sizeof(out->right), "MUTED");
-            out->tone = PHAROS_TONE_WARN;
-        } else {
-            snprintf(out->right, sizeof(out->right), "%u%%",
-                     (unsigned)pharos_audio_volume());
-            out->tone = PHAROS_TONE_GOOD;
-        }
-        return true;
-    case 5:
-        snprintf(out->left, sizeof(out->left), "region");
-        /* The right column is 12 bytes; "World (1-13)" does not fit and was
-         * being cut mid-parenthesis. The channel span is its own row below. */
-        {
-            const char *rn = pharos_region_name(pharos_region_get());
-            char sh[12];
-            unsigned k = 0;
-            for (; rn[k] && rn[k] != ' ' && rn[k] != '(' && k < sizeof(sh) - 1; k++) {
-                sh[k] = rn[k];
-            }
-            sh[k] = '\0';
-            snprintf(out->right, sizeof(out->right), "%s", sh);
-        }
-        out->tone = PHAROS_TONE_NEUTRAL;
-        return true;
-    case 6:
+    case 9:
         snprintf(out->left, sizeof(out->left), "channels");
         snprintf(out->right, sizeof(out->right), "1-%u",
                  (unsigned)pharos_region_max_channel());
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 7:
+    case 10:
         snprintf(out->left, sizeof(out->left), "bands heard");
         snprintf(out->right, sizeof(out->right), "2.4 only");
         /* Amber on purpose: a defender who forgets this device is deaf above
          * 2.4 GHz will read a quiet screen as a quiet building. */
         out->tone = PHAROS_TONE_WARN;
         return true;
-    case 8:
+    case 11:
         snprintf(out->left, sizeof(out->left), "screen rotation");
         snprintf(out->right, sizeof(out->right), "%d deg", pharos_bsp_rotation());
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 9: {
+    case 12: {
         snprintf(out->left, sizeof(out->left), "internal RAM");
         const unsigned kb =
             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) / 1024);
@@ -310,13 +357,13 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
                   : (kb < 48u) ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
         return true;
     }
-    case 10:
+    case 13:
         snprintf(out->left, sizeof(out->left), "PSRAM free");
         snprintf(out->right, sizeof(out->right), "%u KB",
                  (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 11: {
+    case 14: {
         snprintf(out->left, sizeof(out->left), "uptime");
         const uint32_t sec = (uint32_t)(esp_timer_get_time() / 1000000ull);
         if (sec >= 3600u) {
@@ -329,16 +376,239 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
         out->tone = PHAROS_TONE_DIM;
         return true;
     }
-    case 12:
+    case 15:
         snprintf(out->left, sizeof(out->left), "firmware");
         snprintf(out->right, sizeof(out->right), "%.11s", app ? app->version : "?");
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 13:
+    case 16:
         snprintf(out->left, sizeof(out->left), "lenses");
         snprintf(out->right, sizeof(out->right), "%u", pharos_lens_count());
         out->tone = PHAROS_TONE_DIM;
         return true;
+    default:
+        return false;
+    }
+}
+
+/* The centre tap, on a row. Each editable setting advances by one step and
+ * the row it sits on is the readout, so nothing is changed blind. */
+static bool k_system_row_edit(unsigned row)
+{
+    switch (row) {
+    case ROW_THEME:
+        pharos_theme_next();
+        ESP_LOGI(TAG, "theme now %s", pharos_theme()->name);
+        return true;
+
+    case ROW_BRIGHT: {
+        /* Step from where the panel ACTUALLY is rather than from a counter of
+         * our own - the same bug the alarm had, where a variable that started
+         * at zero meant the first tap always did the wrong thing. */
+        const uint8_t cur = pharos_theme_brightness();
+        /* A value that is not one of the steps - left by an older build, or
+         * by the console - starts the cycle at the beginning rather than
+         * landing on whatever the search happened to fall off at. */
+        unsigned i = BRIGHT_N - 1u;
+        for (unsigned k = 0; k < BRIGHT_N; k++) {
+            if (k_bright_steps[k] == cur) {
+                i = k;
+                break;
+            }
+        }
+        pharos_theme_set_brightness(k_bright_steps[(i + 1u) % BRIGHT_N]);
+        return true;
+    }
+
+    case ROW_ALARM:
+        if (!pharos_audio_present()) {
+            return false; /* nothing to toggle; let the tap fall through */
+        }
+        pharos_audio_set_enabled(!pharos_audio_enabled());
+        if (pharos_audio_enabled()) {
+            pharos_audio_alert(PHAROS_ALERT_ACK); /* prove it works */
+        }
+        return true;
+
+    case ROW_VOLUME: {
+        if (!pharos_audio_present()) {
+            return false;
+        }
+        const uint8_t cur = pharos_audio_volume();
+        unsigned i = VOL_N - 1u; /* an unrecognised value starts at the top */
+        for (unsigned k = 0; k < VOL_N; k++) {
+            if (k_vol_steps[k] == cur) {
+                i = k;
+                break;
+            }
+        }
+        const uint8_t next = k_vol_steps[(i + 1u) % VOL_N];
+        pharos_audio_set_volume(next);
+        /* Turning the volume up on a muted alarm is what somebody means, so
+         * do that rather than making them find the row above as well. */
+        pharos_audio_set_enabled(true);
+        pharos_audio_alert(PHAROS_ALERT_ACK); /* the setting demonstrates itself */
+        return true;
+    }
+
+    case ROW_REGION: {
+        const pharos_region_t r = pharos_region_get();
+        pharos_region_set((pharos_region_t)((r + 1) % PHAROS_REGION_COUNT));
+        /* region_name() already carries the channel span; printing it again
+         * gave "FCC (1-11) (1-11)". */
+        ESP_LOGI(TAG, "region now %s", pharos_region_name(pharos_region_get()));
+        return true;
+    }
+
+    default:
+        return false;
+    }
+}
+
+/* Opening a row: what the setting is FOR, and what the alternatives are.
+ *
+ * A cycling control has an obvious weakness - you cannot see what is coming
+ * next, so you tap until you recognise something. Opening the row lists every
+ * value, marks the one in force, and says what each is good for, which turns
+ * five blind taps into one informed one. */
+static bool k_system_expand(unsigned row, unsigned sub,
+                            struct pharos_lens_row *out)
+{
+    switch (row) {
+    case ROW_THEME: {
+        if (sub == 0) {
+            snprintf(out->left, sizeof(out->left), "verdict colours");
+            snprintf(out->right, sizeof(out->right), "fixed");
+            /* Stated on the screen because it is a promise, not a detail: a
+             * theme changes the instrument, never the reading. */
+            out->tone = PHAROS_TONE_GOOD;
+            return true;
+        }
+        const unsigned i = sub - 1u;
+        const pharos_theme_t *t = pharos_theme_at(i);
+        if (!t) {
+            return false;
+        }
+        snprintf(out->left, sizeof(out->left), "%s", t->note);
+        snprintf(out->right, sizeof(out->right), "%s%s",
+                 (i == pharos_theme_index()) ? "* " : "", t->name);
+        out->tone = (i == pharos_theme_index()) ? PHAROS_TONE_NEUTRAL
+                                                : PHAROS_TONE_DIM;
+        return true;
+    }
+
+    case ROW_BRIGHT:
+        /* One row per step with the one in force marked, so the cycle stops
+         * being blind - the same shape as the theme and region lists. */
+        if (sub < BRIGHT_N) {
+            snprintf(out->left, sizeof(out->left), "%u%%%s",
+                     (unsigned)k_bright_steps[sub],
+                     (k_bright_steps[sub] == 20u) ? "  (dark rooms)" : "");
+            snprintf(out->right, sizeof(out->right), "%s",
+                     (k_bright_steps[sub] == pharos_theme_brightness()) ? "IN USE"
+                                                                       : "");
+            out->tone = (k_bright_steps[sub] == pharos_theme_brightness())
+                            ? PHAROS_TONE_NEUTRAL
+                            : PHAROS_TONE_DIM;
+            return true;
+        }
+        if (sub == BRIGHT_N) {
+            /* Why there is a floor: a screen you cannot turn back on without
+             * a USB cable is a bricked screen to whoever is holding it. */
+            snprintf(out->left, sizeof(out->left), "never goes below");
+            snprintf(out->right, sizeof(out->right), "10%%");
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        }
+        return false;
+
+    case ROW_ALARM:
+    case ROW_VOLUME:
+        switch (sub) {
+        case 0:
+            snprintf(out->left, sizeof(out->left), "codec");
+            snprintf(out->right, sizeof(out->right), "%s",
+                     pharos_audio_present() ? "ES8311" : "absent");
+            out->tone = pharos_audio_present() ? PHAROS_TONE_GOOD
+                                               : PHAROS_TONE_BAD;
+            return true;
+        case 1:
+            snprintf(out->left, sizeof(out->left), "state");
+            snprintf(out->right, sizeof(out->right), "%s",
+                     pharos_audio_enabled() ? "sounding" : "MUTED");
+            out->tone = pharos_audio_enabled() ? PHAROS_TONE_GOOD
+                                               : PHAROS_TONE_WARN;
+            return true;
+        case 2:
+            snprintf(out->left, sizeof(out->left), "volume");
+            snprintf(out->right, sizeof(out->right), "%u%%",
+                     (unsigned)pharos_audio_volume());
+            out->tone = PHAROS_TONE_NEUTRAL;
+            return true;
+        case 3:
+            snprintf(out->left, sizeof(out->left), "alerts it can play");
+            snprintf(out->right, sizeof(out->right), "5");
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        case 4:
+            snprintf(out->left, sizeof(out->left), "remembered");
+            snprintf(out->right, sizeof(out->right), "yes");
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        default:
+            return false;
+        }
+
+    case ROW_REGION: {
+        if (sub >= (unsigned)PHAROS_REGION_COUNT) {
+            return false;
+        }
+        const pharos_region_t r = (pharos_region_t)sub;
+        snprintf(out->left, sizeof(out->left), "%s", pharos_region_name(r));
+        snprintf(out->right, sizeof(out->right), "%s",
+                 (r == pharos_region_get()) ? "IN USE" : "");
+        out->tone = (r == pharos_region_get()) ? PHAROS_TONE_NEUTRAL
+                                               : PHAROS_TONE_DIM;
+        return true;
+    }
+
+    case 5: /* transmit fence */
+        switch (sub) {
+        case 0:
+            snprintf(out->left, sizeof(out->left), "wrap traps linked");
+            snprintf(out->right, sizeof(out->right), "%s",
+                     s.fence.wrap_linked ? "yes" : "NO");
+            out->tone = s.fence.wrap_linked ? PHAROS_TONE_GOOD : PHAROS_TONE_BAD;
+            return true;
+        case 1:
+            snprintf(out->left, sizeof(out->left), "BLE observer only");
+            snprintf(out->right, sizeof(out->right), "%s",
+                     s.fence.ble_observer_only ? "yes" : "NO");
+            out->tone = s.fence.ble_observer_only ? PHAROS_TONE_GOOD
+                                                  : PHAROS_TONE_BAD;
+            return true;
+        case 2:
+            snprintf(out->left, sizeof(out->left), "no TX symbol in image");
+            snprintf(out->right, sizeof(out->right), "%s",
+                     s.fence.tx_symbols_absent ? "yes" : "NO");
+            out->tone = s.fence.tx_symbols_absent ? PHAROS_TONE_GOOD
+                                                  : PHAROS_TONE_BAD;
+            return true;
+        case 3:
+            snprintf(out->left, sizeof(out->left), "attempts since boot");
+            snprintf(out->right, sizeof(out->right), "%u",
+                     (unsigned)s.fence.tx_attempts);
+            out->tone = s.fence.tx_attempts ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
+            return true;
+        case 4:
+            snprintf(out->left, sizeof(out->left), "checked every tick");
+            snprintf(out->right, sizeof(out->right), "yes");
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        default:
+            return false;
+        }
+
     default:
         return false;
     }
@@ -359,6 +629,8 @@ static const pharos_lens_t k_system = {
     .row = k_system_row,
     .row_head_left = "SETTING",
     .row_head_right = "STATE",
+    .row_edit = k_system_row_edit,
+    .row_expand = k_system_expand,
 };
 
 PHAROS_LENS_REGISTER(&k_system);
