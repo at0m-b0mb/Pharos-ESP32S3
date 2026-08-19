@@ -145,6 +145,80 @@ bool pharos_lens_footprint_snapshot(po_report_t *out, pr_scenario_t *scenario)
     return true;
 }
 
+/* Footprint had no display, so the red-team OPSEC lens showed a frame counter
+ * while holding a full detectability report. The headline is the grade a
+ * CAMPED defender would give this attack - the worst case for whoever is
+ * running it, which is the only number worth planning against. */
+static bool k_footprint_display(struct pharos_lens_display *o)
+{
+    po_report_t r;
+    pw_verdict_t c, h;
+    if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return false;
+    }
+    r = s_report; c = s_camped; h = s_hopping;
+    const pr_scenario_t sc = s_scenario;
+    xSemaphoreGive(s_lock);
+
+    snprintf(o->big, sizeof(o->big), "%u", r.camped_score);
+    snprintf(o->band, sizeof(o->band), "%s", po_grade_name(r.grade));
+    snprintf(o->detail, sizeof(o->detail), "%.14s  hop %u", pr_scenario_name(sc),
+             r.hopping_score);
+    snprintf(o->advice, sizeof(o->advice), "%s",
+             r.invisible_to_hoppers ? "A hopping defender would miss it."
+                                    : "A defender sees this either way.");
+    snprintf(o->why, sizeof(o->why), "%.47s", r.tell_name ? r.tell_name : "");
+    o->score = r.camped_score;
+    o->ceiling = c.ceiling ? c.ceiling : 100;
+    o->has_score = true;
+    (void)h;
+    return true;
+}
+
+static bool k_footprint_row(unsigned index, struct pharos_lens_row *out)
+{
+    po_report_t r;
+    if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return false;
+    }
+    r = s_report;
+    xSemaphoreGive(s_lock);
+
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "camped defender");
+        snprintf(out->right, sizeof(out->right), "%u", r.camped_score);
+        out->tone = (r.camped_score >= 75) ? PHAROS_TONE_BAD : PHAROS_TONE_WARN;
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "hopping defender");
+        snprintf(out->right, sizeof(out->right), "%u", r.hopping_score);
+        out->tone = PHAROS_TONE_NEUTRAL; return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "stealth gap");
+        snprintf(out->right, sizeof(out->right), "%u", r.stealth_gap);
+        /* The operationally useful number: how much a defender loses by
+         * refusing to stand still. */
+        out->tone = PHAROS_TONE_WARN; return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "families lit");
+        snprintf(out->right, sizeof(out->right), "%u", r.families_lit);
+        out->tone = PHAROS_TONE_DIM; return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "loudest tell");
+        snprintf(out->right, sizeof(out->right), "%.11s",
+                 r.tell_name ? r.tell_name : "--");
+        out->tone = PHAROS_TONE_BAD; return true;
+    case 5:
+        snprintf(out->left, sizeof(out->left), "hoppers miss it");
+        snprintf(out->right, sizeof(out->right), "%s",
+                 r.invisible_to_hoppers ? "yes" : "no");
+        out->tone = r.invisible_to_hoppers ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
+        return true;
+    default: return false;
+    }
+}
+
 static const pharos_lens_t k_footprint = {
     .id = "train.footprint",
     .name = "Footprint",
@@ -156,6 +230,10 @@ static const pharos_lens_t k_footprint = {
     .on_mount = footprint_mount,
     .on_start = footprint_start,
     .on_tick = footprint_tick,
+    .display = k_footprint_display,
+    .row = k_footprint_row,
+    .row_head_left = "DETECTABILITY",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_footprint);

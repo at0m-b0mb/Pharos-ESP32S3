@@ -114,6 +114,87 @@ bool pharos_lens_range_snapshot(pw_verdict_t *out, pr_scenario_t *scenario)
     return true;
 }
 
+/* The training range played scenarios through the real engines and showed a
+ * frame counter, so the one lens whose entire purpose is TEACHING what a
+ * verdict means displayed the least meaningful number on the device.
+ *
+ * It now shows the verdict the scenario is producing, live, next to the name
+ * of the scenario producing it - which is the lesson. */
+static bool k_range_display(struct pharos_lens_display *o)
+{
+    pw_verdict_t v;
+    pr_scenario_t sc;
+    if (!pharos_lens_range_snapshot(&v, &sc)) {
+        return false;
+    }
+    snprintf(o->big, sizeof(o->big), "%u", v.score);
+    snprintf(o->band, sizeof(o->band), "%s", pw_band_name(v.band));
+    snprintf(o->detail, sizeof(o->detail), "%.20s", pr_scenario_name(sc));
+    snprintf(o->advice, sizeof(o->advice), "%.34s", pr_scenario_teaches(sc));
+    o->families = v.families;
+    o->fam_label[0] = "RATE";
+    o->fam_label[1] = "SHAPE";
+    o->fam_label[2] = "FORGE";
+    o->fam_label[3] = "AFTER";
+    o->score = v.score;
+    o->raw_score = v.raw_score;
+    o->ceiling = v.ceiling;
+    o->has_score = true;
+    return true;
+}
+
+static bool k_range_row(unsigned index, struct pharos_lens_row *out)
+{
+    pw_verdict_t v;
+    pr_scenario_t sc;
+    if (!pharos_lens_range_snapshot(&v, &sc)) {
+        return false;
+    }
+    if (index == 0) {
+        snprintf(out->left, sizeof(out->left), "scenario");
+        snprintf(out->right, sizeof(out->right), "%.11s", pr_scenario_name(sc));
+        out->tone = PHAROS_TONE_NEUTRAL; return true;
+    }
+    if (index == 1) {
+        snprintf(out->left, sizeof(out->left), "teaches");
+        snprintf(out->right, sizeof(out->right), "%s", "see below");
+        out->tone = PHAROS_TONE_DIM; return true;
+    }
+    /* The rest is the same evidence breakdown the live Watch lens shows, so
+     * that what a learner reads here is literally what they will read in the
+     * field rather than a simplified teaching version of it. */
+    switch (index - 2) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "rate");
+        snprintf(out->right, sizeof(out->right), "%u/34", v.c_rate);
+        out->tone = (v.families & PW_FAM_RATE) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "targeting shape");
+        snprintf(out->right, sizeof(out->right), "%u/22", v.c_shape);
+        out->tone = (v.families & PW_FAM_SHAPE) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "forgery");
+        snprintf(out->right, sizeof(out->right), "%u/30", v.c_forgery);
+        out->tone = (v.families & PW_FAM_FORGERY) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "aftermath");
+        snprintf(out->right, sizeof(out->right), "%u/18", v.c_aftermath);
+        out->tone = (v.families & PW_FAM_AFTERMATH) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "earned / allowed");
+        snprintf(out->right, sizeof(out->right), "%u/%u", v.raw_score, v.ceiling);
+        /* The whole lesson in one row: what the evidence was worth, and what
+         * this receiver was entitled to claim from it. */
+        out->tone = (v.raw_score > v.score) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    default: return false;
+    }
+}
+
 static const pharos_lens_t k_range = {
     .id = "train.range",
     .name = "Range",
@@ -126,6 +207,10 @@ static const pharos_lens_t k_range = {
     .on_start = range_start,
     .on_stop = range_stop,
     .on_tick = range_tick,
+    .display = k_range_display,
+    .row = k_range_row,
+    .row_head_left = "LESSON",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_range);

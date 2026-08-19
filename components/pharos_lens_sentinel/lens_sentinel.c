@@ -280,6 +280,47 @@ static bool k_sentinel_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* What changed since the baseline, broken out by KIND. "Six findings" is not
+ * actionable; "one network downgraded its security" is. */
+static bool k_sentinel_row(unsigned index, struct pharos_lens_row *out)
+{
+    ps_verdict_t v;
+    if (!pharos_lens_sentinel_snapshot(&v)) return false;
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "new networks");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_new);
+        out->tone = v.n_new ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD; return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "gone missing");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_missing);
+        out->tone = v.n_missing ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD; return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "security dropped");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_downgrade);
+        /* The one that matters most: a network that got WEAKER since you
+         * last looked is either misconfigured or impersonated. */
+        out->tone = v.n_downgrade ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD; return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "security improved");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_upgrade);
+        out->tone = PHAROS_TONE_GOOD; return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "changed channel");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_moved);
+        out->tone = PHAROS_TONE_DIM; return true;
+    case 5:
+        snprintf(out->left, sizeof(out->left), "renamed");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_renamed);
+        out->tone = v.n_renamed ? PHAROS_TONE_WARN : PHAROS_TONE_DIM; return true;
+    case 6:
+        snprintf(out->left, sizeof(out->left), "findings total");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_findings);
+        out->tone = PHAROS_TONE_DIM; return true;
+    default: return false;
+    }
+}
+
 static const pharos_lens_t k_sentinel = {
     .id = "wifi.sentinel",
     .name = "Sentinel",
@@ -296,6 +337,9 @@ static const pharos_lens_t k_sentinel = {
     .ingest = sentinel_ingest,
     .stage_report = k_sentinel_stage,
     .display = k_sentinel_display,
+    .row = k_sentinel_row,
+    .row_head_left = "CHANGE SINCE BASELINE",
+    .row_head_right = "COUNT",
 };
 
 PHAROS_LENS_REGISTER(&k_sentinel);

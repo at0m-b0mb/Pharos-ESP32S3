@@ -161,6 +161,52 @@ static bool k_harvest_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* Which client is being forced off, and by whom. The score says somebody is
+ * farming handshakes; these rows say whose. */
+static bool k_harvest_row(unsigned index, struct pharos_lens_row *out)
+{
+    ph_verdict_t v;
+    if (!pharos_lens_harvest_snapshot(&v)) {
+        return false;
+    }
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "forced cycles");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.forced_cycles);
+        out->tone = v.forced_cycles ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "handshakes seen");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.handshakes);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "PMKID requests");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.pmkid_orphans);
+        out->tone = v.pmkid_orphans ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "clients affected");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.victims);
+        out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "worst client");
+        snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                 v.worst_client[3], v.worst_client[4], v.worst_client[5]);
+        out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        return true;
+    case 5:
+        snprintf(out->left, sizeof(out->left), "on network");
+        snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                 v.worst_bssid[3], v.worst_bssid[4], v.worst_bssid[5]);
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static const pharos_lens_t k_harvest = {
     .id = "wifi.harvest",
     .name = "Harvest",
@@ -177,6 +223,9 @@ static const pharos_lens_t k_harvest = {
     .ingest = harvest_ingest,
     .stage_report = k_harvest_stage,
     .display = k_harvest_display,
+    .row = k_harvest_row,
+    .row_head_left = "HANDSHAKE FARMING",
+    .row_head_right = "COUNT",
 };
 
 PHAROS_LENS_REGISTER(&k_harvest);

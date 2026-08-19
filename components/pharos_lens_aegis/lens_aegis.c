@@ -119,6 +119,50 @@ static bool k_aegis_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* Aegis is the only lens that can see the whole engagement, because it is the
+ * one thing that keeps running while the operator moves between the others.
+ * Its detail page is therefore the closest this device has to a case summary. */
+static bool k_aegis_row(unsigned index, struct pharos_lens_row *out)
+{
+    pa_verdict_t v;
+    if (!pharos_lens_aegis_snapshot(&v)) return false;
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "stages raised");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_raised);
+        out->tone = v.n_raised ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD; return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "still current");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_live);
+        out->tone = v.n_live ? PHAROS_TONE_BAD : PHAROS_TONE_NEUTRAL; return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "worst peak");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.worst_peak);
+        out->tone = (v.worst_peak >= 75) ? PHAROS_TONE_BAD
+                  : (v.worst_peak >= 40) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 3: {
+        snprintf(out->left, sizeof(out->left), "how long ago");
+        /* Clamped so the formatted result cannot outgrow the 12-byte column
+         * on a device that has been running for a day. */
+        uint32_t s_ago = v.worst_age_s;
+        if (s_ago >= 60u) {
+            uint32_t m = s_ago / 60u;
+            if (m > 999u) m = 999u;
+            snprintf(out->right, sizeof(out->right), "%um ago", (unsigned)m);
+        } else {
+            snprintf(out->right, sizeof(out->right), "%us ago", (unsigned)s_ago);
+        }
+        out->tone = PHAROS_TONE_DIM; return true;
+    }
+    case 4:
+        snprintf(out->left, sizeof(out->left), "earned / allowed");
+        snprintf(out->right, sizeof(out->right), "%u/%u", v.raw_score, v.ceiling);
+        out->tone = PHAROS_TONE_DIM; return true;
+    default: return false;
+    }
+}
+
 static const pharos_lens_t k_aegis = {
     .id = "sys.aegis",
     .name = "Aegis",
@@ -132,6 +176,9 @@ static const pharos_lens_t k_aegis = {
     .on_mount = aegis_mount,
     .on_tick = aegis_tick,
     .display = k_aegis_display,
+    .row = k_aegis_row,
+    .row_head_left = "ENGAGEMENT",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_aegis);

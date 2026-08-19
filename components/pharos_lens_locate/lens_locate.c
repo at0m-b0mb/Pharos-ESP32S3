@@ -128,6 +128,125 @@ bool pharos_lens_locate_snapshot(pl_verdict_t *out)
 
 static struct pharos_bus *locate_ingest(void) { return &s_bus; }
 
+
+/* ---- Locate had no display at all -------------------------------------
+ *
+ * The lens that exists to walk you toward a transmitter was showing a frame
+ * counter, which is worse than nothing: the ONE number an operator needs while
+ * moving is whether they are getting warmer, and a counter that always rises
+ * looks exactly like getting warmer.
+ *
+ * The headline is the trend word. The gauge is closeness on a fixed scale -
+ * never a distance, because RSSI is not one and pretending otherwise is how
+ * people walk confidently into the wrong room. */
+static bool k_locate_display(struct pharos_lens_display *o)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    const pl_verdict_t v = s_verdict;
+    const bool have = s_has_target;
+    const uint8_t ch = s_channel;
+    uint8_t t[6];
+    memcpy(t, s_target, 6);
+    xSemaphoreGive(s_lock);
+
+    if (!have) {
+        snprintf(o->big, sizeof(o->big), "--");
+        snprintf(o->band, sizeof(o->band), "NO TARGET");
+        snprintf(o->detail, sizeof(o->detail), "set one from another lens");
+        snprintf(o->advice, sizeof(o->advice), "Nothing to walk toward yet.");
+        o->has_score = false;
+        return true;
+    }
+    snprintf(o->big, sizeof(o->big), "%u", v.closeness);
+    snprintf(o->band, sizeof(o->band), "%s", pl_trend_name(v.trend));
+    snprintf(o->detail, sizeof(o->detail), "%02x:%02x:%02x ch%u  %d dBm",
+             t[3], t[4], t[5], (unsigned)ch, (int)v.rssi_smoothed);
+    snprintf(o->advice, sizeof(o->advice), "%s",
+             v.locked ? "Walk slowly; watch the trend."
+                      : "Hold still to settle the reading.");
+    if (!v.locked) {
+        snprintf(o->why, sizeof(o->why), "not enough samples to trust yet");
+    }
+    o->score = v.closeness;
+    /* Confidence IS the ceiling here: a trend from six samples is a guess and
+     * the arc should show how much of the scale this reading has earned. */
+    o->ceiling = v.confidence;
+    o->has_score = true;
+    return true;
+}
+
+static bool k_locate_row(unsigned index, struct pharos_lens_row *out)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    const pl_verdict_t v = s_verdict;
+    uint8_t t[6];
+    memcpy(t, s_target, 6);
+    const bool have = s_has_target;
+    const uint8_t ch = s_channel;
+    xSemaphoreGive(s_lock);
+
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "target");
+        if (have) {
+            snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                     t[3], t[4], t[5]);
+            out->tone = PHAROS_TONE_NEUTRAL;
+        } else {
+            snprintf(out->right, sizeof(out->right), "none");
+            out->tone = PHAROS_TONE_DIM;
+        }
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "channel");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)ch);
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "trend");
+        snprintf(out->right, sizeof(out->right), "%.11s", pl_trend_name(v.trend));
+        out->tone = v.locked ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "signal now");
+        snprintf(out->right, sizeof(out->right), "%d dBm", (int)v.rssi_now);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "smoothed");
+        snprintf(out->right, sizeof(out->right), "%d dBm", (int)v.rssi_smoothed);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 5:
+        snprintf(out->left, sizeof(out->left), "best seen");
+        snprintf(out->right, sizeof(out->right), "%d dBm", (int)v.rssi_peak);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 6:
+        snprintf(out->left, sizeof(out->left), "confidence");
+        snprintf(out->right, sizeof(out->right), "%u%%", v.confidence);
+        out->tone = (v.confidence >= 60) ? PHAROS_TONE_GOOD : PHAROS_TONE_WARN;
+        return true;
+    case 7:
+        snprintf(out->left, sizeof(out->left), "samples");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.samples);
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    case 8:
+        /* Said out loud, because it is the single most misread thing here. */
+        snprintf(out->left, sizeof(out->left), "distance");
+        snprintf(out->right, sizeof(out->right), "not shown");
+        out->tone = PHAROS_TONE_WARN;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static const pharos_lens_t k_locate = {
     .id = "wifi.locate",
     .name = "Locate",
@@ -142,6 +261,10 @@ static const pharos_lens_t k_locate = {
     .on_tick = locate_tick,
     .on_event = locate_event,
     .ingest = locate_ingest,
+    .display = k_locate_display,
+    .row = k_locate_row,
+    .row_head_left = "READING",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_locate);

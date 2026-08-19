@@ -187,6 +187,17 @@ static void system_select(void)
     if (!pharos_audio_present()) {
         return;
     }
+    /* Start the cycle from where the alarm ACTUALLY is, not from wherever
+     * this variable happened to be left. Starting at zero meant the first tap
+     * on a working alarm always muted it - the opposite of what somebody
+     * reaching for a settings screen expects, and it persisted to NVS so the
+     * device then booted silent. */
+    if (!pharos_audio_enabled()) {
+        s_setting = 0;
+    } else {
+        const uint8_t v = pharos_audio_volume();
+        s_setting = (v <= 40u) ? 1u : (v <= 80u) ? 2u : 3u;
+    }
     s_setting = (uint8_t)((s_setting + 1u) % 4u);
     switch (s_setting) {
     case 0: pharos_audio_set_enabled(false); break;

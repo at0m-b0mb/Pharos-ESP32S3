@@ -58,6 +58,36 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 
+# --- BLE memory: PSRAM, because internal RAM is the contended one -------
+#
+# THE VIGIL LENS COULD NOT START, AND THIS IS WHY.
+#
+#     BLE_INIT: hci inits failed
+#     BLE_INIT: nimble host init failed
+#     lens.vigil: BLE observer would not start - Vigil cannot see tags
+#
+# NimBLE defaults to BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL, so the host allocates
+# exclusively from internal RAM - the one memory on this chip everything else
+# is already fighting over. Vigil is the only lens that needs BOTH radios, so
+# it starts Wi-Fi promiscuous first and then asks for BLE, and by that point
+# the Wi-Fi driver's buffers have taken internal RAM down to about 52 KB. The
+# HCI init could not get what it needed and the whole lens refused to run.
+#
+# The board has 8 MB of octal PSRAM sitting almost untouched - roughly 5.9 MB
+# free at that moment. Putting the NimBLE host there costs a little latency on
+# a scan path that is already event-driven and idle most of the time, and buys
+# back every kilobyte of the memory that was actually scarce.
+#
+# The controller is also trimmed to what an OBSERVER needs. BLE_MAX_ACT
+# defaults to 6 connection/advertising contexts; Pharos never connects and
+# never advertises - the roles are compiled out entirely - so it needs one
+# scanning context, and each unused one is internal RAM the controller
+# reserves for nothing.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=n
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
+CONFIG_BT_CTRL_BLE_MAX_ACT_EFF=2
+
 # --- LVGL 9: the round HUD toolkit -------------------------------------
 # 16-bit colour, stated rather than inherited. The CO5300 is driven over QSPI
 # at RGB565, so this is the panel's real depth; leaving it to LVGL's default

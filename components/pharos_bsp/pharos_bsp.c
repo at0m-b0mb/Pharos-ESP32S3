@@ -187,16 +187,42 @@ static void display_buffers_to_internal(lv_display_t *disp)
         return;
     }
     /* Descending ladder. 466 px * 2 bytes = 932 bytes a row. */
-    static const int rows[] = { 48, 40, 32, 24, 16, 12 };
+    static const int rows[] = { 24, 20, 16, 12 };
 
     const size_t before =
         heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
 
     for (unsigned i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
         const size_t bytes = (size_t)BSP_LCD_H_RES * (size_t)rows[i] * 2u;
-        /* Leave the system a working margin; a display buffer that consumes
-         * the last of internal RAM only moves the failure somewhere worse. */
-        if (before < (bytes * 2u) + 48u * 1024u) {
+        /* THE RESERVE EXISTS BECAUSE THE BLUETOOTH CONTROLLER DOES.
+         *
+         * Moving the draw buffers into internal RAM fixed the dropped frames,
+         * and then took 87 KB of the scarcest memory on the chip to do it. The
+         * BLE controller wants a large contiguous block of the same memory,
+         * and Vigil is the only lens that starts it - so nothing noticed until
+         * that one lens was opened, at which point:
+         *
+         *     BLE_INIT: Malloc failed
+         *     BLE assert emi.c 164
+         *     Guru Meditation Error: Core 0 panic'ed (Interrupt wdt timeout)
+         *
+         * A display optimisation that silently breaks a detector is a bad
+         * trade at any frame rate. The reserve is large enough for the
+         * controller, the audio codec and the Wi-Fi driver together, and the
+         * buffers shrink to fit around them.
+         *
+         * The number was raised again after Vigil finally ran: with the Wi-Fi
+         * sniffer AND the BLE observer both up - which only Vigil does -
+         * internal free fell to 19 KB, under the threshold this firmware's own
+         * System screen paints red. Nothing had failed yet, and waiting for it
+         * to would have been a poor way to find out.
+         *
+         * That costs nothing worth having. These buffers live in internal RAM
+         * precisely so the SPI master never needs a bounce buffer, and without
+         * a bounce buffer there is no allocation on the flush path to fail -
+         * so a smaller buffer only means more transfers per repaint, and
+         * transfers were never the problem. */
+        if (before < (bytes * 2u) + 140u * 1024u) {
             continue;
         }
         void *b1 = heap_caps_aligned_alloc(64, bytes,

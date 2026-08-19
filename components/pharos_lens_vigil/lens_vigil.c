@@ -225,6 +225,60 @@ static bool k_vigil_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* The tags themselves. A score saying "something is following you" that
+ * cannot name WHICH device is a fright without a remedy; the address is what
+ * lets somebody search a bag. */
+static bool k_vigil_row(unsigned index, struct pharos_lens_row *out)
+{
+    pv_verdict_t v;
+    if (!pharos_lens_vigil_snapshot(&v)) {
+        return false;
+    }
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "trackers seen");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_tags);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "following you");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_following);
+        out->tone = v.n_following ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
+        return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "places visited");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_locales);
+        /* Following means nothing until you have MOVED - this is the number
+         * that makes the verdict meaningful, so it is on the page. */
+        out->tone = (v.n_locales < 2) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "worst device");
+        if (v.worst_locales) {
+            snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                     v.worst_addr[3], v.worst_addr[4], v.worst_addr[5]);
+            out->tone = PHAROS_TONE_BAD;
+        } else {
+            snprintf(out->right, sizeof(out->right), "none");
+            out->tone = PHAROS_TONE_GOOD;
+        }
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "seen in places");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.worst_locales);
+        out->tone = (v.worst_locales >= 2) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        return true;
+    case 5:
+        snprintf(out->left, sizeof(out->left), "with you for");
+        snprintf(out->right, sizeof(out->right), "%u min",
+                 (unsigned)v.worst_minutes);
+        out->tone = (v.worst_minutes >= 30u) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static const pharos_lens_t k_vigil = {
     .id = "ble.vigil",
     .name = "Vigil",
@@ -243,6 +297,9 @@ static const pharos_lens_t k_vigil = {
     .ingest = vigil_ingest,
     .stage_report = k_vigil_stage,
     .display = k_vigil_display,
+    .row = k_vigil_row,
+    .row_head_left = "TRACKER",
+    .row_head_right = "STATE",
 };
 
 PHAROS_LENS_REGISTER(&k_vigil);

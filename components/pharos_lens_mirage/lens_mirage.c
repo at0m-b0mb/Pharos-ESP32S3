@@ -163,6 +163,43 @@ static bool k_mirage_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* Beacon flooding: a lot of names, most of them seen once, many on software
+ * addresses. Volume alone is a busy city; these three together are a flood. */
+static bool k_mirage_row(unsigned index, struct pharos_lens_row *out)
+{
+    pf_verdict_t v;
+    if (!pharos_lens_mirage_snapshot(&v)) return false;
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "distinct names");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.distinct_ssids);
+        out->tone = PHAROS_TONE_NEUTRAL; return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "new per minute");
+        snprintf(out->right, sizeof(out->right), "%u.%u",
+                 (unsigned)(v.new_per_min_x10 / 10u), (unsigned)(v.new_per_min_x10 % 10u));
+        out->tone = PHAROS_TONE_NEUTRAL; return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "seen once or twice");
+        snprintf(out->right, sizeof(out->right), "%u%%",
+                 (unsigned)(v.ephemeral_permil / 10u));
+        /* A real estate's names persist. Names that appear once are invented. */
+        out->tone = (v.ephemeral_permil >= 700u) ? PHAROS_TONE_BAD : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "software addresses");
+        snprintf(out->right, sizeof(out->right), "%u%%",
+                 (unsigned)(v.synthetic_permil / 10u));
+        out->tone = (v.synthetic_permil >= 700u) ? PHAROS_TONE_BAD : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "names from one OUI");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.widest_oui_names);
+        out->tone = PHAROS_TONE_DIM; return true;
+    default: return false;
+    }
+}
+
 static const pharos_lens_t k_mirage = {
     .id = "wifi.mirage",
     .name = "Mirage",
@@ -179,6 +216,9 @@ static const pharos_lens_t k_mirage = {
     .ingest = mirage_ingest,
     .stage_report = k_mirage_stage,
     .display = k_mirage_display,
+    .row = k_mirage_row,
+    .row_head_left = "BEACON FLOOD",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_mirage);

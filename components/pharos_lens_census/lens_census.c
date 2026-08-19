@@ -475,6 +475,54 @@ static bool k_twin_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* Twin names the radio it suspects and says what is wrong with it. A score
+ * saying "somebody is impersonating a network" without naming WHICH network
+ * and WHICH radio is a fright with no remedy. */
+static bool k_twin_row(unsigned index, struct pharos_lens_row *out)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    const pt_verdict_t v = s_twin_worst;
+    char ssid[PC_SSID_MAX + 1];
+    snprintf(ssid, sizeof(ssid), "%s", s_twin_ssid);
+    xSemaphoreGive(s_lock);
+
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "network");
+        snprintf(out->right, sizeof(out->right), "%.11s", ssid[0] ? ssid : "--");
+        out->tone = PHAROS_TONE_NEUTRAL; return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "radios on that name");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.members);
+        /* Multiplicity alone scores ZERO - a roaming estate is many radios on
+         * one name and is not an attack. On the page so nobody reads the
+         * count as the finding. */
+        out->tone = PHAROS_TONE_DIM; return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "suspect radio");
+        snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                 v.suspect[3], v.suspect[4], v.suspect[5]);
+        out->tone = v.score >= 40 ? PHAROS_TONE_BAD : PHAROS_TONE_DIM; return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "security gap");
+        snprintf(out->right, sizeof(out->right), "%u vs %u",
+                 (unsigned)v.worst_grade_score, (unsigned)v.best_grade_score);
+        /* The posture family: one radio on the name is weaker than its
+         * siblings, which is what an evil twin has to be to be useful. */
+        out->tone = (v.worst_grade_score + 20u < v.best_grade_score)
+                        ? PHAROS_TONE_BAD : PHAROS_TONE_NEUTRAL;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "louder than siblings");
+        snprintf(out->right, sizeof(out->right), "%d dB", (int)v.rssi_excess);
+        out->tone = (v.rssi_excess >= 10) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    default: return false;
+    }
+}
+
 static const pharos_lens_t k_twin = {
     .id = "wifi.twin",
     .name = "Twin",
@@ -491,6 +539,9 @@ static const pharos_lens_t k_twin = {
     .ingest = census_ingest,
     .stage_report = k_twin_stage,
     .display = k_twin_display,
+    .row = k_twin_row,
+    .row_head_left = "IMPERSONATION",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_census);
