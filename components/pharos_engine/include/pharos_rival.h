@@ -133,7 +133,14 @@ typedef struct {
 
 void prv_reset(prv_state_t *s);
 
-/* A BLE advertisement. `name` may be NULL. */
+/* A BLE advertisement, with its raw payload - which is what actually carries
+ * the identifying signatures for a passive listener. `name` and `adv` may both
+ * be NULL. */
+void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name,
+                         const uint8_t *adv, uint8_t adv_len, int8_t rssi,
+                         uint64_t t_us);
+
+/* Name-only form, for callers with no payload to hand over. */
 void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
                      int8_t rssi, uint64_t t_us);
 
@@ -163,6 +170,24 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out);
 /* Classify a device name on its own. Exposed so the host tests can hold it to
  * account directly, including for the names it must REFUSE. */
 prv_kind_t prv_classify_name(const char *name, uint8_t len, bool ble);
+
+/* Classify a RAW BLE advertisement.
+ *
+ * This exists because name matching cannot find a Flipper Zero and never
+ * could. Pharos scans PASSIVELY - the transmit fence forbids sending a
+ * SCAN_REQ - so it only ever sees the advertisement packet, and most devices
+ * put their name in the SCAN RESPONSE, which a passive listener is not
+ * entitled to ask for. Measured in a real room: 23 advertisers, 19 of them
+ * nameless.
+ *
+ * What the Flipper does put in the advertisement is a 128-bit service UUID,
+ * and two of its bytes identify the device and its shell colour. That is
+ * visible passively, so that is what is matched.
+ *
+ * Returns the kind; `colour` (may be NULL) receives a static string for the
+ * Flipper's case. */
+prv_kind_t prv_classify_adv(const uint8_t *data, uint8_t len,
+                            const char **colour);
 
 bool prv_device_at(const prv_state_t *s, unsigned index, prv_device_t *out);
 

@@ -113,6 +113,87 @@ prv_kind_t prv_classify_name(const char *name, uint8_t len, bool ble)
     return PRV_KIND_NONE;
 }
 
+/* THE FLIPPER SIGNATURE, TAKEN OFF THE AIR RATHER THAN OFF A FORUM.
+ *
+ * A Flipper Zero advertises a 16-BIT service UUID in the 0x3081..0x3083 range,
+ * the low byte selecting the shell colour. Captured from a real unit sitting on
+ * a desk:
+ *
+ *   0201 06  07 09 52 33 67 68 6f 6e  03 02 82 30  02 0a 00
+ *   flags    complete name "R3ghon"   ^^^^^^^^^^^  tx power
+ *                                     len 3, AD type 0x02
+ *                                     (16-bit service UUID list), UUID 0x3082
+ *
+ * Two things that capture settled, both of which I had wrong:
+ *
+ *   - The pair lives in a SIXTEEN-bit UUID list (AD type 0x02/0x03). I had
+ *     required it inside a 128-bit list (0x06/0x07) and would have matched
+ *     nothing, ever.
+ *   - The name is right there in the advertisement - and it is "R3ghon",
+ *     because people rename these. Matching on a name beginning "Flipper" is
+ *     therefore useless on any unit whose owner has touched the settings, which
+ *     is most of them.
+ *
+ * Matching a whole UUID rather than scanning the payload for two loose bytes is
+ * deliberate: 0x8N 0x30 would collide by chance across a room of advertisers,
+ * and every false positive on this lens is an accusation pointed at a person.
+ */
+static bool flipper_uuid(uint16_t uuid, const char **colour)
+{
+    switch (uuid) {
+    case 0x3081: if (colour) *colour = "black";       return true;
+    case 0x3082: if (colour) *colour = "white";       return true;
+    case 0x3083: if (colour) *colour = "transparent"; return true;
+    default: return false;
+    }
+}
+
+prv_kind_t prv_classify_adv(const uint8_t *data, uint8_t len,
+                            const char **colour)
+{
+    if (colour) {
+        *colour = "";
+    }
+    if (!data || len < 3) {
+        return PRV_KIND_NONE;
+    }
+    uint8_t i = 0;
+    while (i + 1u < len) {
+        const uint8_t l = data[i];
+        if (l == 0 || (uint16_t)i + 1u + l > (uint16_t)len) {
+            break; /* malformed or truncated - stop rather than over-read */
+        }
+        const uint8_t type = data[i + 1];
+        const uint8_t *p = &data[i + 2];
+        const uint8_t plen = (uint8_t)(l - 1);
+
+        /* 0x02 / 0x03: incomplete and complete lists of 16-bit service UUIDs,
+         * little-endian, two bytes each. This is where a Flipper's is. */
+        if ((type == 0x02 || type == 0x03) && plen >= 2) {
+            for (uint8_t k = 0; k + 1u < plen; k += 2u) {
+                const uint16_t uuid = (uint16_t)(p[k] | ((uint16_t)p[k + 1] << 8));
+                if (flipper_uuid(uuid, colour)) {
+                    return PRV_KIND_FLIPPER;
+                }
+            }
+        }
+        /* A local name in the advertisement is still worth reading when a
+         * device volunteers one - though a renamed Flipper will not match. */
+        if ((type == 0x08 || type == 0x09) && plen >= 3) {
+            char nm[PR_NAME_MAX + 1];
+            uint8_t n = plen > PR_NAME_MAX ? PR_NAME_MAX : plen;
+            memcpy(nm, p, n);
+            nm[n] = 0;
+            const prv_kind_t k = prv_classify_name(nm, n, true);
+            if (k != PRV_KIND_NONE) {
+                return k;
+            }
+        }
+        i = (uint8_t)(i + 1u + l);
+    }
+    return PRV_KIND_NONE;
+}
+
 /* ---- ingest ---------------------------------------------------------- */
 
 void prv_reset(prv_state_t *s)
@@ -150,8 +231,9 @@ static void note_time(prv_state_t *s, uint64_t t_us)
     s->last_us = t_us;
 }
 
-void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
-                     int8_t rssi, uint64_t t_us)
+void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name,
+                         const uint8_t *adv, uint8_t adv_len, int8_t rssi,
+                         uint64_t t_us)
 {
     if (!s || !addr) {
         return;
@@ -169,8 +251,15 @@ void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
     }
     s->adv_distinct[s->adv_slot]++;
 
-    const uint8_t nlen = name ? (uint8_t)strlen(name) : 0u;
-    const prv_kind_t kind = prv_classify_name(name, nlen, true);
+    /* The raw advertisement first: it is the only thing a passive listener is
+     * guaranteed to see, and it is where the Flipper signature lives. The name
+     * is a bonus when a device volunteers one in the advertisement itself. */
+    const char *colour = "";
+    prv_kind_t kind = prv_classify_adv(adv, adv_len, &colour);
+    if (kind == PRV_KIND_NONE) {
+        const uint8_t nlen = name ? (uint8_t)strlen(name) : 0u;
+        kind = prv_classify_name(name, nlen, true);
+    }
     if (kind == PRV_KIND_NONE) {
         return; /* an ordinary Bluetooth device is not this lens' business */
     }
@@ -185,11 +274,22 @@ void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
     if (rssi > d->best_rssi) {
         d->best_rssi = rssi;
     }
-    if (name && d->name[0] == '\0') {
-        const uint8_t n = nlen > PR_NAME_MAX ? PR_NAME_MAX : nlen;
-        memcpy(d->name, name, n);
-        d->name[n] = '\0';
+    if (d->name[0] == '\0') {
+        if (name && name[0]) {
+            snprintf(d->name, sizeof(d->name), "%s", name);
+        } else if (colour && colour[0]) {
+            /* No name to be had passively, but the UUID told us the shell
+             * colour - which is a far more useful label to hand somebody
+             * looking around a room than a random address. */
+            snprintf(d->name, sizeof(d->name), "%s", colour);
+        }
     }
+}
+
+void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
+                     int8_t rssi, uint64_t t_us)
+{
+    prv_observe_ble_adv(s, addr, name, NULL, 0, rssi, t_us);
 }
 
 /* The address a Pwnagotchi transmits its advertisement from. Hardcoded in the

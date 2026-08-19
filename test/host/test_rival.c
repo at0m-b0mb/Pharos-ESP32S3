@@ -236,10 +236,84 @@ static void test_rival_pwnagotchi(void)
     }
 }
 
+
+/* A Flipper Zero cannot be found by name and never could: Pharos scans
+ * PASSIVELY, so it sees the advertisement and never the scan response where
+ * the name lives. Measured in a real room, 19 of 23 advertisers were nameless.
+ *
+ * What the advertisement does carry is a 128-bit service UUID whose bytes
+ * identify the device and its shell colour. */
+static void test_rival_flipper_advertisement(void)
+{
+    banner("rival: the Flipper is found by its advertised UUID, not its name");
+    const char *colour = NULL;
+
+    /* THE REAL THING, captured off a Flipper on a desk:
+     *   0201 06 | 07 09 "R3ghon" | 03 02 82 30 | 02 0a 00
+     * The signature is a 16-bit service UUID (AD type 0x02), NOT a 128-bit
+     * one - and the unit is RENAMED, so no name match could ever fire. */
+    static const uint8_t real[] = {
+        0x02, 0x01, 0x06,
+        0x07, 0x09, 0x52, 0x33, 0x67, 0x68, 0x6f, 0x6e, /* "R3ghon" */
+        0x03, 0x02, 0x82, 0x30,                          /* UUID 0x3082 */
+        0x02, 0x0a, 0x00,
+    };
+    CHECK_EQ(prv_classify_adv(real, sizeof(real), &colour), PRV_KIND_FLIPPER);
+    CHECK(colour && strcmp(colour, "white") == 0,
+          "shell colour read from the UUID (got \"%s\")", colour ? colour : "");
+
+    /* The other two shells. */
+    uint8_t adv[8] = { 0x02, 0x01, 0x06, 0x03, 0x02, 0x81, 0x30, 0x00 };
+    CHECK_EQ(prv_classify_adv(adv, 7, &colour), PRV_KIND_FLIPPER);
+    CHECK(strcmp(colour, "black") == 0, "black");
+    adv[5] = 0x83;
+    CHECK_EQ(prv_classify_adv(adv, 7, &colour), PRV_KIND_FLIPPER);
+    CHECK(strcmp(colour, "transparent") == 0, "transparent");
+
+    /* THE SAME BYTES ANYWHERE ELSE MUST NOT MATCH. Scanning the payload for
+     * two loose bytes - which is what some tools do - would collide by chance
+     * across a room of advertisers, and every false positive on this lens is
+     * an accusation pointed at a person. Real Apple manufacturer data from the
+     * same capture, doctored to contain the pair: */
+    uint8_t mfg[20] = { 0 };
+    mfg[0] = 17; mfg[1] = 0xFF; mfg[2] = 0x4C; mfg[3] = 0x00;
+    mfg[4] = 0x82; mfg[5] = 0x30;
+    CHECK_EQ(prv_classify_adv(mfg, 18, &colour), PRV_KIND_NONE);
+
+    /* A neighbouring 16-bit UUID must not match either. */
+    uint8_t near[8] = { 0x02, 0x01, 0x06, 0x03, 0x02, 0x84, 0x30, 0x00 };
+    CHECK_EQ(prv_classify_adv(near, 7, &colour), PRV_KIND_NONE);
+
+    /* A nameless ordinary advertisement is not a Flipper. */
+    uint8_t plain[8] = { 0x02, 0x01, 0x06, 0x03, 0x03, 0x0F, 0x18, 0x00 };
+    CHECK_EQ(prv_classify_adv(plain, 7, &colour), PRV_KIND_NONE);
+
+    CHECK_EQ(prv_classify_adv(NULL, 0, &colour), PRV_KIND_NONE);
+
+    /* End to end: a nameless Flipper advertisement must still be found, and
+     * the colour used as its label since no name is obtainable passively. */
+    prv_state_t st;
+    prv_verdict_t v;
+    prv_reset(&st);
+    adv[5] = 0x81;
+    static const uint8_t F[6] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 };
+    for (int i = 0; i < 6; i++) {
+        prv_observe_ble_adv(&st, F, NULL, adv, 18, -45,
+                            T0 + (uint64_t)i * 500000ull);
+    }
+    prv_evaluate(&st, T0 + 3000000ull, &v);
+    CHECK_EQ(v.n_flipper, 1);
+    CHECK_EQ(v.worst_kind, PRV_KIND_FLIPPER);
+    CHECK(strcmp(v.worst_name, "black") == 0,
+          "labelled by shell colour when no name is obtainable (got \"%s\")",
+          v.worst_name);
+}
+
 void test_rival(void)
 {
     test_rival_names();
     test_rival_pwnagotchi();
+    test_rival_flipper_advertisement();
     test_rival_presence_is_capped();
     test_rival_spam_is_active();
     test_rival_busy_room_is_not_a_flood();

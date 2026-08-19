@@ -503,7 +503,8 @@ void pharos_radio_rx_stop(void) { s.running = false; s.bus = NULL; }
 #if !defined(PHAROS_HOST)
 
 static pharos_bus_t *s_ble_bus;
-static bool s_ble_running;
+static bool s_ble_running;  /* the NimBLE host is up            */
+static bool s_ble_scanning; /* ...and discovery is ACTIVE       */
 
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
 {
@@ -535,7 +536,10 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-static void ble_on_sync(void)
+/* Start (or restart) passive discovery. Split out of the sync callback because
+ * it has to be callable AGAIN, which is the whole point - see the note in
+ * pharos_radio_ble_scan_start. */
+static bool ble_start_disc(void)
 {
     struct ble_gap_disc_params p;
     memset(&p, 0, sizeof(p));
@@ -543,13 +547,25 @@ static void ble_on_sync(void)
     p.filter_duplicates = 0; /* we want repeats: persistence is the signal */
     p.itvl = 0x0060;         /* ~60 ms */
     p.window = 0x0030;       /* ~30 ms - a 50% duty listen              */
+    /* Cancel first: a discovery already in progress makes ble_gap_disc()
+     * return BLE_HS_EALREADY, and treating that as failure would break the
+     * common case of one BLE lens replacing another. */
+    (void)ble_gap_disc_cancel();
     const int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p,
                                 ble_gap_event, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
-    } else {
-        ESP_LOGI(TAG, "ble observer up (passive - transmits nothing)");
+        s_ble_scanning = false;
+        return false;
     }
+    s_ble_scanning = true;
+    ESP_LOGI(TAG, "ble observer up (passive - transmits nothing)");
+    return true;
+}
+
+static void ble_on_sync(void)
+{
+    ble_start_disc();
 }
 
 static void ble_host_task(void *param)
@@ -573,8 +589,25 @@ bool pharos_radio_ble_scan_start(pharos_bus_t *bus)
         return false;
     }
     s_ble_bus = bus;
+
+    /* THE HOST BEING UP IS NOT THE SAME AS THE RADIO LISTENING, AND CONFLATING
+     * THEM MADE BLE WORK EXACTLY ONCE PER BOOT.
+     *
+     * pharos_radio_ble_scan_stop() cancels discovery but deliberately leaves
+     * the NimBLE host running, because tearing the controller down and back up
+     * costs seconds and these lenses are switched constantly. This function
+     * then saw s_ble_running and returned true - having set the bus, and
+     * having restarted nothing. Discovery was still cancelled.
+     *
+     * So the FIRST lens to use Bluetooth after a boot worked, and every lens
+     * after it silently received not one advertisement while reporting that it
+     * had started successfully. Vigil found six trackers; Rival, opened after
+     * it, sat at zero advertisers per second and looked like a classifier bug.
+     *
+     * The two states are now separate and starting always (re)issues the
+     * discovery. */
     if (s_ble_running) {
-        return true;
+        return ble_start_disc();
     }
     const esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
@@ -595,6 +628,7 @@ void pharos_radio_ble_scan_stop(void)
         return;
     }
     ble_gap_disc_cancel();
+    s_ble_scanning = false;
     s_ble_bus = NULL;
     /* The NimBLE host stays up: tearing the controller down and back up costs
      * seconds and this lens is switched in and out constantly. Cancelling the

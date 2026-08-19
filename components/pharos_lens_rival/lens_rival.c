@@ -30,10 +30,98 @@ static prv_verdict_t s_verdict;
 static SemaphoreHandle_t s_lock;
 static prv_band_t s_last_band;
 
+/* ---- the raw roster --------------------------------------------------
+ *
+ * Every BLE advertiser seen, named or not, kept separately from the engine's
+ * table of RECOGNISED hardware.
+ *
+ * The engine deliberately admits only devices it can classify - refusing to
+ * track every passing phone is the point of it. But that makes one question
+ * impossible to answer from the outside: "is my Flipper not detected because
+ * the classifier is wrong, or because the device is not transmitting at all?"
+ * Those need completely different fixes and the screen could not tell them
+ * apart. This roster answers it. */
+#define RIVAL_RAW_MAX 40
+typedef struct {
+    uint8_t addr[6];
+    char name[PR_NAME_MAX + 1];
+    int8_t rssi;
+    uint16_t hits;
+    uint8_t adv[31];   /* the payload itself, for eyes-on diagnosis */
+    uint8_t adv_len;
+    bool in_use;
+} raw_adv_t;
+EXT_RAM_BSS_ATTR static raw_adv_t s_raw[RIVAL_RAW_MAX];
+static unsigned s_raw_n;
+static uint32_t s_raw_total;
+
+static void raw_note(const uint8_t addr[6], const char *name, int8_t rssi,
+                     const uint8_t *adv, uint8_t adv_len)
+{
+    s_raw_total++;
+    for (unsigned i = 0; i < s_raw_n; i++) {
+        if (memcmp(s_raw[i].addr, addr, 6) == 0) {
+            s_raw[i].hits++;
+            if (rssi > s_raw[i].rssi) {
+                s_raw[i].rssi = rssi;
+            }
+            if (s_raw[i].name[0] == '\0' && name && name[0]) {
+                snprintf(s_raw[i].name, sizeof(s_raw[i].name), "%s", name);
+            }
+            if (s_raw[i].adv_len == 0 && adv && adv_len) {
+                const uint8_t n = adv_len > 31u ? 31u : adv_len;
+                memcpy(s_raw[i].adv, adv, n);
+                s_raw[i].adv_len = n;
+            }
+            return;
+        }
+    }
+    if (s_raw_n >= RIVAL_RAW_MAX) {
+        return;
+    }
+    raw_adv_t *r = &s_raw[s_raw_n++];
+    memset(r, 0, sizeof(*r));
+    memcpy(r->addr, addr, 6);
+    r->rssi = rssi;
+    r->hits = 1;
+    r->in_use = true;
+    if (name && name[0]) {
+        snprintf(r->name, sizeof(r->name), "%s", name);
+    }
+    if (adv && adv_len) {
+        const uint8_t n = adv_len > 31u ? 31u : adv_len;
+        memcpy(r->adv, adv, n);
+        r->adv_len = n;
+    }
+}
+
+unsigned pharos_lens_rival_raw(unsigned index, uint8_t addr[6], char *name,
+                               size_t cap, int8_t *rssi, uint16_t *hits,
+                               uint8_t *adv, uint8_t *adv_len)
+{
+    if (index >= s_raw_n) {
+        return 0;
+    }
+    if (addr) memcpy(addr, s_raw[index].addr, 6);
+    if (name && cap) snprintf(name, cap, "%s", s_raw[index].name);
+    if (rssi) *rssi = s_raw[index].rssi;
+    if (hits) *hits = s_raw[index].hits;
+    if (adv && adv_len) {
+        memcpy(adv, s_raw[index].adv, s_raw[index].adv_len);
+        *adv_len = s_raw[index].adv_len;
+    }
+    return s_raw_n;
+}
+
+uint32_t pharos_lens_rival_raw_total(void) { return s_raw_total; }
+
 static bool rival_mount(void)
 {
     prv_reset(&s_engine);
     memset(&s_verdict, 0, sizeof(s_verdict));
+    memset(s_raw, 0, sizeof(s_raw));
+    s_raw_n = 0;
+    s_raw_total = 0;
     s_last_band = PRV_BAND_CLEAR;
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
@@ -99,8 +187,14 @@ static void rival_event(const pharos_event_t *ev)
             }
             i = (uint8_t)(i + 1u + l);
         }
-        prv_observe_ble(&s_engine, ev->u.ble.addr, name[0] ? name : NULL,
-                        ev->u.ble.rssi, ev->t_us);
+        raw_note(ev->u.ble.addr, name, ev->u.ble.rssi,
+                 ev->u.ble.data, ev->u.ble.data_len);
+        /* The RAW payload goes to the engine, not just the name. A passive
+         * listener never sees the scan response, so the advertisement is the
+         * only place a signature can be - and it is where the Flipper's is. */
+        prv_observe_ble_adv(&s_engine, ev->u.ble.addr, name[0] ? name : NULL,
+                            ev->u.ble.data, ev->u.ble.data_len,
+                            ev->u.ble.rssi, ev->t_us);
         return;
     }
     if (ev->type != PHAROS_EV_DOT11) {
@@ -238,8 +332,17 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
         return false;
     }
     if ((k & 1u) == 0u) {
-        snprintf(out->left, sizeof(out->left), "%.15s %02x:%02x",
-                 prv_kind_name(d.kind), d.addr[4], d.addr[5]);
+        /* Prefer the device's own name over its address: "Flipper R3ghon" is
+         * something an operator can ask a room about, and two hex bytes are
+         * not. Falls back to the address when nothing named itself, which for
+         * a passive listener is most of the time. */
+        if (d.name[0]) {
+            snprintf(out->left, sizeof(out->left), "%.12s %.11s",
+                     prv_kind_name(d.kind), d.name);
+        } else {
+            snprintf(out->left, sizeof(out->left), "%.15s %02x:%02x",
+                     prv_kind_name(d.kind), d.addr[4], d.addr[5]);
+        }
         snprintf(out->right, sizeof(out->right), "%d dBm", (int)d.best_rssi);
         out->tone = (d.kind >= PRV_KIND_DEAUTHER) ? PHAROS_TONE_BAD
                                                   : PHAROS_TONE_NEUTRAL;

@@ -354,6 +354,64 @@ static int cli_alarm(int argc, char **argv)
     return 1;
 }
 
+extern unsigned pharos_lens_rival_raw(unsigned index, uint8_t addr[6],
+                                      char *name, size_t cap, int8_t *rssi,
+                                      uint16_t *hits, uint8_t *adv,
+                                      uint8_t *adv_len);
+extern uint32_t pharos_lens_rival_raw_total(void);
+
+/* Every BLE advertiser in range, named or not.
+ *
+ * Rival's engine only admits hardware it can CLASSIFY, which is correct but
+ * makes one question unanswerable from the screen: is a device missing because
+ * the classifier is wrong, or because it is not transmitting? Those want
+ * completely different fixes. This prints the raw roster so the difference is
+ * visible instead of guessed at. */
+static int cli_ble(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const pharos_lens_t *l = pharos_lens_active();
+    if (!l || strcmp(l->id, "rf.rival") != 0) {
+        printf("start the Rival lens first: lens rf.rival\n");
+        return 1;
+    }
+    uint8_t addr[6];
+    char name[40];
+    int8_t rssi;
+    uint16_t hits;
+    uint8_t adv[31];
+    uint8_t adv_len = 0;
+    unsigned n = 0;
+    printf("BLE advertisers in range (%u advertisements total)\n",
+           (unsigned)pharos_lens_rival_raw_total());
+    for (unsigned i = 0; i < 64; i++) {
+        const unsigned total = pharos_lens_rival_raw(i, addr, name, sizeof(name),
+                                                     &rssi, &hits, adv, &adv_len);
+        if (total == 0) {
+            break;
+        }
+        n = total;
+        printf("  %02x:%02x:%02x:%02x:%02x:%02x  %4d dBm  %4u seen  \"%s\"\n",
+               addr[0], addr[1], addr[2], addr[3], addr[4], addr[5],
+               (int)rssi, (unsigned)hits, name);
+        /* The payload itself. Most of these advertisers are nameless because a
+         * passive listener never sees a scan response, so the bytes are the
+         * only thing there is to identify them by - and printing them is how a
+         * signature gets found rather than guessed. */
+        if (adv_len) {
+            printf("        ");
+            for (unsigned b = 0; b < adv_len; b++) {
+                printf("%02x", adv[b]);
+            }
+            printf("\n");
+        }
+    }
+    if (n == 0) {
+        printf("  (nothing - the observer is receiving no advertisements)\n");
+    }
+    return 0;
+}
+
 static int cli_rows(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -561,6 +619,14 @@ void pharos_console_start(void)
         .func = &cli_rows,
     };
     esp_console_cmd_register(&rows);
+
+    const esp_console_cmd_t ble = {
+        .command = "ble",
+        .help = "list every BLE advertiser in range, named or not",
+        .hint = NULL,
+        .func = &cli_ble,
+    };
+    esp_console_cmd_register(&ble);
 
     const esp_console_cmd_t alarm = {
         .command = "alarm",
