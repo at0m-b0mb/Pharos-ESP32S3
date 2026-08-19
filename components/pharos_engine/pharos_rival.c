@@ -252,13 +252,43 @@ void prv_reset(prv_state_t *s)
     }
 }
 
-static prv_device_t *admit(prv_state_t *s, const uint8_t addr[6], uint64_t t_us)
+static prv_device_t *admit(prv_state_t *s, const uint8_t addr[6],
+                           prv_kind_t kind, int8_t rssi, bool ble,
+                           uint64_t t_us)
 {
-    for (unsigned i = 0; i < s->n; i++) {
-        if (s->dev[i].in_use && memcmp(s->dev[i].addr, addr, 6) == 0) {
-            return &s->dev[i];
+    /* A DEVICE IS A KIND, NOT AN ADDRESS - see the long note in the header.
+     *
+     * A Flipper running pairing spam broadcasts from a fresh random address
+     * for every advertisement, so a table keyed on address showed twenty-nine
+     * Flippers in a room containing one. Over Bluetooth the address is not an
+     * identity, so it is not used as one; `addresses` counts the rotation
+     * instead, which is a finding rather than a defect.
+     *
+     * Wi-Fi is different: BSSIDs do not rotate, two deauther boards really are
+     * two, and keying on the address there is both safe and more precise. */
+    if (ble) {
+        for (unsigned i = 0; i < s->n; i++) {
+            prv_device_t *d = &s->dev[i];
+            if (!d->in_use || !d->ble || d->kind != kind) {
+                continue;
+            }
+            if (memcmp(d->addr, addr, 6) != 0) {
+                if (d->addresses < 0xFFFFu) {
+                    d->addresses++;
+                }
+                memcpy(d->addr, addr, 6); /* the one it is using now */
+            }
+            return d;
+        }
+    } else {
+        for (unsigned i = 0; i < s->n; i++) {
+            if (s->dev[i].in_use && !s->dev[i].ble &&
+                memcmp(s->dev[i].addr, addr, 6) == 0) {
+                return &s->dev[i];
+            }
         }
     }
+
     if (s->n >= PR_MAX_SIGHTINGS) {
         s->full = true;
         return NULL;
@@ -268,8 +298,27 @@ static prv_device_t *admit(prv_state_t *s, const uint8_t addr[6], uint64_t t_us)
     memcpy(d->addr, addr, 6);
     d->in_use = true;
     d->first_us = t_us;
-    d->best_rssi = -128;
+    d->last_us = t_us;
+    d->best_rssi = rssi;
+    d->addresses = 1;
     return d;
+}
+
+/* A name is only worth keeping if it is readable. Spam payloads and truncated
+ * elements produce byte soup, and "Flipper \xe2\x96" on a list of hardware in
+ * the room is worse than no name at all. */
+static bool name_is_sane(const char *n)
+{
+    if (!n || !n[0]) {
+        return false;
+    }
+    for (unsigned i = 0; n[i]; i++) {
+        const unsigned char c = (unsigned char)n[i];
+        if (c < 0x20u || c > 0x7Eu) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static void note_time(prv_state_t *s, uint64_t t_us)
@@ -300,26 +349,48 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
     }
     s->adv_distinct[s->adv_slot]++;
 
-    /* Pairing-popup spam. The window slides rather than resetting on a timer
-     * so a burst straddling a boundary is not split into two harmless halves. */
-    if (s->pair_window_us == 0 || t_us < s->pair_window_us ||
-        t_us - s->pair_window_us > PRV_SPAM_WINDOW_US) {
-        s->pair_window_us = t_us;
-        s->pair_n_models = 0;
-        s->pair_advs = 0;
-    }
-    uint8_t code = 0;
-    if (pairing_code(adv, adv_len, &code)) {
-        s->pair_advs++;
-        bool seen = false;
-        for (uint8_t k = 0; k < s->pair_n_models; k++) {
-            if (s->pair_models[k] == code) {
-                seen = true;
-                break;
+    /* Pairing-popup spam, into a window that slides. Each model carries its
+     * own last-seen stamp and the advertisements go into per-second buckets;
+     * nothing is reset wholesale, so a steady attack produces a steady
+     * reading instead of a sawtooth. */
+    {
+        uint8_t code = 0;
+        if (pairing_code(adv, adv_len, &code)) {
+            const uint8_t slot = (uint8_t)(sec % 8u);
+            if (s->pair_adv_sec[slot] != sec) {
+                s->pair_adv_sec[slot] = sec;
+                s->pair_adv_cnt[slot] = 0;
             }
-        }
-        if (!seen && s->pair_n_models < (uint8_t)sizeof(s->pair_models)) {
-            s->pair_models[s->pair_n_models++] = code;
+            s->pair_adv_cnt[slot]++;
+
+            bool seen = false;
+            for (uint8_t k = 0; k < s->pair_n_models; k++) {
+                if (s->pair_models[k] == code) {
+                    s->pair_model_us[k] = t_us;
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                if (s->pair_n_models < (uint8_t)(sizeof(s->pair_models))) {
+                    s->pair_models[s->pair_n_models] = code;
+                    s->pair_model_us[s->pair_n_models] = t_us;
+                    s->pair_n_models++;
+                } else {
+                    /* Full: evict the stalest. A spammer cycles through more
+                     * models than this table holds, and without eviction the
+                     * table would freeze on the first sixteen it ever saw and
+                     * stop tracking the attack that is actually running. */
+                    uint8_t oldest = 0;
+                    for (uint8_t k = 1; k < s->pair_n_models; k++) {
+                        if (s->pair_model_us[k] < s->pair_model_us[oldest]) {
+                            oldest = k;
+                        }
+                    }
+                    s->pair_models[oldest] = code;
+                    s->pair_model_us[oldest] = t_us;
+                }
+            }
         }
     }
 
@@ -335,7 +406,7 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
     if (kind == PRV_KIND_NONE) {
         return; /* an ordinary Bluetooth device is not this lens' business */
     }
-    prv_device_t *d = admit(s, addr, t_us);
+    prv_device_t *d = admit(s, addr, kind, rssi, true, t_us);
     if (!d) {
         return;
     }
@@ -415,7 +486,7 @@ void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid
     if (kind == PRV_KIND_NONE) {
         return;
     }
-    prv_device_t *d = admit(s, bssid, t_us);
+    prv_device_t *d = admit(s, bssid, kind, rssi, false, t_us);
     if (!d) {
         return;
     }
@@ -428,8 +499,12 @@ void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid
     }
     if (d->name[0] == '\0' && ssid && ssid_len) {
         const uint8_t n = ssid_len > PR_NAME_MAX ? PR_NAME_MAX : ssid_len;
-        memcpy(d->name, ssid, n);
-        d->name[n] = '\0';
+        char tmp[PR_NAME_MAX + 1];
+        memcpy(tmp, ssid, n);
+        tmp[n] = '\0';
+        if (name_is_sane(tmp)) {
+            snprintf(d->name, sizeof(d->name), "%s", tmp);
+        }
     }
 }
 
@@ -468,7 +543,6 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
     if (!s) {
         return;
     }
-    (void)now_us;
     if (s->full) {
         out->notes |= PRV_NOTE_FULL;
     }
@@ -488,6 +562,7 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
         if (d->kind < PRV_KIND_COUNT && !kind_seen[d->kind]) {
             kind_seen[d->kind] = true;
             out->n_devices++;
+        out->n_addresses = (uint16_t)(out->n_addresses + d->addresses);
             if (d->kind == PRV_KIND_FLIPPER) {
                 out->n_flipper++;
             }
@@ -505,6 +580,7 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
             memcpy(out->worst_addr, d->addr, 6);
             snprintf(out->worst_name, sizeof(out->worst_name), "%s", d->name);
             out->worst_rssi = d->best_rssi;
+            out->worst_addresses = d->addresses;
         }
     }
     /* Give the headline the steadiest name for that kind rather than whichever
@@ -526,8 +602,27 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
             out->peak_adv_per_s = s->adv_distinct[i];
         }
     }
-    out->pair_models = s->pair_n_models;
-    out->pair_advs = s->pair_advs;
+    /* Count only what is still INSIDE the window. Expiring per model rather
+     * than clearing the table is what stops the reading oscillating. */
+    {
+        const uint32_t now_sec = (uint32_t)(now_us / 1000000ull);
+        for (uint8_t k = 0; k < s->pair_n_models; k++) {
+            if (now_us >= s->pair_model_us[k] &&
+                now_us - s->pair_model_us[k] <= PRV_SPAM_WINDOW_US) {
+                out->pair_models++;
+            }
+        }
+        const uint32_t win_s =
+            (uint32_t)(PRV_SPAM_WINDOW_US / 1000000ull);
+        for (uint8_t k = 0; k < 8; k++) {
+            if (s->pair_adv_cnt[k] == 0 || s->pair_adv_sec[k] > now_sec) {
+                continue;
+            }
+            if (now_sec - s->pair_adv_sec[k] < win_s) {
+                out->pair_advs += s->pair_adv_cnt[k];
+            }
+        }
+    }
 
     const bool pair_spam = (out->pair_models >= PRV_SPAM_MODELS &&
                             out->pair_advs >= PRV_SPAM_ADVS);
@@ -630,7 +725,12 @@ bool prv_device_at(const prv_state_t *s, unsigned index, prv_device_t *out)
             }
             present = true;
             agg.kind = d->kind;
-            agg.addresses++;
+            /* SUM the counts rather than counting entries. admit() already
+             * folds a kind's rotating addresses into one entry, so counting
+             * entries here would report 1 for a device that has been heard
+             * from thirty addresses - aggregating twice loses the very number
+             * this field exists to carry. */
+            agg.addresses = (uint16_t)(agg.addresses + d->addresses);
             agg.sightings += d->sightings;
             agg.ble = d->ble;
             if (d->best_rssi > agg.best_rssi) {

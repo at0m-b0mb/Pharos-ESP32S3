@@ -451,12 +451,51 @@ static void test_rival_address_rotation_is_one_device(void)
     }
 }
 
+
+
+
+/* A steady attack must produce a steady reading. The first window
+ * implementation reset its counters every four seconds, so continuous spam
+ * made the verdict fall out of IN USE and climb back in over and over while
+ * nothing in the room had changed. */
+static void test_rival_steady_spam_reads_steady(void)
+{
+    banner("rival: continuous spam does not make the verdict oscillate");
+    prv_state_t s;
+    prv_reset(&s);
+    uint8_t alen = 0;
+    uint8_t addr[6] = { 0x02, 0, 0, 0, 0, 0 };
+
+    /* Twenty seconds of unbroken spam - five times the window - sampled every
+     * half second throughout. Every sample after the first second must agree. */
+    unsigned samples = 0, active = 0;
+    for (int i = 0; i < 400; i++) {
+        const uint64_t t = T0 + (uint64_t)i * 50000ull; /* 20 adverts a second */
+        addr[5] = (uint8_t)i;
+        addr[4] = (uint8_t)(i >> 8);
+        const uint8_t *a = apple_pair((uint8_t)(0x01 + (i % 14)), &alen);
+        prv_observe_ble_adv(&s, addr, NULL, a, alen, -45, t);
+
+        if (i > 20 && (i % 10) == 0) {
+            prv_verdict_t v;
+            prv_evaluate(&s, t, &v);
+            samples++;
+            if (v.band == PRV_BAND_ACTIVE) {
+                active++;
+            }
+        }
+    }
+    CHECK(samples > 20, "plenty of samples (%u)", samples);
+    CHECK_EQ(active, samples); /* every single one, not most of them */
+}
+
 void test_rival(void)
 {
     test_rival_names();
     test_rival_pwnagotchi();
     test_rival_flipper_advertisement();
     test_rival_pairing_spam();
+    test_rival_steady_spam_reads_steady();
     test_rival_address_rotation_is_one_device();
     test_rival_presence_is_capped();
     test_rival_spam_is_active();

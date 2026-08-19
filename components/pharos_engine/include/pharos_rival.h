@@ -148,11 +148,25 @@ typedef struct {
     uint32_t adv_distinct[8]; /* rolling per-second distinct-address counts */
     uint8_t adv_slot;
 
-    /* Pairing-popup spam bookkeeping over a short sliding window. */
+    /* Pairing-popup spam, over a window that ACTUALLY slides.
+     *
+     * The first version kept one counter and zeroed it every four seconds,
+     * which is a tumbling window wearing a sliding window's comment. Against
+     * continuous spam it produced a four-second sawtooth: the counters reset,
+     * the attack went undetected until they refilled, and the verdict dropped
+     * out of IN USE and climbed back in - over and over, while nothing in the
+     * room had changed. A detector whose reading oscillates during a steady
+     * attack teaches its operator to distrust it.
+     *
+     * Each model now carries its own last-seen stamp and expires on its own,
+     * and the advertisements are counted in per-second buckets summed across
+     * the window. Nothing is ever reset wholesale, so there is no cliff to
+     * fall off. */
     uint8_t pair_models[16];
+    uint64_t pair_model_us[16];
     uint8_t pair_n_models;
-    uint32_t pair_advs;
-    uint64_t pair_window_us;
+    uint32_t pair_adv_cnt[8];
+    uint32_t pair_adv_sec[8];
     uint64_t first_us, last_us;
 } prv_state_t;
 
@@ -167,6 +181,7 @@ typedef struct {
     uint16_t n_addresses;   /* addresses across all of them  */
     uint8_t n_flipper;
     uint8_t n_pwnagotchi;
+    uint16_t worst_addresses; /* address rotation by the most capable device */
     uint8_t n_wifi_tools;
     prv_kind_t worst_kind;
     uint8_t worst_addr[6];
