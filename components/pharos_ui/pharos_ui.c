@@ -27,6 +27,7 @@
 #include "freertos/semphr.h"
 
 #include "pharos_aegis.h"
+#include "pharos_audio.h"
 #include "pharos_bus.h"
 #include "pharos_dial.h"
 #include "pharos_hud.h"
@@ -473,6 +474,51 @@ static bool lens_launchable(const pharos_lens_t *l)
  * running, which is still the truth and still better than a black panel. */
 static uint32_t s_paints, s_paint_misses;
 
+/* ---- the alarm latch -------------------------------------------------
+ *
+ * Alerts fire on a band CHANGE, not on a band. A flood that sits at FLOOD
+ * LIKELY for four minutes is one event; a device that shrieks continuously
+ * gets muted, and a muted alarm is worse than no alarm because it is still
+ * trusted. Rising into a band is worth a sound - staying in it is worth the
+ * screen.
+ *
+ * Only RISING edges alert, plus one falling note when the reading returns all
+ * the way to quiet, which is the other thing an operator actually wants to
+ * know without looking. Tracked per lens id so that switching lenses does not
+ * fire an alert for a band the new lens was already sitting in. */
+static char s_alarm_lens[32];
+static uint8_t s_alarm_band;
+
+static void alarm_pump(const pharos_lens_t *active,
+                       const struct pharos_lens_display *d)
+{
+    if (!active || !d || !d->has_score) {
+        return;
+    }
+    /* The band the score falls in, using the same thresholds the face colours
+     * by, so what is heard and what is seen can never disagree. */
+    uint8_t band;
+    if (d->score >= 75)      band = 4;
+    else if (d->score >= 60) band = 3;
+    else if (d->score >= 40) band = 2;
+    else if (d->score >= 20) band = 1;
+    else                     band = 0;
+
+    if (strcmp(s_alarm_lens, active->id) != 0) {
+        /* New lens: adopt its current band silently. */
+        strncpy(s_alarm_lens, active->id, sizeof(s_alarm_lens) - 1);
+        s_alarm_lens[sizeof(s_alarm_lens) - 1] = '\0';
+        s_alarm_band = band;
+        return;
+    }
+    if (band > s_alarm_band) {
+        pharos_audio_alert(pharos_audio_alert_for_band(band));
+    } else if (band == 0 && s_alarm_band >= 2) {
+        pharos_audio_alert(PHAROS_ALERT_CLEAR);
+    }
+    s_alarm_band = band;
+}
+
 /* Pull one page of the active lens' own rows and put them on the glass.
  *
  * The lens fills rows by absolute index and the HUD does the slicing, so a
@@ -595,6 +641,7 @@ static void paint(const pharos_lens_t *active)
     memset(&d, 0, sizeof(d));
 
     if (active->display && active->display(&d)) {
+        alarm_pump(active, &d);
         pharos_hud_live(name, &d, 0);
     } else {
         /* No verdict yet. Say so plainly and show what IS true - how much has

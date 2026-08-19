@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 
 #include "pharos_bsp.h"
+#include "pharos_audio.h"
 #include "pharos_hud.h"
 #include "pharos_ui.h"
 
@@ -258,6 +259,10 @@ static int cli_diag(int argc, char **argv)
            pharos_bsp_display_lock(50) ? (pharos_bsp_display_unlock(), "acquired")
                                        : "COULD NOT ACQUIRE");
     printf("  hud     : %s\n", pharos_hud_present() ? "built" : "NOT BUILT");
+    printf("alarm     : %s\n",
+           pharos_audio_present()
+               ? (pharos_audio_enabled() ? "ready" : "ready (MUTED)")
+               : "no codec - silent");
     printf("internal  : %u KB free (DMA-capable; the display flush and the "
            "wifi driver compete for this)\n",
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL |
@@ -300,6 +305,55 @@ static int cli_diag(int argc, char **argv)
  * it was to photograph it. This asks the active lens for the same rows the HUD
  * asks for, through the same callback, so a wrong column or a truncated name
  * shows up in a log instead of in somebody's hand. */
+/* The alarm: hear it, mute it, set how loud. `alarm test` walks the whole
+ * vocabulary so the five sounds can be told apart deliberately rather than
+ * discovered one at a time during an incident. */
+static int cli_alarm(int argc, char **argv)
+{
+    if (!pharos_audio_present()) {
+        printf("no audio codec on this build/board - the device runs silent\n");
+        return 1;
+    }
+    if (argc < 2) {
+        printf("alarm: %s at %u%%\n",
+               pharos_audio_enabled() ? "enabled" : "MUTED",
+               (unsigned)pharos_audio_volume());
+        printf("  alarm on | off | vol <0-100> | test | notice|suspect|alarm|clear|ack\n");
+        return 0;
+    }
+    const char *w = argv[1];
+    if (strcmp(w, "on") == 0)  { pharos_audio_set_enabled(true);  printf("alarm on\n"); return 0; }
+    if (strcmp(w, "off") == 0) { pharos_audio_set_enabled(false); printf("alarm muted\n"); return 0; }
+    if (strcmp(w, "vol") == 0) {
+        if (argc < 3) { printf("vol <0-100>\n"); return 1; }
+        pharos_audio_set_volume((uint8_t)atoi(argv[2]));
+        printf("volume %u%%\n", (unsigned)pharos_audio_volume());
+        return 0;
+    }
+    if (strcmp(w, "test") == 0) {
+        static const struct { const char *n; pharos_alert_t a; } all[] = {
+            { "notice",  PHAROS_ALERT_NOTICE },
+            { "suspect", PHAROS_ALERT_SUSPECT },
+            { "alarm",   PHAROS_ALERT_ALARM },
+            { "clear",   PHAROS_ALERT_CLEAR },
+            { "ack",     PHAROS_ALERT_ACK },
+        };
+        for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+            printf("  %s\n", all[i].n);
+            pharos_audio_alert(all[i].a);
+            vTaskDelay(pdMS_TO_TICKS(900));
+        }
+        return 0;
+    }
+    if (strcmp(w, "notice") == 0)  { pharos_audio_alert(PHAROS_ALERT_NOTICE); return 0; }
+    if (strcmp(w, "suspect") == 0) { pharos_audio_alert(PHAROS_ALERT_SUSPECT); return 0; }
+    if (strcmp(w, "alarm") == 0)   { pharos_audio_alert(PHAROS_ALERT_ALARM); return 0; }
+    if (strcmp(w, "clear") == 0)   { pharos_audio_alert(PHAROS_ALERT_CLEAR); return 0; }
+    if (strcmp(w, "ack") == 0)     { pharos_audio_alert(PHAROS_ALERT_ACK); return 0; }
+    printf("unknown: %s\n", w);
+    return 1;
+}
+
 static int cli_rows(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -507,6 +561,14 @@ void pharos_console_start(void)
         .func = &cli_rows,
     };
     esp_console_cmd_register(&rows);
+
+    const esp_console_cmd_t alarm = {
+        .command = "alarm",
+        .help = "the alarm: on | off | vol <0-100> | test",
+        .hint = "[on|off|vol|test]",
+        .func = &cli_alarm,
+    };
+    esp_console_cmd_register(&alarm);
 
     const esp_console_cmd_t lens = {
         .command = "lens",

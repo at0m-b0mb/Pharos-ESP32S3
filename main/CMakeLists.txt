@@ -11,6 +11,7 @@ idf_component_register(
         pharos_bsp
         pharos_ui
         pharos_radio
+        pharos_audio
         # Lenses. Each registers itself through a constructor; listing it here
         # is only what pulls the component into the link. Adding a lens is:
         # create the component, add one line here. main.c names none of them.

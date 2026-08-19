@@ -25,6 +25,7 @@
 #include "pharos_bsp.h"
 #include "pharos_lens.h"
 #include "pharos_region.h"
+#include "pharos_audio.h"
 #include "pharos_ui.h"
 
 static const char *TAG = "pharos";
@@ -104,5 +105,9 @@ void app_main(void)
      * registry, dispatches touch, ticks the active lens, and drains the
      * analytics bus. It is told whether the fence is clean so it can gate the
      * radio lenses behind a warning if it is not. */
+    /* The alarm. A detector you have to watch is half a detector - see
+     * pharos_audio.h. Failure here is not fatal: the device runs silent. */
+    pharos_audio_init();
+
     pharos_ui_run(&bsp, fence_ok);
 }
