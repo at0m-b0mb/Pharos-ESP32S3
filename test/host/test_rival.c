@@ -395,12 +395,69 @@ static void test_rival_pairing_spam(void)
     }
 }
 
+
+/* ONE FLIPPER RUNNING SPAM IS ONE FLIPPER.
+ *
+ * A Flipper broadcasting pairing spam uses a fresh random address AND a fresh
+ * junk-suffixed name for every advertisement. A table keyed on address showed
+ * twenty-four Flippers in a room containing one - the same mistake as counting
+ * rows instead of devices, one layer down. */
+static void test_rival_address_rotation_is_one_device(void)
+{
+    banner("rival: a device that rotates its address is still one device");
+    prv_state_t s;
+    prv_verdict_t v;
+    prv_reset(&s);
+
+    uint8_t addr[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    uint8_t adv[16] = { 0x02, 0x01, 0x06, 0x03, 0x02, 0x82, 0x30, 0x00 };
+
+    /* The steady advertisement: one address, its real name, seen often. */
+    static const uint8_t REAL[6] = { 0x88, 0x27, 0x90, 0x26, 0xe1, 0x80 };
+    for (int i = 0; i < 30; i++) {
+        prv_observe_ble_adv(&s, REAL, "R3ghon", adv, 7, -52,
+                            T0 + (uint64_t)i * 100000ull);
+    }
+    /* The spam: twenty-four rotating addresses, each seen once, each carrying
+     * a name with unprintable junk appended. */
+    for (int i = 0; i < 24; i++) {
+        addr[5] = (uint8_t)(0x40 + i);
+        char junk[16];
+        snprintf(junk, sizeof(junk), "Flipper %c%c", (char)0x01, (char)(0x80 + i));
+        prv_observe_ble_adv(&s, addr, junk, adv, 7, -54,
+                            T0 + 3000000ull + (uint64_t)i * 20000ull);
+    }
+    prv_evaluate(&s, T0 + 5000000ull, &v);
+
+    CHECK_EQ(v.n_flipper, 1);
+    CHECK_EQ(v.n_devices, 1);
+    CHECK(v.n_addresses >= 20, "but the addresses are counted (%u)",
+          v.n_addresses);
+    /* The steadiest address supplies the name, so the real one survives the
+     * flood of spoofed ones. */
+    CHECK(strcmp(v.worst_name, "R3ghon") == 0,
+          "the steady name wins (got \"%s\")", v.worst_name);
+
+    prv_device_t d;
+    CHECK(prv_device_at(&s, 0, &d), "one entry in the list");
+    CHECK_EQ(d.kind, PRV_KIND_FLIPPER);
+    CHECK(d.addresses >= 20, "carrying the address count (%u)", d.addresses);
+    CHECK(!prv_device_at(&s, 1, &d), "and nothing after it");
+
+    /* Names are sanitised: no unprintable byte reaches a label. */
+    for (const char *c = d.name; *c; c++) {
+        CHECK((unsigned char)*c >= 0x20 && (unsigned char)*c < 0x7F,
+              "name is printable");
+    }
+}
+
 void test_rival(void)
 {
     test_rival_names();
     test_rival_pwnagotchi();
     test_rival_flipper_advertisement();
     test_rival_pairing_spam();
+    test_rival_address_rotation_is_one_device();
     test_rival_presence_is_capped();
     test_rival_spam_is_active();
     test_rival_busy_room_is_not_a_flood();

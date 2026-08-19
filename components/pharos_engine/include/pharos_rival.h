@@ -108,12 +108,30 @@ typedef enum {
     PRV_BAND_COUNT,
 } prv_band_t;
 
+/* One PIECE OF HARDWARE, not one address.
+ *
+ * BLE addresses are not identities and this lens learned that the hard way: a
+ * single Flipper running its pairing-spam broadcasts from a fresh random
+ * address for every advertisement, so a table keyed on address showed
+ * twenty-four Flippers in a room containing one. Counting addresses and
+ * calling them devices is the same mistake twice.
+ *
+ * So a device is a KIND, and `addresses` is how many addresses that kind was
+ * heard from - which is not a defect of the measurement, it is a finding.
+ * Hardware that rotates its address dozens of times a minute is hardware doing
+ * something, and the number says so.
+ *
+ * The cost is that two genuine Flippers in one room read as one. That is the
+ * honest trade: with address randomisation a passive listener CANNOT count
+ * them, and reporting "Flipper Zero, 24 addresses" is far less wrong than
+ * reporting twenty-four Flippers. */
 typedef struct {
-    uint8_t addr[6];
+    uint8_t addr[6];   /* the most-heard address for this kind */
     prv_kind_t kind;
     char name[PR_NAME_MAX + 1];
     int8_t best_rssi;
     uint32_t sightings;
+    uint16_t addresses; /* distinct addresses this kind was heard from */
     uint64_t first_us, last_us;
     bool ble;      /* seen over Bluetooth rather than Wi-Fi */
     bool in_use;
@@ -145,7 +163,8 @@ typedef struct {
     uint8_t notes;
     prv_band_t band;
 
-    uint8_t n_devices;
+    uint8_t n_devices;      /* distinct KINDS, not addresses */
+    uint16_t n_addresses;   /* addresses across all of them  */
     uint8_t n_flipper;
     uint8_t n_pwnagotchi;
     uint8_t n_wifi_tools;

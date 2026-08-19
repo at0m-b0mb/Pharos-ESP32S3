@@ -339,9 +339,17 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
         out->tone = PHAROS_TONE_WARN;
         return true;
     case 3:
-        snprintf(out->left, sizeof(out->left), "devices identified");
+        snprintf(out->left, sizeof(out->left), "hardware identified");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_devices);
         out->tone = v.n_devices ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
+        return true;
+    case 5:
+        /* Addresses vs hardware. With BLE randomisation these are different
+         * numbers, and the gap between them is itself the finding. */
+        snprintf(out->left, sizeof(out->left), "addresses used");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_addresses);
+        out->tone = (v.n_addresses > v.n_devices * 4u && v.n_devices)
+                        ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
         return true;
     default:
         break;
@@ -359,7 +367,7 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
      *
      * The capability note now rides on the live face instead, under the score,
      * where it is context about a finding rather than an item in a list. */
-    const unsigned k = index - 5u;
+    const unsigned k = index - 6u;
     prv_device_t d;
     if (!prv_device_at(&s_engine, k, &d)) {
         return false;
@@ -375,7 +383,15 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->left, sizeof(out->left), "%.15s %02x:%02x",
                  prv_kind_name(d.kind), d.addr[4], d.addr[5]);
     }
-    snprintf(out->right, sizeof(out->right), "%d dBm", (int)d.best_rssi);
+    /* Address rotation is reported in place of the signal once it starts,
+     * because at that point it is the more interesting fact: hardware using
+     * dozens of addresses a minute is hardware doing something. */
+    if (d.addresses > 3u) {
+        snprintf(out->right, sizeof(out->right), "%u addr",
+                 (unsigned)d.addresses);
+    } else {
+        snprintf(out->right, sizeof(out->right), "%d dBm", (int)d.best_rssi);
+    }
     out->tone = (d.kind >= PRV_KIND_DEAUTHER) ? PHAROS_TONE_BAD
                                               : PHAROS_TONE_NEUTRAL;
     return true;

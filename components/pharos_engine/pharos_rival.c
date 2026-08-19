@@ -348,8 +348,23 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
     }
     if (d->name[0] == '\0') {
         if (name && name[0]) {
-            snprintf(d->name, sizeof(d->name), "%s", name);
-        } else if (colour && colour[0]) {
+            /* Printable characters only. A spamming Flipper appends random
+             * bytes to its advertised name, and rendering those straight to a
+             * label puts replacement glyphs on the operator's screen and makes
+             * two sightings of one device look like two devices. */
+            uint8_t w = 0;
+            for (uint8_t r = 0; name[r] && w < PR_NAME_MAX; r++) {
+                const unsigned char c = (unsigned char)name[r];
+                if (c >= 0x20 && c < 0x7F) {
+                    d->name[w++] = (char)c;
+                }
+            }
+            while (w && d->name[w - 1] == ' ') {
+                w--;
+            }
+            d->name[w] = '\0';
+        }
+        if (d->name[0] == '\0' && colour && colour[0]) {
             /* No name to be had passively, but the UUID told us the shell
              * colour - which is a far more useful label to hand somebody
              * looking around a room than a random address. */
@@ -459,20 +474,29 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
     }
 
     uint8_t best = 0;
+    /* Count KINDS, and separately how many addresses they were heard from.
+     * Reporting the address count as a device count is what put twenty-four
+     * Flippers on the screen. */
+    bool kind_seen[PRV_KIND_COUNT];
+    memset(kind_seen, 0, sizeof(kind_seen));
     for (unsigned i = 0; i < s->n; i++) {
         const prv_device_t *d = &s->dev[i];
         if (!d->in_use) {
             continue;
         }
-        out->n_devices++;
-        if (d->kind == PRV_KIND_FLIPPER) {
-            out->n_flipper++;
-        }
-        if (d->kind == PRV_KIND_PWNAGOTCHI) {
-            out->n_pwnagotchi++;
-        }
-        if (!d->ble) {
-            out->n_wifi_tools++;
+        out->n_addresses++;
+        if (d->kind < PRV_KIND_COUNT && !kind_seen[d->kind]) {
+            kind_seen[d->kind] = true;
+            out->n_devices++;
+            if (d->kind == PRV_KIND_FLIPPER) {
+                out->n_flipper++;
+            }
+            if (d->kind == PRV_KIND_PWNAGOTCHI) {
+                out->n_pwnagotchi++;
+            }
+            if (!d->ble) {
+                out->n_wifi_tools++;
+            }
         }
         const uint8_t w = kind_weight(d->kind);
         if (w > best) {
@@ -481,6 +505,16 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
             memcpy(out->worst_addr, d->addr, 6);
             snprintf(out->worst_name, sizeof(out->worst_name), "%s", d->name);
             out->worst_rssi = d->best_rssi;
+        }
+    }
+    /* Give the headline the steadiest name for that kind rather than whichever
+     * address happened to be loudest - see prv_device_at. */
+    if (out->worst_kind != PRV_KIND_NONE) {
+        prv_device_t top;
+        if (prv_device_at(s, 0, &top) && top.kind == out->worst_kind) {
+            snprintf(out->worst_name, sizeof(out->worst_name), "%s", top.name);
+            memcpy(out->worst_addr, top.addr, 6);
+            out->worst_rssi = top.best_rssi;
         }
     }
 
@@ -564,32 +598,68 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
     out->headline = prv_band_advice(out->band);
 }
 
+/* One entry per KIND, aggregated across every address it was heard from.
+ *
+ * The table underneath is still per-address, because that is what arrives and
+ * because counting distinct addresses is itself worth reporting. What the
+ * operator sees is hardware.
+ *
+ * The name shown is the one from the MOST-HEARD address, which picks the right
+ * one for free: a device's genuine advertisement repeats steadily while each
+ * spoofed spam address appears once or twice. That is how "R3ghon" survives a
+ * flood of "Flipper" plus random bytes. */
 bool prv_device_at(const prv_state_t *s, unsigned index, prv_device_t *out)
 {
     if (!s || !out) {
         return false;
     }
-    /* Most capable first, then strongest, then table order for stability. */
-    for (unsigned i = 0; i < s->n; i++) {
-        if (!s->dev[i].in_use) {
-            continue;
-        }
-        unsigned above = 0;
-        for (unsigned j = 0; j < s->n; j++) {
-            if (j == i || !s->dev[j].in_use) {
+    /* Walk kinds in capability order so the list leads with the most capable
+     * thing present, and pick out the index-th kind that is actually here. */
+    unsigned seen_kinds = 0;
+    for (int rank = PRV_KIND_COUNT - 1; rank > PRV_KIND_NONE; rank--) {
+        bool present = false;
+        prv_device_t agg;
+        memset(&agg, 0, sizeof(agg));
+        agg.best_rssi = -128;
+        uint32_t best_sightings = 0;
+
+        for (unsigned i = 0; i < s->n; i++) {
+            const prv_device_t *d = &s->dev[i];
+            if (!d->in_use || (int)d->kind != rank) {
                 continue;
             }
-            const uint8_t wi = kind_weight(s->dev[i].kind);
-            const uint8_t wj = kind_weight(s->dev[j].kind);
-            if (wj > wi || (wj == wi && s->dev[j].best_rssi > s->dev[i].best_rssi) ||
-                (wj == wi && s->dev[j].best_rssi == s->dev[i].best_rssi && j < i)) {
-                above++;
+            present = true;
+            agg.kind = d->kind;
+            agg.addresses++;
+            agg.sightings += d->sightings;
+            agg.ble = d->ble;
+            if (d->best_rssi > agg.best_rssi) {
+                agg.best_rssi = d->best_rssi;
+            }
+            if (agg.first_us == 0 || d->first_us < agg.first_us) {
+                agg.first_us = d->first_us;
+            }
+            if (d->last_us > agg.last_us) {
+                agg.last_us = d->last_us;
+            }
+            /* The steadiest address supplies the name and the address shown. */
+            if (d->sightings > best_sightings) {
+                best_sightings = d->sightings;
+                memcpy(agg.addr, d->addr, 6);
+                if (d->name[0]) {
+                    memcpy(agg.name, d->name, sizeof(agg.name));
+                }
             }
         }
-        if (above == index) {
-            *out = s->dev[i];
+        if (!present) {
+            continue;
+        }
+        if (seen_kinds == index) {
+            agg.in_use = true;
+            *out = agg;
             return true;
         }
+        seen_kinds++;
     }
     return false;
 }
