@@ -623,30 +623,58 @@ bool pharos_hud_create(void)
     lv_obj_set_size(s_page_detail, PR_W, PR_H);
     lv_obj_center(s_page_detail);
 
-    s_d_title = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_TEXT, 0, -150, "");
-    s_d_hl = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, -110, -122, "");
-    s_d_hr = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER,  132, -122, "");
+    /* ---- column geometry, and why it is stated rather than eyeballed ----
+     *
+     * The first version gave the labels no explicit width, so LVGL sized each
+     * one to its content - 26 characters is 229 px at this font - and then
+     * centred that on dx = -110. The left edge landed at -224 while the glass
+     * only allows +/-204 at the top and bottom rows, so the first characters
+     * of EVERY row were cut off by the curve. On a round screen a label with
+     * no width is a label whose position you do not actually control.
+     *
+     * So: fix the block to 340 px wide, which keeps |x| <= 170 and clears the
+     * narrowest row (chord half-width 204 at y = +/-92) with room to spare.
+     * The left column is width-bounded and left-aligned so names line up and
+     * can be read down the page; the right column is right-aligned so the
+     * values do too. */
+    const int COL_W_L = 232;      /* ~26 chars at montserrat_16 */
+    const int COL_W_R = 100;      /* ~11 chars                  */
+    const int BLOCK_HALF = 170;   /* |x| never exceeds this     */
+    const int CX_L = -BLOCK_HALF + COL_W_L / 2;      /* -54 */
+    const int CX_R = BLOCK_HALF - COL_W_R / 2;       /* +120 */
 
-    /* Six rows. The left column is left-aligned at a fixed x so names line up
-     * and can be read down the page; the right column is right-aligned so the
-     * grades do too. A centred two-column list is unreadable. */
+    s_d_title = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_TEXT, 0, -150, "");
+
+    s_d_hl = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, CX_L, -122, "");
+    lv_obj_set_width(s_d_hl, COL_W_L);
+    lv_obj_set_style_text_align(s_d_hl, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(s_d_hl, LV_ALIGN_CENTER, CX_L, -122);
+
+    s_d_hr = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, CX_R, -122, "");
+    lv_obj_set_width(s_d_hr, COL_W_R);
+    lv_obj_set_style_text_align(s_d_hr, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_d_hr, LV_ALIGN_CENTER, CX_R, -122);
+
     for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
         const int y = -92 + (int)i * 36;
+
         s_d_left[i] = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_TEXT,
-                               -110, y, "");
+                               CX_L, y, "");
+        lv_obj_set_width(s_d_left[i], COL_W_L);
         lv_obj_set_style_text_align(s_d_left[i], LV_TEXT_ALIGN_LEFT, 0);
-        lv_obj_align(s_d_left[i], LV_ALIGN_CENTER, -110, y);
+        lv_obj_align(s_d_left[i], LV_ALIGN_CENTER, CX_L, y);
 
         s_d_right[i] = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_TEXT,
-                                132, y, "");
+                                CX_R, y, "");
+        lv_obj_set_width(s_d_right[i], COL_W_R);
         lv_obj_set_style_text_align(s_d_right[i], LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_align(s_d_right[i], LV_ALIGN_CENTER, 132, y);
+        lv_obj_align(s_d_right[i], LV_ALIGN_CENTER, CX_R, y);
 
         /* A hairline under each row. Six unruled lines of small text on a
-         * round black face is a wall; the rules give the eye a track to
-         * follow across to the grade. */
+         * round black face is a wall; the rule gives the eye a track to
+         * follow across to the value. Sized to the block, not the screen. */
         s_d_rule[i] = mk_box(s_page_detail);
-        lv_obj_set_size(s_d_rule[i], 300, 1);
+        lv_obj_set_size(s_d_rule[i], BLOCK_HALF * 2, 1);
         lv_obj_align(s_d_rule[i], LV_ALIGN_CENTER, 0, y + 17);
         lv_obj_set_style_bg_color(s_d_rule[i], lv_color_hex(HUD_TRACK2), 0);
         lv_obj_set_style_bg_opa(s_d_rule[i], LV_OPA_COVER, 0);

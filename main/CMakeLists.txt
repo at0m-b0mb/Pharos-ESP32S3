@@ -30,6 +30,7 @@ idf_component_register(
         pharos_lens_squall
         pharos_lens_vigil
         pharos_lens_system
+        pharos_lens_rival
         pharos_lens_whisper
 )
 

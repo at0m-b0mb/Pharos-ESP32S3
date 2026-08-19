@@ -78,6 +78,9 @@ void test_vigil(void);
 /* Suite defined in test_acoustic.c */
 void test_acoustic(void);
 
+/* Suite defined in test_rival.c */
+void test_rival(void);
+
 /* Suite defined in test_watch.c */
 void test_watch(void);
 
