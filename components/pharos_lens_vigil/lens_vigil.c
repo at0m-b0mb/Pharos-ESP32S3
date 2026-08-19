@@ -140,6 +140,19 @@ static void vigil_tick(uint32_t dt_ms)
     xSemaphoreGive(s_lock);
 }
 
+/* One device from the table, under the lock, so the UI never reads the engine
+ * while the analytics core is writing it. */
+bool pharos_lens_vigil_tag(unsigned index, pv_tag_t *out, uint32_t *minutes)
+{
+    if (!out || !s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    const bool ok = pv_tag_at(&s_engine, index, (uint64_t)esp_timer_get_time(),
+                              out, minutes);
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
 bool pharos_lens_vigil_snapshot(pv_verdict_t *out)
 {
     if (!out || !s_lock) {
@@ -234,6 +247,12 @@ static bool k_vigil_row(unsigned index, struct pharos_lens_row *out)
     if (!pharos_lens_vigil_snapshot(&v)) {
         return false;
     }
+    /* Four summary rows, then EVERY DEVICE, named.
+     *
+     * The summary answers "should I care"; the list answers "what do I look
+     * for". A verdict saying something is following you that cannot say which
+     * device is a fright with no remedy - you cannot search a bag for a
+     * score. */
     switch (index) {
     case 0:
         snprintf(out->left, sizeof(out->left), "trackers seen");
@@ -248,36 +267,43 @@ static bool k_vigil_row(unsigned index, struct pharos_lens_row *out)
     case 2:
         snprintf(out->left, sizeof(out->left), "places visited");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_locales);
-        /* Following means nothing until you have MOVED - this is the number
-         * that makes the verdict meaningful, so it is on the page. */
+        /* Following means nothing until you have MOVED, so the number that
+         * makes the verdict meaningful sits next to it. */
         out->tone = (v.n_locales < 2) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
         return true;
     case 3:
-        snprintf(out->left, sizeof(out->left), "worst device");
-        if (v.worst_locales) {
-            snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
-                     v.worst_addr[3], v.worst_addr[4], v.worst_addr[5]);
-            out->tone = PHAROS_TONE_BAD;
-        } else {
-            snprintf(out->right, sizeof(out->right), "none");
-            out->tone = PHAROS_TONE_GOOD;
-        }
-        return true;
-    case 4:
-        snprintf(out->left, sizeof(out->left), "seen in places");
-        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.worst_locales);
-        out->tone = (v.worst_locales >= 2) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
-        return true;
-    case 5:
-        snprintf(out->left, sizeof(out->left), "with you for");
-        snprintf(out->right, sizeof(out->right), "%u min",
-                 (unsigned)v.worst_minutes);
-        out->tone = (v.worst_minutes >= 30u) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        /* Said out loud on the page, because a quiet screen here is the most
+         * dangerous thing this device can show. See PV_BREDR_BLIND. */
+        snprintf(out->left, sizeof(out->left), "classic BT");
+        snprintf(out->right, sizeof(out->right), "deaf");
+        out->tone = PHAROS_TONE_WARN;
         return true;
     default:
+        break;
+    }
+
+    /* The devices themselves, worst first. */
+    pv_tag_t t;
+    uint32_t mins = 0;
+    if (!pharos_lens_vigil_tag(index - 4u, &t, &mins)) {
         return false;
     }
+    snprintf(out->left, sizeof(out->left), "%.13s %02x:%02x:%02x",
+             pv_kind_name(t.kind), t.addr[3], t.addr[4], t.addr[5]);
+    if (t.n_locales >= 2) {
+        /* The one fact that turns a neighbour into a follower. */
+        snprintf(out->right, sizeof(out->right), "%up %um",
+                 (unsigned)t.n_locales, (unsigned)mins);
+        out->tone = PHAROS_TONE_BAD;
+    } else {
+        snprintf(out->right, sizeof(out->right), "%u min", (unsigned)mins);
+        out->tone = (t.kind == PV_KIND_FLIPPER || t.kind == PV_KIND_SERIAL)
+                        ? PHAROS_TONE_WARN
+                        : PHAROS_TONE_NEUTRAL;
+    }
+    return true;
 }
+
 
 static const pharos_lens_t k_vigil = {
     .id = "ble.vigil",
@@ -298,8 +324,8 @@ static const pharos_lens_t k_vigil = {
     .stage_report = k_vigil_stage,
     .display = k_vigil_display,
     .row = k_vigil_row,
-    .row_head_left = "TRACKER",
-    .row_head_right = "STATE",
+    .row_head_left = "DEVICE",
+    .row_head_right = "SEEN",
 };
 
 PHAROS_LENS_REGISTER(&k_vigil);

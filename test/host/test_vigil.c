@@ -69,8 +69,110 @@ static void see(pv_state_t *s, uint8_t last, uint8_t len, uint64_t t)
     pv_observe_adv(s, addr, 1, -60, g_buf, len, t);
 }
 
+
+/* The device list, and the ordering that makes it useful.
+ *
+ * A verdict saying "something is following you" that cannot name WHICH device
+ * is a fright with no remedy, so the tag table is exposed - and it has to come
+ * out worst-first, because the operator reads the top of the list and acts on
+ * it. Presence in several PLACES ranks above everything else: that is the
+ * whole difference between a tracker travelling with you and one that happened
+ * to be in the cafe. */
+static void test_vigil_tag_list(void)
+{
+    banner("vigil: the tag list names devices, worst first");
+    pv_state_t s;
+    pv_reset(&s);
+
+    const uint64_t T = 1000000ull;
+    /* A tag seen in one place only. */
+    static const uint8_t near_addr[6] = { 0x11, 0, 0, 0, 0, 0x01 };
+    /* A tag that survives a move - the one that matters. */
+    static const uint8_t follow_addr[6] = { 0x22, 0, 0, 0, 0, 0x02 };
+
+    /* Real advertisements: the engine only admits trackers it can NAME, and
+     * refusing to track every passing phone is the point. A Tile announces
+     * itself with service data for UUID 0xFEED. */
+    const uint8_t tile_adv[] = { 0x03, 0x16, 0xED, 0xFE };
+
+    pv_observe_locale(&s, 0x55555555u, T);
+    for (int i = 0; i < 6; i++) {
+        pv_observe_adv(&s, near_addr, 1, -50, tile_adv, sizeof(tile_adv),
+                       T + (uint64_t)i * 1000000ull);
+        pv_observe_adv(&s, follow_addr, 1, -60, tile_adv, sizeof(tile_adv),
+                       T + (uint64_t)i * 1000000ull);
+    }
+    /* Move: a completely different Wi-Fi landscape. */
+        /* Every bit different: PV_LOCALE_CHANGE_PERMIL wants the Wi-Fi landscape
+     * to have genuinely turned over before it calls this a new PLACE, which is
+     * what stops a device being called a follower for sitting on one desk. */
+    pv_observe_locale(&s, 0xAAAAAAAAu, T + 60000000ull);
+    for (int i = 0; i < 6; i++) {
+        pv_observe_adv(&s, follow_addr, 1, -60, tile_adv, sizeof(tile_adv),
+                       T + 61000000ull + (uint64_t)i * 1000000ull);
+    }
+
+    pv_tag_t t;
+    uint32_t mins = 0;
+    CHECK(pv_tag_at(&s, 0, T + 70000000ull, &t, &mins), "there is a first tag");
+    CHECK(t.n_locales >= 2, "the follower ranks first (locales=%u)", t.n_locales);
+    CHECK(memcmp(t.addr, follow_addr, 6) == 0, "and it is the right device");
+
+    CHECK(pv_tag_at(&s, 1, T + 70000000ull, &t, &mins), "there is a second tag");
+    CHECK(memcmp(t.addr, near_addr, 6) == 0, "the one-place tag ranks below it");
+
+    /* Every index must be distinct and the list must terminate. */
+    unsigned n = 0;
+    while (pv_tag_at(&s, n, T + 70000000ull, &t, &mins) && n < PV_MAX_TAGS + 2u) {
+        n++;
+    }
+    CHECK_EQ(n, 2);
+}
+
+/* The names have to survive being shown to somebody. */
+static void test_vigil_classify_extended(void)
+{
+    banner("vigil: Flipper and serial bridges announce themselves by name");
+
+    /* AD structure: [len][type][payload] - complete local name is 0x09. */
+    uint8_t flip[16];
+    const char *fn = "Flipper Xyz";
+    flip[0] = (uint8_t)(1 + strlen(fn));
+    flip[1] = 0x09;
+    memcpy(&flip[2], fn, strlen(fn));
+    CHECK_EQ(pv_classify(flip, (uint8_t)(2 + strlen(fn))), PV_KIND_FLIPPER);
+
+    uint8_t hc[16];
+    const char *hn = "HC-05";
+    hc[0] = (uint8_t)(1 + strlen(hn));
+    hc[1] = 0x09;
+    memcpy(&hc[2], hn, strlen(hn));
+    CHECK_EQ(pv_classify(hc, (uint8_t)(2 + strlen(hn))), PV_KIND_SERIAL);
+
+    /* A normal device name must NOT be classified as either. Calling a
+     * Bluetooth speaker a card skimmer would be the most damaging false
+     * positive this project could produce. */
+    uint8_t spk[24];
+    const char *sn = "JBL Flip 5";
+    spk[0] = (uint8_t)(1 + strlen(sn));
+    spk[1] = 0x09;
+    memcpy(&spk[2], sn, strlen(sn));
+    const pv_kind_t k = pv_classify(spk, (uint8_t)(2 + strlen(sn)));
+    CHECK(k != PV_KIND_FLIPPER && k != PV_KIND_SERIAL,
+          "\"JBL Flip 5\" is not a Flipper and not a bridge (got %s)",
+          pv_kind_name(k));
+
+    /* Every kind must name itself for the screen. */
+    for (int i = 0; i < PV_KIND_COUNT; i++) {
+        const char *nm = pv_kind_name((pv_kind_t)i);
+        CHECK(nm && *nm, "kind %d names itself", i);
+    }
+}
+
 void test_vigil(void)
 {
+    test_vigil_tag_list();
+    test_vigil_classify_extended();
     banner("vigil: classification");
 
     CHECK_EQ(pv_classify(g_buf, mk_findmy(false)), PV_KIND_FINDMY);
