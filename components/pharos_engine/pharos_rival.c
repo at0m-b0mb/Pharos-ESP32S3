@@ -148,6 +148,55 @@ static bool flipper_uuid(uint16_t uuid, const char **colour)
     }
 }
 
+/* Pull the pairing "model" or "action" code out of an advertisement, if it is
+ * one of the popup-triggering kinds. Returns false when it is not.
+ *
+ * Apple: company 0x004C, then a type byte. 0x0F is Nearby Action and 0x07 is
+ * Proximity Pairing - the two a phone will raise a dialog for. The byte after
+ * the length is the action or model, and that is the one that varies wildly
+ * under spam and not at all under normal use.
+ *
+ * Google: service data for 0xFE2C carries a 3-byte model ID; the low byte is
+ * enough to measure diversity. */
+static bool pairing_code(const uint8_t *data, uint8_t len, uint8_t *code)
+{
+    if (!data || len < 4) {
+        return false;
+    }
+    uint8_t i = 0;
+    while (i + 1u < len) {
+        const uint8_t l = data[i];
+        if (l == 0 || (uint16_t)i + 1u + l > (uint16_t)len) {
+            break;
+        }
+        const uint8_t type = data[i + 1];
+        const uint8_t *p = &data[i + 2];
+        const uint8_t plen = (uint8_t)(l - 1);
+
+        if (type == 0xFF && plen >= 5) {
+            const uint16_t company = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+            if (company == 0x004C && (p[2] == 0x0F || p[2] == 0x07)) {
+                *code = p[4];
+                return true;
+            }
+            /* Microsoft Swift Pair. */
+            if (company == 0x0006 && plen >= 6) {
+                *code = p[5];
+                return true;
+            }
+        }
+        if (type == 0x16 && plen >= 5) {
+            const uint16_t uuid = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+            if (uuid == 0xFE2C) { /* Google Fast Pair */
+                *code = p[4];
+                return true;
+            }
+        }
+        i = (uint8_t)(i + 1u + l);
+    }
+    return false;
+}
+
 prv_kind_t prv_classify_adv(const uint8_t *data, uint8_t len,
                             const char **colour)
 {
@@ -250,6 +299,29 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
         s->adv_distinct[s->adv_slot] = 0;
     }
     s->adv_distinct[s->adv_slot]++;
+
+    /* Pairing-popup spam. The window slides rather than resetting on a timer
+     * so a burst straddling a boundary is not split into two harmless halves. */
+    if (s->pair_window_us == 0 || t_us < s->pair_window_us ||
+        t_us - s->pair_window_us > PRV_SPAM_WINDOW_US) {
+        s->pair_window_us = t_us;
+        s->pair_n_models = 0;
+        s->pair_advs = 0;
+    }
+    uint8_t code = 0;
+    if (pairing_code(adv, adv_len, &code)) {
+        s->pair_advs++;
+        bool seen = false;
+        for (uint8_t k = 0; k < s->pair_n_models; k++) {
+            if (s->pair_models[k] == code) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen && s->pair_n_models < (uint8_t)sizeof(s->pair_models)) {
+            s->pair_models[s->pair_n_models++] = code;
+        }
+    }
 
     /* The raw advertisement first: it is the only thing a passive listener is
      * guaranteed to see, and it is where the Flipper signature lives. The name
@@ -420,8 +492,13 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
             out->peak_adv_per_s = s->adv_distinct[i];
         }
     }
+    out->pair_models = s->pair_n_models;
+    out->pair_advs = s->pair_advs;
 
-    if (out->n_devices == 0 && out->peak_adv_per_s < 60u) {
+    const bool pair_spam = (out->pair_models >= PRV_SPAM_MODELS &&
+                            out->pair_advs >= PRV_SPAM_ADVS);
+
+    if (out->n_devices == 0 && out->peak_adv_per_s < 60u && !pair_spam) {
         return;
     }
 
@@ -438,6 +515,16 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
 
     /* ACTIVE is the only family that justifies raising a voice, because it is
      * the only one that is about something being DONE. */
+    if (pair_spam) {
+        /* The specific one, and the better evidence: a room does not contain
+         * six different models of headphone all announcing themselves twenty
+         * times in four seconds. */
+        out->notes |= PRV_NOTE_PAIR_SPAM;
+        out->families |= PRV_FAM_ACTIVE;
+        if (score < 70u) {
+            score = 70u;
+        }
+    }
     if (out->peak_adv_per_s >= 60u) {
         out->notes |= PRV_NOTE_SPAM;
         out->families |= PRV_FAM_ACTIVE;

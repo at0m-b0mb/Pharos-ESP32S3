@@ -74,7 +74,27 @@ typedef enum {
 #define PRV_NOTE_BREDR_BLIND (1u << 0) /* classic Bluetooth is invisible  */
 #define PRV_NOTE_SUBGHZ_BLIND (1u << 1)/* a Flipper's other radios too    */
 #define PRV_NOTE_FULL        (1u << 2) /* more devices than the table holds */
-#define PRV_NOTE_SPAM        (1u << 3) /* BLE advertisement spam in view   */
+#define PRV_NOTE_SPAM        (1u << 3) /* raw advertisement flood in view   */
+#define PRV_NOTE_PAIR_SPAM   (1u << 4) /* pairing-popup spam specifically   */
+
+/* PAIRING-POPUP SPAM, WHICH IS THE ONE ATTACK THAT NAMES ITSELF.
+ *
+ * The trick every one of these tools ships with - Flipper, Marauder, the
+ * Android apps - is to broadcast the advertisements a phone treats as "a new
+ * accessory is nearby", over and over, so the target's screen fills with
+ * pairing dialogs. Apple's Nearby Action (company 0x004C, type 0x0F) and
+ * Proximity Pairing (type 0x07) are the payloads; Google Fast Pair (service
+ * 0xFE2C) is the Android equivalent.
+ *
+ * The advertisements themselves are ORDINARY - a real pair of AirPods sends
+ * the same kind. What makes it an attack is the DIVERSITY: a genuine room has
+ * a few accessories each advertising the one model they are, while a spammer
+ * cycles through dozens of model and action codes from rotating addresses in
+ * seconds. So the test is how many distinct model bytes appear, not how many
+ * advertisements do - which is also why it does not fire in an airport. */
+#define PRV_SPAM_MODELS   6  /* distinct model/action codes in the window */
+#define PRV_SPAM_ADVS    20  /* ...over at least this many advertisements */
+#define PRV_SPAM_WINDOW_US 4000000ull
 
 /* Presence is capped here. Owning a tool is not an offence, and a lens that
  * alarms on the mere sight of one teaches its operator to ignore it. */
@@ -109,6 +129,12 @@ typedef struct {
     uint32_t adv_sec;
     uint32_t adv_distinct[8]; /* rolling per-second distinct-address counts */
     uint8_t adv_slot;
+
+    /* Pairing-popup spam bookkeeping over a short sliding window. */
+    uint8_t pair_models[16];
+    uint8_t pair_n_models;
+    uint32_t pair_advs;
+    uint64_t pair_window_us;
     uint64_t first_us, last_us;
 } prv_state_t;
 
@@ -128,6 +154,8 @@ typedef struct {
     char worst_name[PR_NAME_MAX + 1];
     int8_t worst_rssi;
     uint32_t peak_adv_per_s;
+    uint8_t pair_models;   /* distinct pairing model/action codes seen   */
+    uint32_t pair_advs;    /* pairing-popup advertisements in the window */
     const char *headline;
 } prv_verdict_t;
 

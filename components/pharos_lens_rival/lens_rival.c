@@ -278,9 +278,19 @@ static bool k_rival_display(struct pharos_lens_display *o)
         snprintf(o->advice, sizeof(o->advice), "Something is being run.");
         break;
     }
-    if (v.notes & PRV_NOTE_SPAM) {
+    if (v.notes & PRV_NOTE_PAIR_SPAM) {
+        /* The specific finding beats the generic one: "12 fake accessories"
+         * tells an operator what is happening to the phones around them. */
+        snprintf(o->why, sizeof(o->why), "%u fake accessories broadcasting",
+                 (unsigned)v.pair_models);
+    } else if (v.notes & PRV_NOTE_SPAM) {
         snprintf(o->why, sizeof(o->why), "advertisement flood %u/s",
                  (unsigned)v.peak_adv_per_s);
+    } else if (v.worst_kind != PRV_KIND_NONE) {
+        /* What the most capable thing in the room can actually DO. This used
+         * to be a second row per device in the list, where it was miscounted
+         * as another device; under the score it reads as what it is. */
+        snprintf(o->why, sizeof(o->why), "%.47s", prv_kind_note(v.worst_kind));
     }
     o->families = v.families;
     o->fam_label[0] = "HERE";
@@ -309,6 +319,15 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.peak_adv_per_s);
         out->tone = (v.notes & PRV_NOTE_SPAM) ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
         return true;
+    case 4:
+        /* Diversity, not volume - the number that separates a spammer from a
+         * room full of real headphones. */
+        snprintf(out->left, sizeof(out->left), "pairing popups");
+        snprintf(out->right, sizeof(out->right), "%u/%u",
+                 (unsigned)v.pair_models, (unsigned)v.pair_advs);
+        out->tone = (v.notes & PRV_NOTE_PAIR_SPAM) ? PHAROS_TONE_BAD
+                                                   : PHAROS_TONE_DIM;
+        return true;
     case 1:
         snprintf(out->left, sizeof(out->left), "classic Bluetooth");
         snprintf(out->right, sizeof(out->right), "deaf");
@@ -319,38 +338,46 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "deaf");
         out->tone = PHAROS_TONE_WARN;
         return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "devices identified");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_devices);
+        out->tone = v.n_devices ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
+        return true;
     default:
         break;
     }
 
-    /* Then the hardware itself, most capable first. Two rows each: what it is
-     * and how loud, then what that hardware can actually DO - because "Flipper
-     * Zero" means nothing to somebody who has not met one. */
-    const unsigned k = index - 3u;
+    /* Then the hardware itself: ONE ROW PER DEVICE.
+     *
+     * This used to print two rows each - the device, then an indented line
+     * explaining what that hardware can do - and the operator counted two
+     * Flippers in a room containing one. They were right to: on a list where
+     * every line is a device, a line that is not a device is a bug, and no
+     * amount of indentation fixes it. The count row above said 1 and the list
+     * below said otherwise, which is exactly the kind of small contradiction
+     * that costs a tool its credibility.
+     *
+     * The capability note now rides on the live face instead, under the score,
+     * where it is context about a finding rather than an item in a list. */
+    const unsigned k = index - 5u;
     prv_device_t d;
-    if (!prv_device_at(&s_engine, k / 2u, &d)) {
+    if (!prv_device_at(&s_engine, k, &d)) {
         return false;
     }
-    if ((k & 1u) == 0u) {
-        /* Prefer the device's own name over its address: "Flipper R3ghon" is
-         * something an operator can ask a room about, and two hex bytes are
-         * not. Falls back to the address when nothing named itself, which for
-         * a passive listener is most of the time. */
-        if (d.name[0]) {
-            snprintf(out->left, sizeof(out->left), "%.12s %.11s",
-                     prv_kind_name(d.kind), d.name);
-        } else {
-            snprintf(out->left, sizeof(out->left), "%.15s %02x:%02x",
-                     prv_kind_name(d.kind), d.addr[4], d.addr[5]);
-        }
-        snprintf(out->right, sizeof(out->right), "%d dBm", (int)d.best_rssi);
-        out->tone = (d.kind >= PRV_KIND_DEAUTHER) ? PHAROS_TONE_BAD
-                                                  : PHAROS_TONE_NEUTRAL;
+    /* Prefer the device's own name over its address: "Flipper R3ghon" is
+     * something an operator can ask a room about, and two hex bytes are not.
+     * Falls back to the address when nothing named itself, which for a passive
+     * listener is most of the time. */
+    if (d.name[0]) {
+        snprintf(out->left, sizeof(out->left), "%.12s %.11s",
+                 prv_kind_name(d.kind), d.name);
     } else {
-        snprintf(out->left, sizeof(out->left), "  %.23s", prv_kind_note(d.kind));
-        snprintf(out->right, sizeof(out->right), "%s", d.ble ? "BLE" : "wifi");
-        out->tone = PHAROS_TONE_DIM;
+        snprintf(out->left, sizeof(out->left), "%.15s %02x:%02x",
+                 prv_kind_name(d.kind), d.addr[4], d.addr[5]);
     }
+    snprintf(out->right, sizeof(out->right), "%d dBm", (int)d.best_rssi);
+    out->tone = (d.kind >= PRV_KIND_DEAUTHER) ? PHAROS_TONE_BAD
+                                              : PHAROS_TONE_NEUTRAL;
     return true;
 }
 

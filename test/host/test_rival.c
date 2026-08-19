@@ -309,11 +309,98 @@ static void test_rival_flipper_advertisement(void)
           v.worst_name);
 }
 
+
+/* Build an Apple Nearby Action advertisement - the payload a phone raises a
+ * pairing dialog for, and the one every BLE-spam tool broadcasts. */
+static uint8_t g_pair[16];
+static const uint8_t *apple_pair(uint8_t model, uint8_t *len)
+{
+    g_pair[0] = 0x02; g_pair[1] = 0x01; g_pair[2] = 0x06;
+    g_pair[3] = 0x07;              /* length */
+    g_pair[4] = 0xFF;              /* manufacturer specific */
+    g_pair[5] = 0x4C; g_pair[6] = 0x00;  /* Apple, little-endian */
+    g_pair[7] = 0x0F;              /* Nearby Action */
+    g_pair[8] = 0x05;
+    g_pair[9] = model;             /* the action/model code */
+    g_pair[10] = 0x00; g_pair[11] = 0x00;
+    *len = 12;
+    return g_pair;
+}
+
+/* PAIRING-POPUP SPAM is the attack every one of these tools ships with, and it
+ * is detected by DIVERSITY rather than volume: a real room has a few
+ * accessories each advertising the one model they are, while a spammer cycles
+ * through dozens of codes from rotating addresses. That distinction is what
+ * keeps it quiet in an airport. */
+static void test_rival_pairing_spam(void)
+{
+    banner("rival: pairing-popup spam is model diversity, not volume");
+    uint8_t alen = 0;
+    uint8_t addr[6] = { 0x02, 0, 0, 0, 0, 0 };
+
+    /* The attack: many models, rotating addresses, in a few seconds. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 40; i++) {
+            addr[5] = (uint8_t)i;
+            const uint8_t *a = apple_pair((uint8_t)(0x01 + (i % 12)), &alen);
+            prv_observe_ble_adv(&s, addr, NULL, a, alen, -45,
+                                T0 + (uint64_t)i * 50000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.pair_models >= PRV_SPAM_MODELS, "model diversity seen (%u)",
+              v.pair_models);
+        CHECK(v.notes & PRV_NOTE_PAIR_SPAM, "named as pairing spam");
+        CHECK(v.families & PRV_FAM_ACTIVE, "which is something being DONE");
+        CHECK_EQ(v.band, PRV_BAND_ACTIVE);
+    }
+
+    /* THE ROOM THAT MUST STAY QUIET. Three real accessories, each advertising
+     * the ONE model it actually is, as often as they like. Volume alone is not
+     * the signal and a busy cafe must not read as an attack. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 90; i++) {
+            const uint8_t which = (uint8_t)(i % 3);
+            addr[5] = which;                     /* stable addresses */
+            const uint8_t *a = apple_pair((uint8_t)(0x20 + which), &alen);
+            prv_observe_ble_adv(&s, addr, NULL, a, alen, -55,
+                                T0 + (uint64_t)i * 40000ull);
+        }
+        prv_evaluate(&s, T0 + 4000000ull, &v);
+        CHECK(v.pair_advs >= PRV_SPAM_ADVS, "plenty of advertisements (%u)",
+              v.pair_advs);
+        CHECK(v.pair_models < PRV_SPAM_MODELS,
+              "but only three models (%u)", v.pair_models);
+        CHECK((v.notes & PRV_NOTE_PAIR_SPAM) == 0,
+              "so it is NOT called spam");
+        CHECK(v.band < PRV_BAND_ACTIVE, "and does not alarm");
+    }
+
+    /* Google Fast Pair carries the same kind of code and must count too. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        uint8_t g[12] = { 0x02, 0x01, 0x06, 0x06, 0x16, 0x2C, 0xFE, 0, 0, 0, 0, 0 };
+        for (int i = 0; i < 40; i++) {
+            addr[5] = (uint8_t)i;
+            g[9] = (uint8_t)(0x40 + (i % 10)); /* model byte */
+            prv_observe_ble_adv(&s, addr, NULL, g, 11, -45,
+                                T0 + (uint64_t)i * 50000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.notes & PRV_NOTE_PAIR_SPAM, "Fast Pair spam counted too");
+    }
+}
+
 void test_rival(void)
 {
     test_rival_names();
     test_rival_pwnagotchi();
     test_rival_flipper_advertisement();
+    test_rival_pairing_spam();
     test_rival_presence_is_capped();
     test_rival_spam_is_active();
     test_rival_busy_room_is_not_a_flood();
