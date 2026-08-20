@@ -1,5 +1,136 @@
 # Changelog
 
+## v2.0.0 — 2026-08-19
+
+Everything below the v2.0.0-watch heading, plus the work that came out of
+using it: a screen you can actually operate with a finger, settings you can
+change on the device, and three detectors that were quietly missing things.
+
+### Fixed: the detail rows were too small to press
+
+Reported as "sometimes I am not able to click them correctly". Every press is
+now logged with its coordinates, and thirty seconds of an idle device produced
+zero phantom touches — so it was not the controller, it was the geometry.
+
+The rows were on a 36 px pitch. The panel is 466 px across a 1.75 inch circle
+(266 ppi), so that is **3.4 mm**, against a fingertip contact patch of about
+9 mm. Legible, and physically unresolvable.
+
+- **Four rows on a 58 px pitch** (5.5 mm), each target spanning the full width
+  of the glass so only the vertical dimension has to be got right.
+- **The row is the control.** Touching it edits or opens it. Reaching the
+  volume was previously four presses — step a cursor with the side zones, then
+  press the centre; it is now one, and it lands under the finger rather than
+  wherever a counter had reached.
+- **The page controls are the two largest targets on the device** — the whole
+  band above and below the list, ~117 px each, each marked with a chevron.
+- **The zones partition the glass.** The old layout left a 13 px dead lane
+  either side of the centre column, and a press that lands in a gap does
+  nothing, which reads from the outside as an unreliable touchscreen.
+- Focus is a filled pill rather than a brightened hairline — the same shape as
+  the target, so the thing you see and the thing you press are one object.
+
+### New: settings you can change, and a face you can choose
+
+The System page listed the alarm, the region and the rotation and let you
+change exactly one of them, by cycling blind through four volumes. Everything
+else was a console command over USB, which is not a thing anybody does while
+holding a round screen in a corridor.
+
+Theme, brightness, alarm, speaker volume and region are now editable in place,
+each remembered across boots. Opening a setting lists every value it can take
+and marks the one in force, so a cycling control stops being blind.
+
+Five themes, each with a reason to exist rather than another hue: **Beacon**
+(cyan), **Abyss** (blue), **Violet**, **Mono** (no hue at all, so a verdict is
+the only colour on the glass) and **Nightwatch** (dim enough to read without
+lighting your face). A theme changes the *chrome* and never the verdict
+colours — green, amber, orange and red are fixed in every theme, because a
+palette that could restyle danger is a way to make the device lie quietly. A
+host test fails the build if a new accent lands near a warning hue.
+
+### New: rows that open
+
+A grade nobody can interrogate is a claim, not a finding. Touching a network in
+Census opens its own evidence — BSSID, channel, signal, authentication, 802.11w
+posture, cipher, WPS, whether the name is hidden, beacons heard, and the single
+ceiling that stopped the grade going higher stated as **fix first**.
+
+### Fixed: BLE spam the diversity test could not see
+
+The pairing-popup test measured payload **diversity**, which is right for the
+tools that cycle popups and blind to the ones that do not. Several pick the one
+dialog that is most annoying on the target and repeat it as fast as the radio
+allows: one model code, hundreds of advertisements. Diversity counted one, the
+raw-rate note only fires above 60/s, and a steady 20/s single-payload flood fell
+between them with **no finding at all**.
+
+The signal that catches it is identity, not payload: real accessories keep a BLE
+address for minutes, while these tools draw a fresh random one per advertisement
+so a phone cannot dismiss them permanently. Eight distinct addresses carrying
+pairing payloads in four seconds is not a room with accessories in it.
+
+**Samsung EasySetup** (company `0x0075`) was not parsed at all — the family the
+Android-facing tools reach for. **Microsoft** was the opposite problem: company
+`0x0006` alone is every Microsoft-adjacent device announcing something
+unrelated, so it is narrowed to the Swift Pair beacon ID. Apple's Nearby Info
+and offline-finding types stay out deliberately: every iPhone and every AirTag
+broadcasts those continuously, and a detector that cries wolf in a foyer is one
+nobody reads in a corridor.
+
+### Fixed: a renamed Pineapple was invisible
+
+Detection was a match on the word "pineapple" in the network name, which
+survives about as long as it takes somebody to change it — and changing it is
+step one of using one. Hak5's registered OUI (`00:13:37`) is checked before the
+name. Presence stays capped: a Pineapple on a shelf is a Pineapple on a shelf.
+
+### Fixed: hardware that was switched off stayed on the screen
+
+Reported as "I turned off my Flipper Zero but it still shows one detected". The
+list had been made stale-aware; the count above it had not, so the screen read
+`hardware identified: 1` over an empty list. A screen that contradicts itself is
+worse than either half alone — the operator has to pick which line to believe
+and has nothing to pick with. The test asserts the invariant that matters: not
+that the count expires, but that the count and the list agree at every instant.
+
+### Fixed: a rate built out of division
+
+Mirage reported "261.5 new names a minute" on a quiet street. Three names
+arriving 800 ms apart narrowed the time base to 800 ms, and the duty correction
+multiplied by the reciprocal of a barely-measured dwell. Three floors now guard
+the denominator, and each sets `PF_NOTE_SHORT` so a held-back reading says so.
+
+### Fixed: a drill could be mistaken for an incident
+
+Range showed `FLOOD LIKELY 77` and Footprint `BLARING 77` while playing
+synthesised scenarios through the real engines — the same words the field uses,
+in a quiet building. Training lenses now mark every frame as a simulation, and
+both faces label whose number each figure is (`to a defender who camps`,
+`if real: deauth flood`) instead of presenting bare numbers.
+
+### Fixed: the microphone was never deaf
+
+`esp_codec_dev_read` returns a status, not a byte count. Treating `0` as "no
+samples" discarded every successful read, so Whisper reported `MIC SILENT` on a
+working microphone.
+
+### Fixed: the no-panel build had not compiled for a long time
+
+`pharos_hud.c`'s stub branch had acquired a verbatim copy of the LVGL
+implementation of `pharos_hud_detail` — defined twice, referencing widgets that
+do not exist there. Nobody builds that branch, which is how it survived.
+`tools/check_sources.sh` now counts the definitions of every HUD entry point.
+
+### Fixed: Census could attribute one network's failings to another
+
+The expansion was keyed on a list index, and that list re-sorts as the air
+changes. A page could begin describing one network and finish describing
+another with nothing on the glass to say so. It now latches the record on its
+first line.
+
+---
+
 ## v2.0.0-watch — 2026-08-18
 
 The deauthentication detector rewritten end to end: the engine, its screen, and
