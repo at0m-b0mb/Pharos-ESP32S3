@@ -156,6 +156,10 @@ static unsigned s_detail_page;
  * the page rather than making the operator do both. */
 static unsigned s_detail_cursor;
 static unsigned s_opened_row;
+/* A row touched on the glass, 0..ROWS-1 within the page shown, or -1. Filed
+ * from LVGL's task and acted on by the UI task, same as s_nav_pending: doing
+ * the work in the callback runs it on LVGL's stack and reboots the board. */
+static int s_row_pending = -1;
 static volatile int s_nav_pending = -1; /* pharos_nav_t, or -1 for none */
 
 static void on_nav(pharos_nav_t what)
@@ -246,6 +250,64 @@ static void request_apply(void)
     }
 }
 
+/* Filed from LVGL's task. Record and return - see pharos_hud.h. */
+static void hud_row_cb(unsigned row_on_page)
+{
+    s_row_pending = (int)row_on_page;
+}
+
+/* ONE TOUCH DOES THE WHOLE JOB.
+ *
+ * Reaching a setting used to be: press a side zone until a cursor arrived on
+ * the row, then press the centre. Four presses to change the volume, on a
+ * device somebody is holding up one-handed. Touching the row is one press, and
+ * it lands on the row under the finger rather than wherever a counter had got
+ * to.
+ *
+ * The row is focused as well as acted on, because the pill appearing under the
+ * finger is what says the press registered - on a control that CYCLES (theme,
+ * volume, region) the value changing is the only other feedback, and if the
+ * press missed there is none at all. */
+static void row_apply(void)
+{
+    const int want = s_row_pending;
+    s_row_pending = -1;
+    if (want < 0 || (s_view != VIEW_DETAIL && s_view != VIEW_OPENED)) {
+        return;
+    }
+    if (s_view == VIEW_OPENED) {
+        /* An opened row is a page of readings, not a menu. Touching it closes
+         * it, which is what a finger reaching for a full-screen page means. */
+        s_view = VIEW_DETAIL;
+        s_detail_page = s_opened_row / PHAROS_HUD_ROWS;
+        return;
+    }
+    const pharos_lens_t *live = pharos_lens_active();
+    if (!live || !live->row) {
+        return;
+    }
+    const unsigned abs_row = s_detail_page * PHAROS_HUD_ROWS + (unsigned)want;
+
+    /* Never act on a row that is not there. The last page is usually short,
+     * and without this a press below the final row would edit or open
+     * whatever index happened to be one past the end of the list. */
+    struct pharos_lens_row probe;
+    memset(&probe, 0, sizeof(probe));
+    if (!live->row(abs_row, &probe)) {
+        return;
+    }
+    s_detail_cursor = abs_row;
+
+    if (live->row_edit && live->row_edit(abs_row)) {
+        return;
+    }
+    if (live->row_expand) {
+        s_opened_row = abs_row;
+        s_detail_page = 0;
+        s_view = VIEW_OPENED;
+    }
+}
+
 static void nav_apply(void)
 {
     const int want = s_nav_pending;
@@ -284,23 +346,22 @@ static void nav_apply(void)
          * are reading, not browsing, and losing your place to a stray tap
          * would make a long list unusable. The page follows the cursor, so
          * nobody has to move both. */
-        if (s_view == VIEW_DETAIL) {
-            s_detail_cursor++;
-            return;
-        }
-        if (s_view == VIEW_OPENED) {
+        if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
+            /* PAGE, not step. Rows are touched directly now, so the side
+             * controls no longer have to walk a cursor to reach one - and a
+             * control that moves by a whole screen is worth its size. */
             s_detail_page++;
+            s_detail_cursor = s_detail_page * PHAROS_HUD_ROWS;
             return;
         }
         s_cursor = (s_cursor + 1u) % s_order_n;
         break;
     case PHAROS_NAV_PREV:
-        if (s_view == VIEW_DETAIL) {
-            if (s_detail_cursor) s_detail_cursor--;
-            return;
-        }
-        if (s_view == VIEW_OPENED) {
-            if (s_detail_page) s_detail_page--;
+        if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
+            if (s_detail_page) {
+                s_detail_page--;
+            }
+            s_detail_cursor = s_detail_page * PHAROS_HUD_ROWS;
             return;
         }
         s_cursor = (s_cursor + s_order_n - 1u) % s_order_n;
@@ -577,6 +638,19 @@ static const char *lens_caps(const pharos_lens_t *active)
     return name;
 }
 
+/* Test seam: a row touch, as if a finger had landed on it.
+ *
+ * The detail page is the hardest part of this device to verify - it is six
+ * lines of small text on a round screen and a photograph cannot show which
+ * row the next press would act on. Driving it from the console makes the whole
+ * interaction testable over USB. */
+void pharos_ui_tap_row(unsigned row_on_page)
+{
+    if (row_on_page < PHAROS_HUD_ROWS) {
+        s_row_pending = (int)row_on_page;
+    }
+}
+
 int pharos_ui_detail_cursor(int *opened)
 {
     if (opened) {
@@ -596,6 +670,21 @@ static void paint_detail(const pharos_lens_t *active)
     /* THE OPENED ROW. A grade with no way to ask "why" is a claim rather than
      * a finding, so a lens that can say more about one of its rows gets a page
      * to say it on. */
+    /* THE OPENED ROW MAY HAVE GONE.
+     *
+     * These lists are live: a Flipper is switched off, a network stops
+     * beaconing, and the row somebody opened thirty seconds ago is no longer
+     * anything. Staying on an empty expansion would present a page about
+     * nothing; dropping back to the list shows what is actually there. */
+    if (s_view == VIEW_OPENED && active && active->row_expand) {
+        struct pharos_lens_row gone;
+        memset(&gone, 0, sizeof(gone));
+        if (!active->row_expand(s_opened_row, 0, &gone)) {
+            s_view = VIEW_DETAIL;
+            s_detail_page = s_opened_row / PHAROS_HUD_ROWS;
+        }
+    }
+
     const bool opened = (s_view == VIEW_OPENED);
     if (opened && active && active->row_expand) {
         struct pharos_lens_row probe;
@@ -642,11 +731,17 @@ static void paint_detail(const pharos_lens_t *active)
         }
     }
 
+    const unsigned pages = total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
+    /* The page is now driven by the page controls, not by a cursor walking off
+     * the bottom - so it is the page that gets clamped, and the cursor that
+     * follows it. A list that shrinks under you (devices going stale is the
+     * normal case here) must not leave the view past the end. */
+    if (s_detail_page >= pages) {
+        s_detail_page = pages - 1u;
+    }
     if (total && s_detail_cursor >= total) {
         s_detail_cursor = total - 1u;
     }
-    s_detail_page = total ? (s_detail_cursor / PHAROS_HUD_ROWS) : 0u;
-    const unsigned pages = total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
 
     unsigned n = 0;
     if (active && active->row) {
@@ -689,6 +784,7 @@ static void theme_sync(void)
         /* And nothing the teardown raised is a real intent. Tearing the face
          * down and building it again is not a thing a finger did. */
         s_nav_pending = -1;
+        s_row_pending = -1;
     }
 }
 
@@ -829,6 +925,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
 
     /* Touch is the primary control; the BOOT button is the fallback. */
     pharos_hud_set_nav_cb(on_nav);
+    pharos_hud_set_row_cb(hud_row_cb);
     boot_button_init();
 
     ESP_LOGI(TAG, "Lamp Room: %u lenses on the dial%s", count,
@@ -872,6 +969,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
 
         boot_button_poll(dt_ms);
         nav_apply();
+        row_apply();
         request_apply();
 
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here

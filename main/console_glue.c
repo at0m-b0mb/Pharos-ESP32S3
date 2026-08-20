@@ -412,6 +412,22 @@ static int cli_ble(int argc, char **argv)
     return 0;
 }
 
+static int cli_tap(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: tap <0-%u>\n", PHAROS_HUD_ROWS - 1u);
+        return 1;
+    }
+    const int r = atoi(argv[1]);
+    if (r < 0 || r >= (int)PHAROS_HUD_ROWS) {
+        printf("row out of range (0-%u)\n", PHAROS_HUD_ROWS - 1u);
+        return 1;
+    }
+    pharos_ui_tap_row((unsigned)r);
+    printf("tap row %d filed\n", r);
+    return 0;
+}
+
 static int cli_rows(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -635,6 +651,14 @@ void pharos_console_start(void)
         .func = &cli_nav,
     };
     esp_console_cmd_register(&nav);
+
+    const esp_console_cmd_t tap = {
+        .command = "tap",
+        .help = "touch a detail row, as a finger would",
+        .hint = "<0-3>",
+        .func = &cli_tap,
+    };
+    esp_console_cmd_register(&tap);
 
     const esp_console_cmd_t rows = {
         .command = "rows",

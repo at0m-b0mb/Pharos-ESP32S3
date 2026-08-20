@@ -125,6 +125,34 @@ for f in components/pharos_lens_*/*.c; do
   fi
 done
 
+# [N] EVERY HUD ENTRY POINT IS DEFINED ONCE PER BUILD BRANCH.
+#
+# pharos_hud.c has two halves - the LVGL one and the no-panel one - and only
+# the first is ever compiled here, so a mistake in the second is invisible.
+# One did happen: a bulk edit matched in both halves and pasted the whole LVGL
+# implementation of pharos_hud_detail into the stub branch, which then defined
+# it twice and referenced widgets that do not exist there. Nothing caught it,
+# because nothing builds that branch.
+#
+# Each public entry point must appear exactly twice at file scope: once real,
+# once stubbed. Anything else means the halves have drifted.
+echo
+echo "[6] the two halves of the HUD still agree"
+hud_c=components/pharos_ui/pharos_hud.c
+hud_h=components/pharos_ui/include/pharos_hud.h
+hud_bad=0
+for sym in $(grep -oE '^(void|bool) pharos_hud_[a-z_]+\(' "$hud_h" | \
+             sed -E 's/^(void|bool) //; s/\($//' | sort -u); do
+  count=$(grep -cE "^(void|bool) ${sym}\(" "$hud_c" || true)
+  if [ "$count" -ne 2 ]; then
+    bad "$sym is defined $count time(s) in pharos_hud.c - expected 2 (real + stub)"
+    hud_bad=1
+  fi
+done
+if [ "$hud_bad" -eq 0 ]; then
+  ok "every HUD entry point is defined once per branch"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   printf '%sSOURCES WIRED%s - firmware and host builds agree.\n' "$GRN" "$RST"

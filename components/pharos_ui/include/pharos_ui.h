@@ -32,6 +32,11 @@ extern "C" {
  * `opened` receives the row currently expanded, or -1. */
 int pharos_ui_detail_cursor(int *opened);
 
+/* Test seam: touch row `row_on_page` (0..PHAROS_HUD_ROWS-1) of the detail
+ * page, exactly as a finger landing on it would. Used by the `tap` console
+ * command, which is how the detail interaction is verified over USB. */
+void pharos_ui_tap_row(unsigned row_on_page);
+
 #include "pharos_aegis.h"
 /* pharos_nav_t lives here; the nav request below speaks in it. */
 #include "pharos_hud.h"

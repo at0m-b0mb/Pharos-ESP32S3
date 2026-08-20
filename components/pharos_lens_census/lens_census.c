@@ -469,9 +469,29 @@ static bool k_census_expand(unsigned row, unsigned sub,
         xSemaphoreGive(s_lock);
         return false;
     }
-    const pc_ap_t ap = s_aps[order[row]];
-    const pc_verdict_t v = s_grades[order[row]];
+
+    /* AN INDEX IS NOT AN IDENTITY.
+     *
+     * This list re-sorts as the air changes - a grade shifts, a network stops
+     * beaconing, a new one appears - so row 3 is not the same network from one
+     * second to the next. Reading the AP out by index on every line meant a
+     * page could begin describing one network and finish describing another,
+     * with nothing on the glass to say so. On a tool whose whole purpose is
+     * telling you which network is weak, that is the worst kind of wrong:
+     * quietly, plausibly attributing one network's failings to another.
+     *
+     * So the page latches the whole record on its first line and reads every
+     * subsequent line out of that copy. The UI always walks a page from sub 0,
+     * so the latch is taken exactly when the page starts being drawn. */
+    static pc_ap_t s_open_ap;
+    static pc_verdict_t s_open_v;
+    if (sub == 0) {
+        s_open_ap = s_aps[order[row]];
+        s_open_v = s_grades[order[row]];
+    }
     xSemaphoreGive(s_lock);
+    const pc_ap_t ap = s_open_ap;
+    const pc_verdict_t v = s_open_v;
 
     out->tone = PHAROS_TONE_NEUTRAL;
     switch (sub) {

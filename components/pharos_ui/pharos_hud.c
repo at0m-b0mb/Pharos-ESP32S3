@@ -17,6 +17,7 @@
  * that point and the whole HUD compiles to no-ops. */
 #include "sdkconfig.h"
 
+#include "esp_log.h"
 #include "pharos_hud.h"
 #include "pharos_theme.h"
 
@@ -151,8 +152,17 @@ static lv_obj_t *s_b_summary;
 static lv_obj_t *s_b_hint;
 static lv_obj_t *s_b_arc;
 
+static lv_obj_t *s_d_pill[PHAROS_HUD_ROWS]; /* the focus highlight */
+static lv_obj_t *s_d_hint;                  /* "hold to go back"   */
+static lv_obj_t *s_d_up;                    /* the page-up cue     */
+static lv_obj_t *s_zone_main[4];            /* browse / live       */
+static lv_obj_t *s_zone_row[PHAROS_HUD_ROWS];
+static lv_obj_t *s_zone_page[2];            /* detail: up / down   */
+static int s_zones_detail = -1;             /* which set is live   */
+
 static bool s_built;
 static pharos_hud_nav_cb_t s_nav_cb;
+static pharos_hud_row_cb_t s_row_cb;
 static uint32_t s_toast_until_ms;
 
 /* ---- dirty checks ----------------------------------------------------
@@ -347,6 +357,43 @@ static lv_obj_t *mk_arc(lv_obj_t *parent, int size, int width, uint32_t rgb,
 
 /* ---- touch ----------------------------------------------------------- */
 
+/* WHERE THE FINGER ACTUALLY LANDED.
+ *
+ * "Sometimes I am not able to click them correctly" has two possible causes
+ * and they need opposite fixes: targets too small for a finger, or a touch
+ * controller reporting presses nobody made. Guessing between them is how you
+ * spend a day making the wrong thing bigger. Every press is logged with its
+ * coordinates, so the log answers it. */
+static void log_touch(const char *what, unsigned tag)
+{
+    lv_indev_t *in = lv_indev_active();
+    lv_point_t p = { -1, -1 };
+    if (in) {
+        lv_indev_get_point(in, &p);
+    }
+    ESP_LOGI("touch", "%s %u at %d,%d", what, tag, (int)p.x, (int)p.y);
+}
+
+static void row_event(lv_event_t *e)
+{
+    const lv_event_code_t code = lv_event_get_code(e);
+    const unsigned row = (unsigned)(uintptr_t)lv_event_get_user_data(e);
+    log_touch(code == LV_EVENT_LONG_PRESSED ? "hold row" : "tap row", row);
+    /* A long press anywhere still means BACK - including on a row, because
+     * that is where the finger already is when somebody wants out. */
+    if (code == LV_EVENT_LONG_PRESSED) {
+        if (s_nav_cb) {
+            s_nav_cb(PHAROS_NAV_HOME);
+        }
+        return;
+    }
+    if (code == LV_EVENT_SHORT_CLICKED && s_row_cb) {
+        s_row_cb(row);
+    }
+}
+
+void pharos_hud_set_row_cb(pharos_hud_row_cb_t cb) { s_row_cb = cb; }
+
 static void nav_event(lv_event_t *e)
 {
     if (!s_nav_cb) {
@@ -354,6 +401,8 @@ static void nav_event(lv_event_t *e)
     }
     const lv_event_code_t code = lv_event_get_code(e);
     const pharos_nav_t what = (pharos_nav_t)(uintptr_t)lv_event_get_user_data(e);
+    log_touch(code == LV_EVENT_LONG_PRESSED ? "hold zone" : "tap zone",
+              (unsigned)what);
     /* Record the intent and return. See the header: doing the real work here
      * runs it on LVGL's task, with LVGL's stack, and reboots the board. */
     if (code == LV_EVENT_LONG_PRESSED) {
@@ -363,23 +412,44 @@ static void nav_event(lv_event_t *e)
     }
 }
 
-static void mk_zone(lv_obj_t *parent, lv_align_t align, int w, int h,
-                    pharos_nav_t what)
+static lv_obj_t *mk_zone_at(lv_obj_t *parent, lv_align_t align, int x, int y,
+                            int w, int h, lv_event_cb_t cb, void *tag)
 {
     lv_obj_t *z = lv_obj_create(parent);
     lv_obj_remove_style_all(z);
     lv_obj_set_size(z, w, h);
-    lv_obj_align(z, align, 0, 0);
-    /* SCROLLABLE off. This is the one flag whose absence let a drag - or a
-     * smeared tap, which on round glass is most of them - scroll the entire
-     * face out of view with no way back. It was the "and it breaks" half of
-     * the bug report. */
+    lv_obj_align(z, align, x, y);
     lv_obj_remove_flag(z, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(z, LV_SCROLLBAR_MODE_OFF);
     lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
-    lv_obj_add_event_cb(z, nav_event, LV_EVENT_SHORT_CLICKED, (void *)(uintptr_t)what);
-    lv_obj_add_event_cb(z, nav_event, LV_EVENT_LONG_PRESSED, (void *)(uintptr_t)what);
+    lv_obj_add_event_cb(z, cb, LV_EVENT_SHORT_CLICKED, tag);
+    lv_obj_add_event_cb(z, cb, LV_EVENT_LONG_PRESSED, tag);
+    return z;
+}
+
+/* WHICH SET OF TARGETS IS LIVE.
+ *
+ * The browse and live faces want three columns and a bottom strip. The detail
+ * page wants one target per row, full width, plus two big page controls -
+ * which overlap the columns, so the two sets cannot both be listening. The
+ * page that is being drawn says which it needs, and the HUD does not have to
+ * be told what view it is in. */
+static void zones_mode(bool detail)
+{
+    if (s_zones_detail == (int)detail || !s_built) {
+        return;
+    }
+    s_zones_detail = (int)detail;
+    for (unsigned i = 0; i < 4; i++) {
+        show(s_zone_main[i], !detail);
+    }
+    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
+        show(s_zone_row[i], detail);
+    }
+    for (unsigned i = 0; i < 2; i++) {
+        show(s_zone_page[i], detail);
+    }
 }
 
 void pharos_hud_set_nav_cb(pharos_hud_nav_cb_t cb) { s_nav_cb = cb; }
@@ -660,20 +730,36 @@ bool pharos_hud_create(void)
     const int CX_L = -BLOCK_HALF + COL_W_L / 2;      /* -54 */
     const int CX_R = BLOCK_HALF - COL_W_R / 2;       /* +120 */
 
-    s_d_title = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_TEXT, 0, -150, "");
+    s_d_title = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_TEXT, 0, -172, "");
 
-    s_d_hl = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, CX_L, -122, "");
+    s_d_hl = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, CX_L, -142, "");
     lv_obj_set_width(s_d_hl, COL_W_L);
     lv_obj_set_style_text_align(s_d_hl, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(s_d_hl, LV_ALIGN_CENTER, CX_L, -122);
+    lv_obj_align(s_d_hl, LV_ALIGN_CENTER, CX_L, -142);
 
-    s_d_hr = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, CX_R, -122, "");
+    s_d_hr = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, CX_R, -142, "");
     lv_obj_set_width(s_d_hr, COL_W_R);
     lv_obj_set_style_text_align(s_d_hr, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_d_hr, LV_ALIGN_CENTER, CX_R, -122);
+    lv_obj_align(s_d_hr, LV_ALIGN_CENTER, CX_R, -142);
 
+    /* Four rows on a 58 px pitch, centred on the face: -87, -29, +29, +87. */
     for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
-        const int y = -92 + (int)i * 36;
+        const int y = -87 + (int)i * PHAROS_HUD_ROW_PITCH;
+
+        /* THE FOCUS PILL, under the text.
+         *
+         * A brightened hairline was the whole of the focus indication, which
+         * is a 1 px cue for a state that decides what the next press does.
+         * A filled rounded block behind the row cannot be missed, and it is
+         * the same shape as the target the finger is aiming at - so the thing
+         * you see and the thing you press are one object. */
+        s_d_pill[i] = mk_box(s_page_detail);
+        lv_obj_set_size(s_d_pill[i], BLOCK_HALF * 2 + 16, PHAROS_HUD_ROW_PITCH - 8);
+        lv_obj_align(s_d_pill[i], LV_ALIGN_CENTER, 0, y);
+        lv_obj_set_style_radius(s_d_pill[i], (PHAROS_HUD_ROW_PITCH - 8) / 2, 0);
+        lv_obj_set_style_bg_color(s_d_pill[i], lv_color_hex(HUD_PIP_ON), 0);
+        lv_obj_set_style_bg_opa(s_d_pill[i], LV_OPA_COVER, 0);
+        lv_obj_add_flag(s_d_pill[i], LV_OBJ_FLAG_HIDDEN);
 
         s_d_left[i] = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_TEXT,
                                CX_L, y, "");
@@ -687,17 +773,25 @@ bool pharos_hud_create(void)
         lv_obj_set_style_text_align(s_d_right[i], LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_align(s_d_right[i], LV_ALIGN_CENTER, CX_R, y);
 
-        /* A hairline under each row. Six unruled lines of small text on a
-         * round black face is a wall; the rule gives the eye a track to
-         * follow across to the value. Sized to the block, not the screen. */
+        /* A hairline BETWEEN rows. Sized to the block, not the screen. */
         s_d_rule[i] = mk_box(s_page_detail);
         lv_obj_set_size(s_d_rule[i], BLOCK_HALF * 2, 1);
-        lv_obj_align(s_d_rule[i], LV_ALIGN_CENTER, 0, y + 17);
+        lv_obj_align(s_d_rule[i], LV_ALIGN_CENTER, 0,
+                     y + PHAROS_HUD_ROW_PITCH / 2);
         lv_obj_set_style_bg_color(s_d_rule[i], lv_color_hex(HUD_TRACK2), 0);
         lv_obj_set_style_bg_opa(s_d_rule[i], LV_OPA_COVER, 0);
     }
 
-    s_d_page  = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_DIMMER, 0, 148, "");
+    /* THE TWO BIGGEST TARGETS ON THE DEVICE, MARKED.
+     *
+     * Everything above the rows pages back and everything below pages on -
+     * about 117 px of glass each, which is the most forgiving control here.
+     * Unmarked, it is also the least discoverable: nothing suggests the empty
+     * band under a list does anything. A chevron at each end costs one glyph
+     * and turns a hidden gesture into a button. */
+    s_d_up    = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_DIMMER, 0, -196, "");
+    s_d_page  = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_DIMMER, 0, 146, "");
+    s_d_hint  = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, 0, 176, "");
     s_d_empty = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_DIM, 0, 0, "");
 
     /* ---- overlays ---- */
@@ -705,14 +799,52 @@ bool pharos_hud_create(void)
     s_toast = mk_label(scr, &lv_font_montserrat_20, HUD_TEXT, 0, 86, "");
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
 
-    /* Navigation zones, added last so they sit above everything. Left and
-     * right thirds step through the lenses; the centre is the action. */
-    mk_zone(scr, LV_ALIGN_LEFT_MID,  140, 330, PHAROS_NAV_PREV);
-    mk_zone(scr, LV_ALIGN_RIGHT_MID, 140, 330, PHAROS_NAV_NEXT);
-    mk_zone(scr, LV_ALIGN_CENTER,    160, 230, PHAROS_NAV_SELECT);
-    /* The bottom strip: what did you actually find? Short, so it cannot eat
-     * the left/right thirds, and only meaningful while a lens is running. */
-    mk_zone(scr, LV_ALIGN_BOTTOM_MID, 200, 74, PHAROS_NAV_DETAIL);
+    /* ---- touch targets, added last so they sit above everything ----
+     *
+     * Two sets, because the two kinds of page want different shapes; see
+     * zones_mode(). Both PARTITION the glass rather than sitting on it with
+     * gaps between - the old layout left a 13 px dead lane either side of the
+     * centre column, and a press that lands in a gap does nothing at all,
+     * which reads as "the touchscreen is unreliable". */
+
+    /* BROWSE and LIVE: three full-height columns and a bottom strip. The
+     * columns meet exactly, and the strip spans the whole width instead of
+     * the old 200 px, because it sits at the bottom of a CIRCLE where the
+     * usable width is already shrinking. */
+    s_zone_main[0] = mk_zone_at(scr, LV_ALIGN_TOP_LEFT, 0, 0, 155, 372,
+                                nav_event, (void *)(uintptr_t)PHAROS_NAV_PREV);
+    s_zone_main[1] = mk_zone_at(scr, LV_ALIGN_TOP_LEFT, 311, 0, 155, 372,
+                                nav_event, (void *)(uintptr_t)PHAROS_NAV_NEXT);
+    s_zone_main[2] = mk_zone_at(scr, LV_ALIGN_TOP_LEFT, 155, 0, 156, 372,
+                                nav_event, (void *)(uintptr_t)PHAROS_NAV_SELECT);
+    s_zone_main[3] = mk_zone_at(scr, LV_ALIGN_TOP_LEFT, 0, 372, 466, 94,
+                                nav_event, (void *)(uintptr_t)PHAROS_NAV_DETAIL);
+
+    /* DETAIL: one target per row, full width - so only the vertical dimension
+     * has to be got right, and 58 px of it is 5.5 mm. Above and below the
+     * block, two page controls that are the largest targets on the device. */
+    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
+        const int top = 233 - 87 - PHAROS_HUD_ROW_PITCH / 2 +
+                        (int)i * PHAROS_HUD_ROW_PITCH;
+        s_zone_row[i] = mk_zone_at(scr, LV_ALIGN_TOP_LEFT, 0, top, 466,
+                                   PHAROS_HUD_ROW_PITCH, row_event,
+                                   (void *)(uintptr_t)i);
+    }
+    {
+        const int block_top = 233 - 87 - PHAROS_HUD_ROW_PITCH / 2;
+        const int block_bot = block_top + PHAROS_HUD_ROWS * PHAROS_HUD_ROW_PITCH;
+        s_zone_page[0] = mk_zone_at(scr, LV_ALIGN_TOP_LEFT, 0, 0, 466, block_top,
+                                    nav_event, (void *)(uintptr_t)PHAROS_NAV_PREV);
+        s_zone_page[1] = mk_zone_at(scr, LV_ALIGN_TOP_LEFT, 0, block_bot, 466,
+                                    466 - block_bot, nav_event,
+                                    (void *)(uintptr_t)PHAROS_NAV_NEXT);
+    }
+    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
+        lv_obj_add_flag(s_zone_row[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_add_flag(s_zone_page[0], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_zone_page[1], LV_OBJ_FLAG_HIDDEN);
+    s_zones_detail = 0;
 
     show(s_page_live, false);
     show(s_page_detail, false);
@@ -792,6 +924,7 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
     show(s_page_live, false);
     show(s_page_detail, false);
     show(s_page_browse, true);
+    zones_mode(false);
 
     set_text(s_b_name, name ? name : "");
     set_text_colour(s_b_name, rgb);
@@ -818,6 +951,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     show(s_page_browse, false);
     show(s_page_detail, false);
     show(s_page_live, true);
+    zones_mode(false); /* three columns and a bottom strip */
 
     if (!d) {
         show(s_sim, false);
@@ -902,6 +1036,7 @@ void pharos_hud_detail(const char *lens, const char *head_left,
     show(s_page_browse, false);
     show(s_page_live, false);
     show(s_page_detail, true);
+    zones_mode(true); /* one target per row; see zones_mode() */
 
     set_text(s_d_title, lens ? lens : "");
     set_text(s_d_hl, head_left ? head_left : "");
@@ -918,16 +1053,15 @@ void pharos_hud_detail(const char *lens, const char *head_left,
             set_text_colour(s_d_left[i], HUD_TEXT);
             set_text_colour(s_d_right[i], tone_colour(rows[i].tone));
         }
-        /* The focused row's rule brightens rather than the text changing
-         * colour: the tone column already carries meaning, and overriding it
-         * to show a cursor would make a network look worse than it graded. */
-        show(s_d_rule[i], used);
-        if (used && s_d_rule[i]) {
-            const bool on = ((int)i == focus);
-            lv_obj_set_style_bg_color(s_d_rule[i],
-                                      lv_color_hex(on ? HUD_CYAN : HUD_TRACK2), 0);
-            lv_obj_set_height(s_d_rule[i], on ? 2 : 1);
-        }
+        /* Focus is a filled pill behind the row, not a recoloured word: the
+         * tone column already carries meaning, and overriding it to show a
+         * cursor would make a network look worse than it graded. */
+        const bool on = used && ((int)i == focus);
+        show(s_d_pill[i], on);
+        /* The rule under the LAST row of a page is redundant with the page
+         * controls below it, and drawing one under an empty row draws a line
+         * under nothing. */
+        show(s_d_rule[i], used && (i + 1u) < n);
     }
 
     /* An empty list is a finding, not a blank screen. */
@@ -939,18 +1073,23 @@ void pharos_hud_detail(const char *lens, const char *head_left,
     show(s_d_hl, !empty);
     show(s_d_hr, !empty);
 
+    /* The page counter sits IN the lower page control, so the number and the
+     * thing that changes it are the same object. */
     {
         char buf[32];
-        if (pages > 1 && openable) {
-            snprintf(buf, sizeof(buf), "%u / %u   tap to open", page + 1u, pages);
+        if (pages > 1 && (page + 1u) < pages) {
+            snprintf(buf, sizeof(buf), "%u / %u  %s", page + 1u, pages,
+                     LV_SYMBOL_DOWN);
         } else if (pages > 1) {
             snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
-        } else if (openable) {
-            snprintf(buf, sizeof(buf), "tap to open");
         } else {
             buf[0] = '\0';
         }
         set_text(s_d_page, buf);
+        set_text(s_d_up, (page > 0) ? LV_SYMBOL_UP : "");
+        set_text(s_d_hint, empty ? "hold to go back"
+                 : (openable ? "touch a row  -  hold to go back"
+                             : "hold to go back"));
     }
 }
 
@@ -1039,9 +1178,20 @@ void pharos_hud_colourbars(void)
 
 #else /* no panel on this build */
 
+/* Stubs, one per public entry point and nothing more.
+ *
+ * This branch had acquired a verbatim copy of the LVGL implementation - a
+ * bulk edit that matched in both halves of the file - so it declared
+ * pharos_hud_detail twice and referenced widgets that do not exist here. It
+ * compiled for nobody, because nobody builds without the vendor BSP, which is
+ * exactly how a broken branch survives. tools/check_sources.sh now counts the
+ * definitions so it cannot happen quietly again. */
+
 bool pharos_hud_create(void) { return false; }
+void pharos_hud_rebuild(void) {}
 bool pharos_hud_present(void) { return false; }
 void pharos_hud_set_nav_cb(pharos_hud_nav_cb_t cb) { (void)cb; }
+void pharos_hud_set_row_cb(pharos_hud_row_cb_t cb) { (void)cb; }
 void pharos_hud_toast(const char *msg) { (void)msg; }
 void pharos_hud_browse(const char *name, const char *summary, const char *team,
                        unsigned index, unsigned total, uint32_t rgb)
@@ -1058,72 +1208,8 @@ void pharos_hud_detail(const char *lens, const char *head_left,
                        const struct pharos_lens_row *rows, unsigned n,
                        unsigned page, unsigned pages, int focus, bool openable)
 {
-    if (!s_built) {
-        return;
-    }
-    toast_tick();
-    show(s_page_browse, false);
-    show(s_page_live, false);
-    show(s_page_detail, true);
-
-    set_text(s_d_title, lens ? lens : "");
-    set_text(s_d_hl, head_left ? head_left : "");
-    set_text(s_d_hr, head_right ? head_right : "");
-
-    if (n > PHAROS_HUD_ROWS) {
-        n = PHAROS_HUD_ROWS;
-    }
-    for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) {
-        const bool used = (i < n);
-        set_text(s_d_left[i], used ? rows[i].left : "");
-        set_text(s_d_right[i], used ? rows[i].right : "");
-        if (used) {
-            set_text_colour(s_d_left[i], HUD_TEXT);
-            set_text_colour(s_d_right[i], tone_colour(rows[i].tone));
-        }
-        /* The focused row's rule brightens rather than the text changing
-         * colour: the tone column already carries meaning, and overriding it
-         * to show a cursor would make a network look worse than it graded. */
-        show(s_d_rule[i], used);
-        if (used && s_d_rule[i]) {
-            const bool on = ((int)i == focus);
-            lv_obj_set_style_bg_color(s_d_rule[i],
-                                      lv_color_hex(on ? HUD_CYAN : HUD_TRACK2), 0);
-            lv_obj_set_height(s_d_rule[i], on ? 2 : 1);
-        }
-    }
-
-    /* An empty list is a finding, not a blank screen. */
-    const bool empty = (n == 0);
-    show(s_d_empty, empty);
-    if (empty) {
-        set_text(s_d_empty, "nothing heard yet");
-    }
-    show(s_d_hl, !empty);
-    show(s_d_hr, !empty);
-
-    {
-        char buf[32];
-        if (pages > 1 && openable) {
-            snprintf(buf, sizeof(buf), "%u / %u   tap to open", page + 1u, pages);
-        } else if (pages > 1) {
-            snprintf(buf, sizeof(buf), "%u / %u", page + 1u, pages);
-        } else if (openable) {
-            snprintf(buf, sizeof(buf), "tap to open");
-        } else {
-            buf[0] = '\0';
-        }
-        set_text(s_d_page, buf);
-    }
-}
-
-void pharos_hud_detail(const char *lens, const char *head_left,
-                       const char *head_right,
-                       const struct pharos_lens_row *rows, unsigned n,
-                       unsigned page, unsigned pages, int focus, bool openable)
-{
     (void)lens; (void)head_left; (void)head_right; (void)rows; (void)n;
-    (void)page; (void)pages;
+    (void)page; (void)pages; (void)focus; (void)openable;
 }
 void pharos_hud_splash(const char *version, bool fence_clean)
 {
