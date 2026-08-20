@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.0.1 — 2026-08-19
+
+### Fixed: hardware took half a minute to disappear
+
+Reported as "it took some time to remove the Flipper Zero after I closed it".
+It did — thirty seconds, because that was the window every device got.
+
+Thirty seconds is the right patience for the quietest thing this engine can
+see: a beacon heard once every ten seconds needs it, or it flickers in and out
+of the list forever. It was being spent on a Flipper advertising twice a
+second, where five seconds of silence is already eight missed advertisements.
+
+**How long silence has to last before it means something is not a constant.**
+It is a property of the device. The window now comes from the cadence actually
+observed, and the old constant becomes the *ceiling* — for something heard so
+rarely that no cadence can be measured. A Flipper heard twice a second is
+dropped about five seconds after it stops; a Pwnagotchi beaconing every ten
+seconds still gets the full thirty.
+
+And the wait is legible: a device past a third of its window reports how long
+since it was last heard and dims while it says it, on both the row and the live
+face. The wait reads as a countdown rather than as the screen being wrong.
+
+### Nicer
+
+A short accent rule under the detail-page title — the header stacks three
+things (lens name, column headings, list) and without a line between them the
+eye reads the headings as the first row.
+
+---
+
 ## v2.0.0 — 2026-08-19
 
 Everything below the v2.0.0-watch heading, plus the work that came out of
