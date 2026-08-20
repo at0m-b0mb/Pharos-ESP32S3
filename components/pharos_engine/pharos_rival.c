@@ -81,9 +81,19 @@ prv_kind_t prv_classify_name(const char *name, uint8_t len, bool ble)
         return PRV_KIND_PWNAGOTCHI;
     }
 
-    /* Rogue-AP appliances shipped with a default network name. */
-    if (ci_starts(name, len, "pineapple") || ci_contains(name, len, "hak5")) {
-        return PRV_KIND_PINEAPPLE;
+    /* Rogue-AP appliances shipped with a default network name.
+     *
+     * The management network is the one the operator forgets. A Pineapple
+     * brought up out of the box serves "Pineapple_XXXX" (Mark IV/V/VI/VII) or
+     * "MK7_XXXX" alongside whatever it is impersonating, and the recovery AP
+     * keeps the default whatever else is renamed. CONTAINS rather than starts,
+     * because the serial suffix is sometimes a prefix on the clones. */
+    static const char *k_rogue_ap[] = { "pineapple", "hak5", "mk7_", "mk7-",
+                                        "wifipineapple" };
+    for (unsigned i = 0; i < sizeof(k_rogue_ap) / sizeof(k_rogue_ap[0]); i++) {
+        if (ci_contains(name, len, k_rogue_ap[i])) {
+            return PRV_KIND_PINEAPPLE;
+        }
     }
 
     /* Bare BLE serial bridges: a radio bolted to a UART. Reported as what they
@@ -156,8 +166,23 @@ static bool flipper_uuid(uint16_t uuid, const char **colour)
  * the length is the action or model, and that is the one that varies wildly
  * under spam and not at all under normal use.
  *
+ * Apple's other Continuity types are deliberately NOT here. Nearby Info (0x10)
+ * and offline-finding (0x12) are broadcast continuously by every iPhone and
+ * every AirTag in the building; counting them would make a busy foyer look
+ * like an attack, and a detector that cries wolf in a foyer is one nobody
+ * reads in a corridor.
+ *
  * Google: service data for 0xFE2C carries a 3-byte model ID; the low byte is
- * enough to measure diversity. */
+ * enough to measure diversity.
+ *
+ * Microsoft Swift Pair: company 0x0006 with beacon ID 0x03. The beacon ID is
+ * checked because 0x0006 alone is every Microsoft-adjacent device in range
+ * announcing something unrelated, and folding those in would inflate the
+ * diversity count with ordinary traffic.
+ *
+ * Samsung: company 0x0075. The EasySetup advertisement behind the Buds and
+ * Watch dialogs, and the family the popular spam tools reach for on Android
+ * hardware - the one this engine could not see at all. */
 static bool pairing_code(const uint8_t *data, uint8_t len, uint8_t *code)
 {
     if (!data || len < 4) {
@@ -179,9 +204,15 @@ static bool pairing_code(const uint8_t *data, uint8_t len, uint8_t *code)
                 *code = p[4];
                 return true;
             }
-            /* Microsoft Swift Pair. */
-            if (company == 0x0006 && plen >= 6) {
+            /* Microsoft Swift Pair: beacon ID 0x03, not merely company
+             * 0x0006 - see above. */
+            if (company == 0x0006 && plen >= 6 && p[2] == 0x03) {
                 *code = p[5];
+                return true;
+            }
+            /* Samsung EasySetup. */
+            if (company == 0x0075 && plen >= 5) {
+                *code = p[4];
                 return true;
             }
         }
@@ -363,6 +394,48 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
             }
             s->pair_adv_cnt[slot]++;
 
+            /* And WHICH address it came from, because the spam that repeats a
+             * single payload is invisible to the diversity test below and
+             * obvious here: real accessories keep an address for minutes,
+             * these tools draw a fresh one per advertisement. */
+            {
+                uint32_t h = 2166136261u; /* FNV-1a over the six bytes */
+                for (uint8_t b = 0; b < 6; b++) {
+                    h ^= addr[b];
+                    h *= 16777619u;
+                }
+                if (h == 0u) {
+                    h = 1u; /* zero marks an empty slot */
+                }
+                bool known = false;
+                for (uint8_t k = 0; k < s->pair_n_addrs; k++) {
+                    if (s->pair_addr_h[k] == h) {
+                        s->pair_addr_us[k] = t_us;
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known) {
+                    if (s->pair_n_addrs < PRV_PAIR_ADDR_SLOTS) {
+                        s->pair_addr_h[s->pair_n_addrs] = h;
+                        s->pair_addr_us[s->pair_n_addrs] = t_us;
+                        s->pair_n_addrs++;
+                    } else {
+                        /* Full is itself the finding - a spammer produces far
+                         * more addresses than this holds - so evict the
+                         * stalest and keep counting rather than stop. */
+                        uint8_t oldest = 0;
+                        for (uint8_t k = 1; k < s->pair_n_addrs; k++) {
+                            if (s->pair_addr_us[k] < s->pair_addr_us[oldest]) {
+                                oldest = k;
+                            }
+                        }
+                        s->pair_addr_h[oldest] = h;
+                        s->pair_addr_us[oldest] = t_us;
+                    }
+                }
+            }
+
             bool seen = false;
             for (uint8_t k = 0; k < s->pair_n_models; k++) {
                 if (s->pair_models[k] == code) {
@@ -454,6 +527,20 @@ void prv_observe_ble(prv_state_t *s, const uint8_t addr[6], const char *name,
  * project and unchanged across the common forks - but checked as ONE of two
  * signals, never as the only one, because a constant in somebody else's source
  * is exactly the kind of thing that changes without warning. */
+/* Hak5's registered OUI. An appliance can be renamed in a minute; the first
+ * three bytes of its radio's address are assigned by the IEEE and are what the
+ * vendor actually shipped. Sufficient on its own, unlike the name - which is
+ * why a renamed Pineapple stopped being invisible.
+ *
+ * Not proof of an attack. A Pineapple on a shelf is a Pineapple on a shelf,
+ * and the presence cap in this engine applies to it exactly as it does to a
+ * Flipper. */
+bool prv_is_hak5_oui(const uint8_t addr[6])
+{
+    /* 00:13:37 - assigned to Hak5 LLC, and no, that is not a coincidence. */
+    return addr && addr[0] == 0x00 && addr[1] == 0x13 && addr[2] == 0x37;
+}
+
 bool prv_is_pwnagotchi_addr(const uint8_t addr[6])
 {
     static const uint8_t k_pwn[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD };
@@ -480,6 +567,10 @@ void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid
      * lifts the unit's own name out of the payload so it can be shown. */
     if (whisper || prv_is_pwnagotchi_addr(bssid)) {
         kind = PRV_KIND_PWNAGOTCHI;
+    } else if (prv_is_hak5_oui(bssid)) {
+        /* Checked BEFORE the name, so renaming the network does not hide the
+         * hardware. The name is still lifted below and shown. */
+        kind = PRV_KIND_PINEAPPLE;
     } else if (ssid && ssid_len) {
         kind = prv_classify_name(ssid, ssid_len, false);
     }
@@ -558,11 +649,19 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
         if (!d->in_use) {
             continue;
         }
-        out->n_addresses++;
+        /* AND STILL HERE. The list below this one has always dropped hardware
+         * that stopped transmitting; this loop did not, so switching a Flipper
+         * off left the count saying 1 above a list showing nothing. A screen
+         * that contradicts itself is worse than either half alone - the
+         * operator has to decide which line to believe, and there is no way
+         * for them to tell. One staleness rule, applied in both places. */
+        if (now_us >= d->last_us && now_us - d->last_us > PRV_STALE_US) {
+            continue;
+        }
         if (d->kind < PRV_KIND_COUNT && !kind_seen[d->kind]) {
             kind_seen[d->kind] = true;
             out->n_devices++;
-        out->n_addresses = (uint16_t)(out->n_addresses + d->addresses);
+            out->n_addresses = (uint16_t)(out->n_addresses + d->addresses);
             if (d->kind == PRV_KIND_FLIPPER) {
                 out->n_flipper++;
             }
@@ -615,6 +714,14 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
                 out->pair_models++;
             }
         }
+        /* And how many different addresses carried those payloads, expiring
+         * the same way. This is the half that sees single-payload spam. */
+        for (uint8_t k = 0; k < s->pair_n_addrs; k++) {
+            if (s->pair_addr_h[k] && now_us >= s->pair_addr_us[k] &&
+                now_us - s->pair_addr_us[k] <= PRV_SPAM_WINDOW_US) {
+                out->pair_addrs++;
+            }
+        }
         const uint32_t win_s =
             (uint32_t)(PRV_SPAM_WINDOW_US / 1000000ull);
         for (uint8_t k = 0; k < 8; k++) {
@@ -627,8 +734,12 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
         }
     }
 
-    const bool pair_spam = (out->pair_models >= PRV_SPAM_MODELS &&
-                            out->pair_advs >= PRV_SPAM_ADVS);
+    /* Either shape counts. Diversity catches the tools that cycle payloads;
+     * address churn catches the ones that hammer a single payload, which the
+     * diversity test scores as one model and would otherwise miss entirely. */
+    const bool pair_spam = (out->pair_advs >= PRV_SPAM_ADVS) &&
+                           (out->pair_models >= PRV_SPAM_MODELS ||
+                            out->pair_addrs >= PRV_SPAM_ADDRS);
 
     if (out->n_devices == 0 && out->peak_adv_per_s < 60u && !pair_spam) {
         return;

@@ -96,6 +96,27 @@ typedef enum {
 #define PRV_SPAM_ADVS    20  /* ...over at least this many advertisements */
 #define PRV_SPAM_WINDOW_US 4000000ull
 
+/* THE SPAM THAT DIVERSITY CANNOT SEE.
+ *
+ * The model-diversity test above is the right test for the spam that cycles
+ * payloads, and it is blind to the spam that does not. Several of the common
+ * tools pick ONE payload - the iOS dialog that is most annoying, or the one
+ * that crashes a particular version - and repeat it as fast as the radio will
+ * go. One model code, thousands of advertisements: diversity says one, and the
+ * raw-rate test only fires above sixty a second, so a steady twenty-a-second
+ * single-payload flood fell straight between them. That is what "it doesn't
+ * detect all the spamming attacks" meant, and it was true.
+ *
+ * The signal that catches it is IDENTITY, not payload. A real accessory keeps
+ * its address for minutes at a time - Apple and Google both rotate on a
+ * roughly fifteen-minute schedule - whereas every one of these tools draws a
+ * fresh random address for each advertisement, because reusing one lets a
+ * phone dismiss it permanently. So: how many DISTINCT addresses were heard
+ * carrying a pairing payload in the window? Eight in four seconds is not a
+ * room with accessories in it. */
+#define PRV_SPAM_ADDRS    8
+#define PRV_PAIR_ADDR_SLOTS 24
+
 /* HOW LONG A DEVICE STAYS ON THE LIST AFTER IT STOPS TRANSMITTING.
  *
  * A Flipper that has been switched off is not in the room, and a lens that
@@ -181,6 +202,14 @@ typedef struct {
     uint8_t pair_n_models;
     uint32_t pair_adv_cnt[8];
     uint32_t pair_adv_sec[8];
+
+    /* Addresses seen carrying a pairing payload, each expiring on its own.
+     * Hashes rather than addresses: this only ever answers "how many
+     * different ones", never "which", so keeping the addresses would be
+     * storing identifying material for no purpose. */
+    uint32_t pair_addr_h[PRV_PAIR_ADDR_SLOTS];
+    uint64_t pair_addr_us[PRV_PAIR_ADDR_SLOTS];
+    uint8_t pair_n_addrs;
     uint64_t first_us, last_us;
 } prv_state_t;
 
@@ -205,6 +234,7 @@ typedef struct {
     uint32_t peak_adv_per_s;
     uint8_t pair_models;   /* distinct pairing model/action codes seen   */
     uint32_t pair_advs;    /* pairing-popup advertisements in the window */
+    uint8_t pair_addrs;    /* distinct addresses those came from         */
     const char *headline;
 } prv_verdict_t;
 
@@ -241,6 +271,11 @@ void prv_observe_ssid(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
 
 /* Is this the Pwnagotchi advertisement source address? */
 bool prv_is_pwnagotchi_addr(const uint8_t addr[6]);
+
+/* True for Hak5's registered OUI (00:13:37). A rogue-AP appliance's network
+ * name can be changed in a minute; the OUI is what the vendor shipped, so this
+ * sees a renamed Pineapple that a name match never could. */
+bool prv_is_hak5_oui(const uint8_t addr[6]);
 
 void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out);
 

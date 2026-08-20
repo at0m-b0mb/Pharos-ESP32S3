@@ -280,9 +280,18 @@ static bool k_rival_display(struct pharos_lens_display *o)
     }
     if (v.notes & PRV_NOTE_PAIR_SPAM) {
         /* The specific finding beats the generic one: "12 fake accessories"
-         * tells an operator what is happening to the phones around them. */
-        snprintf(o->why, sizeof(o->why), "%u fake accessories broadcasting",
-                 (unsigned)v.pair_models);
+         * tells an operator what is happening to the phones around them.
+         *
+         * Which SHAPE of spam matters too. A tool cycling payloads and a tool
+         * hammering one from a new address every time look identical on a
+         * score and are different things to describe to somebody. */
+        if (v.pair_models >= PRV_SPAM_MODELS) {
+            snprintf(o->why, sizeof(o->why), "%u fake accessories broadcasting",
+                     (unsigned)v.pair_models);
+        } else {
+            snprintf(o->why, sizeof(o->why), "one popup, %u faked senders",
+                     (unsigned)v.pair_addrs);
+        }
     } else if (v.notes & PRV_NOTE_SPAM) {
         snprintf(o->why, sizeof(o->why), "advertisement flood %u/s",
                  (unsigned)v.peak_adv_per_s);
@@ -322,11 +331,20 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
     case 4:
         /* Diversity, not volume - the number that separates a spammer from a
          * room full of real headphones. */
-        snprintf(out->left, sizeof(out->left), "pairing popups");
+        snprintf(out->left, sizeof(out->left), "popup models / advs");
         snprintf(out->right, sizeof(out->right), "%u/%u",
                  (unsigned)v.pair_models, (unsigned)v.pair_advs);
         out->tone = (v.notes & PRV_NOTE_PAIR_SPAM) ? PHAROS_TONE_BAD
                                                    : PHAROS_TONE_DIM;
+        return true;
+    case 6:
+        /* The other half of the spam test, and the half that catches a tool
+         * repeating a single payload: real accessories keep an address for
+         * minutes, these draw a fresh one per advertisement. */
+        snprintf(out->left, sizeof(out->left), "faked senders");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.pair_addrs);
+        out->tone = (v.pair_addrs >= PRV_SPAM_ADDRS) ? PHAROS_TONE_BAD
+                                                     : PHAROS_TONE_DIM;
         return true;
     case 1:
         snprintf(out->left, sizeof(out->left), "classic Bluetooth");
@@ -367,7 +385,7 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
      *
      * The capability note now rides on the live face instead, under the score,
      * where it is context about a finding rather than an item in a list. */
-    const unsigned k = index - 6u;
+    const unsigned k = index - 7u;
     prv_device_t d;
     /* Stale-aware, so the list cannot show hardware the count above it has
      * already dropped - a Flipper that has been switched off must stop being

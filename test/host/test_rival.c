@@ -396,6 +396,290 @@ static void test_rival_pairing_spam(void)
 }
 
 
+/* SWITCHING IT OFF MUST SWITCH IT OFF EVERYWHERE.
+ *
+ * Reported from the room: "I turned off my Flipper Zero but it still shows one
+ * detected." The list had already dropped it - that path was made stale-aware
+ * when this bug was fixed the first time - but the COUNT above the list had
+ * not, so the screen said "hardware identified: 1" over an empty list.
+ *
+ * A screen that contradicts itself is worse than either half alone: the
+ * operator has to pick which line to believe and has nothing to pick with. So
+ * the invariant is not "the count expires" - it is that the count and the list
+ * agree, always, and that is what this asserts. */
+static void test_rival_switched_off_everywhere(void)
+{
+    banner("rival: the count and the list never disagree");
+    prv_state_t s; prv_verdict_t v;
+    prv_reset(&s);
+
+    const uint8_t addr[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    uint8_t alen = 0;
+    /* The real capture, from the test above: a renamed unit, found by its
+     * advertised UUID. */
+    static const uint8_t fz[] = {
+        0x02, 0x01, 0x06,
+        0x07, 0x09, 0x52, 0x33, 0x67, 0x68, 0x6f, 0x6e, /* "R3ghon" */
+        0x03, 0x02, 0x82, 0x30,                          /* UUID 0x3082 */
+        0x02, 0x0a, 0x00,
+    };
+    alen = (uint8_t)sizeof(fz);
+    for (int i = 0; i < 10; i++) {
+        prv_observe_ble_adv(&s, addr, "R3ghon", fz, alen, -57,
+                            T0 + (uint64_t)i * 200000ull);
+    }
+    const uint64_t last = T0 + 9ull * 200000ull;
+
+    /* While it is on. */
+    prv_evaluate(&s, last, &v);
+    CHECK_EQ(v.n_devices, 1);
+    CHECK_EQ(v.n_flipper, 1);
+    {
+        prv_device_t d;
+        CHECK(prv_device_at_now(&s, 0, last, &d), "and the list has a row");
+        CHECK_EQ(d.kind, PRV_KIND_FLIPPER);
+    }
+
+    /* Just inside the staleness window: still both. */
+    const uint64_t warm = last + PRV_STALE_US - 1000000ull;
+    prv_evaluate(&s, warm, &v);
+    CHECK_EQ(v.n_devices, 1);
+    {
+        prv_device_t d;
+        CHECK(prv_device_at_now(&s, 0, warm, &d), "list still has it");
+    }
+
+    /* Switched off. Past the window, BOTH must let go - and the score must
+     * come back down, because the score is what raises the alarm. */
+    const uint64_t cold = last + PRV_STALE_US + 1000000ull;
+    prv_evaluate(&s, cold, &v);
+    CHECK_EQ(v.n_devices, 0);
+    CHECK_EQ(v.n_flipper, 0);
+    CHECK_EQ(v.worst_kind, PRV_KIND_NONE);
+    CHECK_EQ(v.band, PRV_BAND_CLEAR);
+    {
+        prv_device_t d;
+        CHECK(!prv_device_at_now(&s, 0, cold, &d), "and the list is empty");
+    }
+
+    /* The general form, swept across the whole life of the sighting: at no
+     * instant may the count claim hardware the list cannot show. */
+    for (uint64_t t = last; t <= last + PRV_STALE_US * 2ull; t += 1000000ull) {
+        prv_evaluate(&s, t, &v);
+        unsigned rows = 0;
+        prv_device_t d;
+        while (prv_device_at_now(&s, rows, t, &d)) {
+            rows++;
+        }
+        CHECK(rows == v.n_devices,
+              "count %u == list %u at t+%llus", v.n_devices, rows,
+              (unsigned long long)((t - last) / 1000000ull));
+    }
+}
+
+/* THE SPAM THE DIVERSITY TEST CANNOT SEE.
+ *
+ * Several of the common tools do not cycle payloads at all: they pick the one
+ * dialog that is most annoying on the target and repeat it as fast as the
+ * radio allows. One model code, hundreds of advertisements. Diversity counts
+ * one, and the raw-rate note only fires above sixty a second, so a steady
+ * twenty-a-second single-payload flood produced NO finding whatsoever. That is
+ * the gap this covers, and it was reported from the room rather than found
+ * here - the tests below are what stops it coming back. */
+static void test_rival_single_payload_spam(void)
+{
+    banner("rival: one payload from a hundred addresses is still spam");
+    uint8_t alen = 0;
+    uint8_t addr[6] = { 0x02, 0, 0, 0, 0, 0 };
+
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        /* ONE model code throughout - and a fresh address each time, which is
+         * what these tools do so a phone cannot dismiss them permanently. */
+        for (int i = 0; i < 40; i++) {
+            addr[4] = (uint8_t)(i >> 8);
+            addr[5] = (uint8_t)i;
+            const uint8_t *a = apple_pair(0x0B, &alen);
+            prv_observe_ble_adv(&s, addr, NULL, a, alen, -45,
+                                T0 + (uint64_t)i * 50000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.pair_models < PRV_SPAM_MODELS,
+              "diversity alone sees nothing (%u models)", v.pair_models);
+        CHECK(v.peak_adv_per_s < 60u, "and the raw-rate note does not fire (%u/s)",
+              v.peak_adv_per_s);
+        CHECK(v.pair_addrs >= PRV_SPAM_ADDRS,
+              "but the addresses churn (%u)", v.pair_addrs);
+        CHECK(v.notes & PRV_NOTE_PAIR_SPAM, "so it IS named as spam");
+        CHECK_EQ(v.band, PRV_BAND_ACTIVE);
+    }
+
+    /* THE ROOM THAT MUST STAY QUIET, again - because a new family is a new way
+     * to be wrong. Real accessories advertise one model each AND keep their
+     * address, so neither half of the test may fire. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 120; i++) {
+            const uint8_t which = (uint8_t)(i % 4);
+            addr[4] = 0;
+            addr[5] = which;                     /* four stable accessories */
+            const uint8_t *a = apple_pair((uint8_t)(0x30 + which), &alen);
+            prv_observe_ble_adv(&s, addr, NULL, a, alen, -55,
+                                T0 + (uint64_t)i * 30000ull);
+        }
+        prv_evaluate(&s, T0 + 3000000ull, &v);
+        CHECK(v.pair_advs >= PRV_SPAM_ADVS, "plenty of advertisements (%u)",
+              v.pair_advs);
+        CHECK(v.pair_addrs < PRV_SPAM_ADDRS,
+              "from four addresses, not forty (%u)", v.pair_addrs);
+        CHECK((v.notes & PRV_NOTE_PAIR_SPAM) == 0, "so it is NOT called spam");
+        CHECK(v.band < PRV_BAND_ACTIVE, "and does not alarm");
+    }
+
+    /* A spammer that stops must stop being reported: the addresses expire on
+     * their own stamps, the same way the models do. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 40; i++) {
+            addr[4] = (uint8_t)(i >> 8);
+            addr[5] = (uint8_t)i;
+            const uint8_t *a = apple_pair(0x0B, &alen);
+            prv_observe_ble_adv(&s, addr, NULL, a, alen, -45,
+                                T0 + (uint64_t)i * 50000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.notes & PRV_NOTE_PAIR_SPAM, "spam while it is running");
+        prv_evaluate(&s, T0 + 60000000ull, &v);
+        CHECK(v.pair_addrs == 0, "addresses expire out of the window");
+        CHECK((v.notes & PRV_NOTE_PAIR_SPAM) == 0,
+              "and it stops being called spam once it stops");
+    }
+}
+
+/* THE FAMILIES THAT WERE NOT BEING PARSED AT ALL.
+ *
+ * Samsung's EasySetup advertisement is what the Android-facing tools reach
+ * for, and this engine could not see it: not scored low, not seen. Microsoft's
+ * is the opposite problem - company 0x0006 alone is every Microsoft-adjacent
+ * device announcing something unrelated, so it had to be narrowed to the Swift
+ * Pair beacon ID or ordinary traffic would inflate the diversity count. */
+static void test_rival_spam_families(void)
+{
+    banner("rival: Samsung counts, and Microsoft only when it is Swift Pair");
+    uint8_t addr[6] = { 0x02, 0, 0, 0, 0, 0 };
+
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        /* len, 0xFF, 75 00, then payload; byte p[4] is the model. */
+        uint8_t sam[10] = { 0x02, 0x01, 0x06, 0x06, 0xFF, 0x75, 0x00, 0x42, 0x00, 0x00 };
+        for (int i = 0; i < 40; i++) {
+            addr[5] = (uint8_t)i;
+            sam[9] = (uint8_t)(0x50 + (i % 10)); /* p[4] of the 0xFF block */
+            prv_observe_ble_adv(&s, addr, NULL, sam, 10, -45,
+                                T0 + (uint64_t)i * 50000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.pair_advs > 0, "Samsung EasySetup is parsed at all (%u)",
+              v.pair_advs);
+        CHECK(v.notes & PRV_NOTE_PAIR_SPAM, "and Samsung spam is named");
+    }
+
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        /* Company 0x0006 with beacon ID 0x03 - genuine Swift Pair. */
+        uint8_t ms[11] = { 0x02, 0x01, 0x06, 0x07, 0xFF, 0x06, 0x00, 0x03, 0x00, 0x00, 0x00 };
+        for (int i = 0; i < 40; i++) {
+            addr[5] = (uint8_t)i;
+            ms[10] = (uint8_t)(0x60 + (i % 10));
+            prv_observe_ble_adv(&s, addr, NULL, ms, 11, -45,
+                                T0 + (uint64_t)i * 50000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.notes & PRV_NOTE_PAIR_SPAM, "Swift Pair spam is named");
+    }
+
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        /* Company 0x0006 with a DIFFERENT beacon ID: ordinary Microsoft
+         * traffic, from stable addresses. Must not be counted as a pairing
+         * popup at all - this is the false positive the narrowing prevents. */
+        uint8_t ms[11] = { 0x02, 0x01, 0x06, 0x07, 0xFF, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00 };
+        for (int i = 0; i < 40; i++) {
+            addr[5] = (uint8_t)(i % 3);
+            ms[10] = (uint8_t)(0x60 + (i % 10));
+            prv_observe_ble_adv(&s, addr, NULL, ms, 11, -45,
+                                T0 + (uint64_t)i * 50000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.pair_advs == 0, "non-Swift-Pair Microsoft data is not a popup");
+        CHECK((v.notes & PRV_NOTE_PAIR_SPAM) == 0, "and is not called spam");
+    }
+}
+
+/* A RENAMED PINEAPPLE IS STILL A PINEAPPLE.
+ *
+ * Detection was a match on the word "pineapple" in the network name, which
+ * survives exactly as long as it takes somebody to change it - and changing it
+ * is step one of using the thing. The OUI is what the vendor shipped. */
+static void test_rival_pineapple(void)
+{
+    banner("rival: the rogue-AP appliance, by name and by OUI");
+
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        const uint8_t bssid[6] = { 0x00, 0x13, 0x37, 0x11, 0x22, 0x33 };
+        /* A name that gives nothing away - "Guest WiFi" is the whole point. */
+        for (int i = 0; i < 6; i++) {
+            prv_observe_beacon(&s, bssid, "Guest WiFi", 10, false, -50,
+                               T0 + (uint64_t)i * 300000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK_EQ(v.worst_kind, PRV_KIND_PINEAPPLE);
+        CHECK(v.n_wifi_tools >= 1, "counted as a Wi-Fi tool");
+        CHECK(v.score <= PRV_CAP_PRESENCE_ONLY,
+              "and still capped: owning one is not an offence (%u)", v.score);
+    }
+
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        /* The default management network, on a vendor-neutral address. */
+        const uint8_t bssid[6] = { 0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03 };
+        for (int i = 0; i < 6; i++) {
+            prv_observe_beacon(&s, bssid, "MK7_1A2B", 8, false, -60,
+                               T0 + (uint64_t)i * 300000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK_EQ(v.worst_kind, PRV_KIND_PINEAPPLE);
+    }
+
+    {
+        /* And the ordinary network that must not be swept up. */
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        const uint8_t bssid[6] = { 0x3C, 0x37, 0x86, 0x01, 0x02, 0x03 };
+        for (int i = 0; i < 6; i++) {
+            prv_observe_beacon(&s, bssid, "Sunshine 12", 11, false, -50,
+                               T0 + (uint64_t)i * 300000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK_EQ(v.n_wifi_tools, 0);
+        CHECK_EQ(v.band, PRV_BAND_CLEAR);
+    }
+
+    CHECK(prv_is_hak5_oui((const uint8_t[]){ 0x00, 0x13, 0x37, 0, 0, 0 }),
+          "the OUI itself");
+    CHECK(!prv_is_hak5_oui((const uint8_t[]){ 0x00, 0x13, 0x38, 0, 0, 0 }),
+          "and only that OUI");
+}
+
 /* ONE FLIPPER RUNNING SPAM IS ONE FLIPPER.
  *
  * A Flipper broadcasting pairing spam uses a fresh random address AND a fresh
@@ -495,6 +779,10 @@ void test_rival(void)
     test_rival_pwnagotchi();
     test_rival_flipper_advertisement();
     test_rival_pairing_spam();
+    test_rival_switched_off_everywhere();
+    test_rival_single_payload_spam();
+    test_rival_spam_families();
+    test_rival_pineapple();
     test_rival_steady_spam_reads_steady();
     test_rival_address_rotation_is_one_device();
     test_rival_presence_is_capped();
