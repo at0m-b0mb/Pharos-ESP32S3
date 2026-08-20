@@ -173,7 +173,11 @@ void test_console_dispatch(void)
         { "squall", "wifi.squall" },
         { "vigil", "ble.vigil" },
         { "aegis", "sys.aegis" },
-        { "footprint", "train.footprint" }, { "range", "train.range" },
+        /* Footprint measures the room now, so it is an observing lens; the
+         * training scenarios it used to be are still reachable through it on
+         * demand. Range was retired in favour of Ward, which guards one
+         * network instead of replaying invented ones. */
+        { "footprint", "train.footprint" }, { "ward", "wifi.ward" },
     };
     for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
         reset_mock();

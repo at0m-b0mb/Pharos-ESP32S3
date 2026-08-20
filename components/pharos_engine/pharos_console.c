@@ -321,19 +321,17 @@ static void cmd_footprint(const pc_ops_t *ops, int argc, char **argv, pc_out_t *
     }
 }
 
-static void cmd_range(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
+static void cmd_ward(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
 {
-    if (!ops->activate_lens || !ops->activate_lens("train.range")) {
-        pc_println(out, "could not start Range");
+    (void)argc; (void)argv;
+    if (!ops->activate_lens || !ops->activate_lens("wifi.ward")) {
+        pc_println(out, "could not start Ward");
         return;
     }
-    if (argc >= 2 && ops->select_scenario) {
-        if (!ops->select_scenario(argv[1])) {
-            pc_printf(out, "unknown scenario '%s'\n", argv[1]);
-            return;
-        }
+    pc_println(out, "ward: guarding one network - tap centre to adopt the nearest");
+    if (ops->status_line) {
+        ops->status_line(out);
     }
-    pc_println(out, "range: replaying a scenario through the real engines");
 }
 
 static void cmd_report(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
@@ -415,7 +413,7 @@ static const pc_cmd_t k_cmds[] = {
     { "aegis",    "aegis [ack]",                     "the whole picture: every finding so far",PC_CAT_ANALYSE,  0, 1, cmd_aegis },
     { "locate",   "locate <bssid>",                  "walk to a transmitter (hotter/colder)",  PC_CAT_ANALYSE,  1, 1, cmd_locate },
     { "footprint","footprint [scenario]",            "how detectable is an attack? (OPSEC)",   PC_CAT_ANALYSE,  0, 1, cmd_footprint },
-    { "range",    "range [scenario]",                "training: replay an attack scenario",    PC_CAT_ANALYSE,  0, 1, cmd_range },
+    { "ward",     "ward",                            "guard one network and watch only it",    PC_CAT_SCAN,     0, 0, cmd_ward },
     { "status",   "status",                          "the active lens' current verdict",       PC_CAT_ANALYSE,  0, 0, cmd_status },
     { "report",   "report",                          "write a redacted session report",        PC_CAT_EVIDENCE, 0, 0, cmd_report },
     { "fence",    "fence",                           "prove the transmit fence is clean",      PC_CAT_SYSTEM,   0, 0, cmd_fence },

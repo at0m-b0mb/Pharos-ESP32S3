@@ -23,6 +23,7 @@
 #include "pharos_census.h"
 #include "pharos_dot11.h"
 #include "pharos_lens.h"
+#include "pharos_lens_census.h"
 #include "pharos_survey.h"
 #include "pharos_survey_hook.h"
 #include "pharos_radio.h"
@@ -740,6 +741,32 @@ static const pharos_lens_t k_census = {
     .row_head_right = "GRADE",
     .row_expand = k_census_expand,
 };
+
+/* ---- reading the table from another lens; see pharos_lens_census.h ---- */
+
+bool pharos_lens_census_at(unsigned index, pc_ap_t *ap, pc_verdict_t *verdict)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return false;
+    }
+    const bool ok = (index < s_n_aps);
+    if (ok) {
+        if (ap)      *ap = s_aps[index];
+        if (verdict) *verdict = s_grades[index];
+    }
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
+unsigned pharos_lens_census_count(void)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
+        return 0;
+    }
+    const unsigned n = s_n_aps;
+    xSemaphoreGive(s_lock);
+    return n;
+}
 
 /* Aegis: Twin speaks for the IMPERSONATE stage. Census itself reports nothing -
  * grading how strong the neighbours' Wi-Fi is says nothing about whether an

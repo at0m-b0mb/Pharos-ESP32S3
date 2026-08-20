@@ -22,7 +22,7 @@ idf_component_register(
         pharos_lens_karma
         pharos_lens_mirage
         pharos_lens_locate
-        pharos_lens_range
+        pharos_lens_ward
         pharos_lens_footprint
         pharos_lens_sentinel
         pharos_lens_aegis

@@ -1,5 +1,111 @@
 # Changelog
 
+## v2.3.0 — 2026-08-20
+
+### No screen shows invented data any more
+
+Two lenses wore a SIMULATION banner. The banner was honest — they played
+synthesised attacks through the real engines — but a device with two screens
+showing made-up numbers is a device somebody learns to distrust, and it was
+reported exactly that way.
+
+**Footprint now measures the room.** It holds a receiver, grades what is
+actually in the air, and reports what a defender would have seen: the grade,
+the family that gives it away, and whether a defender who merely *hops* would
+notice at all. Run your own tooling and point this at it. Both postures come
+from the *same* captured frames — that is what makes the comparison mean
+something rather than being two separate guesses.
+
+Quiet air is now reported as quiet air. The old version played a scenario
+whenever it had nothing, which is how a lens ends up showing test data forever.
+The drill is still there for anyone who wants it — asked for explicitly, and
+labelled.
+
+**Range became Ward**, which guards one network instead of replaying invented
+ones.
+
+### Ward: watch the network you are responsible for
+
+Every other radio lens grades the whole room, which is right for a sweep and
+wrong for the commonest defensive job there is. Watch will happily report a
+deauthentication flood — against the café downstairs. Nothing could be told
+*"this one is mine."*
+
+Ward camps on your network's channel and feeds the engine **only frames
+belonging to it**. Measured on hardware guarding a real network: 43 of its
+frames graded, 196 from everything else ignored, and a confidence ceiling of
+**96** — against about 59 for a hopping receiver. Camping on one network buys
+real certainty, and that is the whole point.
+
+Two things it refuses to say:
+
+- **No target is not a clean bill of health.** Until you choose a network it
+  grades nothing rather than quietly watching everything and letting you
+  believe the reading is about yours.
+- **Out of range is not quiet.** If it cannot hear your network it says so.
+  Reporting "nothing is happening" about a network the receiver cannot hear
+  would be the most dangerous sentence this lens could produce.
+
+### Motion sensing, and what it is for
+
+The board carries a QMI8658 six-axis IMU that the vendor BSP declares absent.
+There is one question it answers that nothing else here can, and it is Vigil's.
+
+Vigil asks whether a tracker is travelling *with you*. Seeing a tracker means
+nothing — a café at lunchtime has a dozen. With no GPS it inferred movement
+from Wi-Fi locale turnover, which is holed both ways: routers reboot and access
+points switch off, so the locale turns over while somebody sat still and a
+tracker that was merely nearby starts looking like a stalker; and in a car park
+or a rural lay-by there is no Wi-Fi to turn over at all, so it went quiet
+exactly where a planted tracker matters most.
+
+An accelerometer is wrong in completely different circumstances. The strongest
+thing it does is **refuse**: if you did not move, "it followed you" cannot be
+concluded whatever the locales did, so the ceiling drops and the verdict stops
+short of FOLLOWING. The sightings are still reported — what changes is what may
+be drawn from them. On a board with no IMU, movement is unknown, and unknown is
+never a veto.
+
+It reports still / walking / moving and counts steps, and deliberately offers
+no distance: double-integrating acceleration is a well-known way to produce
+confident nonsense.
+
+Two bugs the hardware found, both caught by self-checks rather than luck:
+
+- the full-scale range was ±8 g while the scale factor assumed ±4 g, so gravity
+  measured 473 mg instead of 1000. Nothing crashed — the swing thresholds
+  simply became twice as hard to reach, and walking would have gone quietly
+  undetected. The probe now requires gravity to read as gravity.
+- the part came up in whatever state it was left in, so the configuration
+  landed on top of it and every axis railed at full scale. A soft reset first,
+  and the control registers are read back afterwards — a write that silently
+  did not land looks identical to one that did, until the data is nonsense.
+
+Verified: 955 mg at rest, reports still, refuses to judge.
+
+### The ring stopped crying wolf
+
+A photograph showed "something is up" in orange because Spectrum scored 66 —
+which is how busy the channel is. A working router was setting off the alarm.
+Five sensors whose scores are not threat scales now say so themselves:
+Spectrum and Sentinel cannot raise an alarm at all, Squall alarms only on real
+denial rather than a congested building, Vigil only when something is
+*following* rather than merely present, and Whisper only on a persistent beacon
+— there is always something at 19 kHz.
+
+### Layout is arithmetic, not photography
+
+Thirteen labels round the dial were cramped, and the only check had been
+looking at it. The geometry is now computed and the spacing pinned at every
+count the operator can configure: eight watches clear each other by 38 px, ten
+by 21, twelve by 12, thirteen by 10 — which is where two names start reading as
+one word. Ten ship armed for that reason; all of them stay one tap away in the
+Ring lens.
+
+Also: the 225 px "tap the middle for the full picture" ran straight through
+three labels and now lives inside the core, and the middle no longer shows a
+bare "SPECTRUM" that read as a stray fourteenth label.
+
 ## v2.2.0 — 2026-08-20
 
 ### The Survey: what this place is actually like

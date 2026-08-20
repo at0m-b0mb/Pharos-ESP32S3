@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "lens_footprint.c"
     INCLUDE_DIRS "."
-    REQUIRES pharos_core pharos_engine
+    REQUIRES pharos_core pharos_engine pharos_radio
     PRIV_REQUIRES esp_timer
 
     # A lens registers itself from a constructor, so nothing in the project

@@ -1,7 +1,7 @@
 idf_component_register(
-    SRCS "lens_range.c"
+    SRCS "lens_ward.c"
     INCLUDE_DIRS "."
-    REQUIRES pharos_core pharos_engine
+    REQUIRES pharos_core pharos_engine pharos_radio pharos_lens_census
     PRIV_REQUIRES esp_timer
 
     # A lens registers itself from a constructor, so nothing in the project

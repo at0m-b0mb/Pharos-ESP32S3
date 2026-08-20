@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS "lens_census.c"
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "include"
     REQUIRES pharos_core pharos_engine pharos_radio pharos_ui
     PRIV_REQUIRES esp_timer
 

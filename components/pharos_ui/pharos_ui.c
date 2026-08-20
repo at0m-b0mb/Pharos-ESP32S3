@@ -323,6 +323,7 @@ static void tower_arm_all(void)
         { "wifi.mirage",  1, true  }, /* beacon and SSID floods            */
         { "wifi.harvest", 1, true  }, /* handshake and PMKID collection    */
         { "wifi.twin",    1, true  }, /* evil twin / rogue AP              */
+        { "wifi.ward",    1, false }, /* one network, guarded specifically */
         { "rf.rival",     1, true  }, /* Flippers and pentest hardware     */
 
         /* Standing facts: every other lap is plenty. */
@@ -1655,7 +1656,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     /* Put the identity on the panel immediately, so the operator sees the
      * device is alive long before a lens has anything to say. */
     if (pharos_bsp_display_lock(200)) {
-        pharos_hud_splash("v2.2.0", s_fence_ok);
+        pharos_hud_splash("v2.3.0", s_fence_ok);
         pharos_bsp_display_unlock();
     }
     vTaskDelay(pdMS_TO_TICKS(1500)); /* let the identity be read */
