@@ -184,6 +184,31 @@ ptw_freshness_t ptw_freshness(const ptw_state_st *s, unsigned i, uint64_t now_us
  * one thing a rotation must never do. */
 int ptw_turn(ptw_state_st *s, uint64_t now_us, bool hold, bool *changed);
 
+/* CHOOSING WHAT THE RING WATCHES.
+ *
+ * Not everybody wants all thirteen. Somebody working a Wi-Fi engagement does
+ * not need the microphone; somebody sweeping a room for trackers does not need
+ * the handshake collector; and every watch left on is airtime the ones you
+ * care about do not get. Disarming is therefore not just tidying the display -
+ * it makes the remaining watches faster, which the lap time reflects.
+ *
+ * Disarming the watch currently holding the radio is allowed: the rotation
+ * moves on at the next turn rather than being left pointing at something that
+ * is no longer running.
+ *
+ * Returns false if the index is out of range, or if this would leave the ring
+ * with nothing on it - a watchtower watching nothing is a state with no way
+ * back from the ring's own controls, so the last one cannot be switched off. */
+bool ptw_set_armed(ptw_state_st *s, unsigned i, bool armed);
+
+/* How often watch i takes a turn, 1..PTW_MAX_PERIOD. Out-of-range is clamped
+ * rather than refused; see ptw_arm_every for what a period means. */
+bool ptw_set_period(ptw_state_st *s, unsigned i, uint8_t period);
+
+/* How long one full lap takes at the current arming, in milliseconds. This is
+ * the number that tells somebody what disarming a watch actually bought them. */
+uint32_t ptw_lap_ms(const ptw_state_st *s);
+
 void ptw_summarise(const ptw_state_st *s, uint64_t now_us, ptw_summary_t *out);
 
 const char *ptw_state_name(ptw_state_t st);

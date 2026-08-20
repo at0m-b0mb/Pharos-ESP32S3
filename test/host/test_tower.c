@@ -444,8 +444,118 @@ static void test_tower_all_slow_still_turns(void)
     }
 }
 
+/* CHOOSING WHAT THE RING WATCHES.
+ *
+ * Disarming is not just tidying the display: every watch left on is airtime the
+ * ones you care about do not get, so switching one off must actually make the
+ * lap shorter. */
+static void test_tower_arming_is_customisable(void)
+{
+    banner("tower: switching a watch off shortens the lap for the rest");
+    ptw_state_st s;
+    arm_six(&s);
+
+    const uint32_t before = ptw_lap_ms(&s);
+    CHECK_EQ(before, 30000); /* six watches, five seconds each */
+
+    CHECK(ptw_set_armed(&s, 5, false), "a watch can be switched off");
+    const uint32_t after = ptw_lap_ms(&s);
+    CHECK_EQ(after, 25000);
+    CHECK(after < before, "and the others come round sooner for it");
+
+    /* It stops taking turns. */
+    bool changed = false;
+    uint64_t t = T0;
+    ptw_turn(&s, t, false, &changed);
+    for (unsigned i = 0; i < 40; i++) {
+        t += 5ull * SEC;
+        const int who = ptw_turn(&s, t, false, &changed);
+        CHECK(who != 5, "a disarmed watch never gets the radio");
+    }
+    CHECK_EQ(s.w[5].visits, 0);
+
+    /* And it is not counted as armed, quiet, or unknown - it is simply not on
+     * the ring, which is different from being on it and having nothing to say. */
+    ptw_summary_t sum;
+    ptw_summarise(&s, t, &sum);
+    CHECK_EQ(sum.armed, 5);
+
+    /* Back on again, with no memory of what it said before. A reading from
+     * before it was switched off is not a reading about now. */
+    ptw_report(&s, "ble.rival", PTW_ALARM, 90, 90, T0);
+    ptw_set_armed(&s, 5, false);
+    ptw_set_armed(&s, 5, true);
+    CHECK(s.w[5].state == PTW_UNKNOWN, "a re-armed watch starts with no opinion");
+    CHECK_EQ(s.w[5].seen_us, 0);
+    CHECK(ptw_freshness(&s, 5, t) == PTW_EXPIRED, "and nothing to stand behind");
+}
+
+/* THE STATE WITH NO WAY OUT. The ring's own controls are reached through the
+ * ring, so a watchtower watching nothing must not be reachable. */
+static void test_tower_cannot_empty_itself(void)
+{
+    banner("tower: the last watch cannot be switched off");
+    ptw_state_st s;
+    ptw_reset(&s, 5000);
+    ptw_arm(&s, "a", "A");
+    ptw_arm(&s, "b", "B");
+
+    CHECK(ptw_set_armed(&s, 0, false), "the first may go");
+    CHECK(!ptw_set_armed(&s, 1, false), "the last may not");
+    CHECK(s.w[1].armed, "and is still armed after the refusal");
+
+    ptw_summary_t sum;
+    ptw_summarise(&s, T0, &sum);
+    CHECK_EQ(sum.armed, 1);
+
+    /* Out of range is refused rather than clamped. */
+    CHECK(!ptw_set_armed(&s, 99, true), "an index past the end is refused");
+    CHECK(!ptw_set_period(&s, 99, 1), "for periods too");
+    CHECK(!ptw_set_armed(NULL, 0, true), "and a NULL state is survivable");
+    CHECK_EQ(ptw_lap_ms(NULL), 0);
+}
+
+static void test_tower_period_is_editable(void)
+{
+    banner("tower: a watch's period can be changed, within bounds");
+    ptw_state_st s;
+    arm_six(&s);
+    const uint32_t base = ptw_lap_ms(&s);
+
+    CHECK(ptw_set_period(&s, 0, 2), "a watch can be slowed down");
+    CHECK_EQ(s.w[0].period, 2);
+    CHECK(ptw_lap_ms(&s) < base, "which shortens the average lap");
+
+    ptw_set_period(&s, 0, 99);
+    CHECK_EQ(s.w[0].period, PTW_MAX_PERIOD);
+    ptw_set_period(&s, 0, 0);
+    CHECK_EQ(s.w[0].period, 1);
+}
+
+/* Disarming the watch that is holding the radio right now. */
+static void test_tower_disarm_the_active_watch(void)
+{
+    banner("tower: switching off the watch that holds the radio");
+    ptw_state_st s;
+    arm_six(&s);
+
+    bool changed = false;
+    uint64_t t = T0;
+    const int who = ptw_turn(&s, t, false, &changed);
+    CHECK_EQ(who, 0);
+
+    CHECK(ptw_set_armed(&s, 0, false), "it can be switched off mid-turn");
+    const int next = ptw_turn(&s, t, false, &changed);
+    CHECK(next != 0, "and the radio moves on rather than sitting on nothing");
+    CHECK(s.w[next].armed, "onto something that is actually armed");
+}
+
 void test_tower(void)
 {
+    test_tower_arming_is_customisable();
+    test_tower_cannot_empty_itself();
+    test_tower_period_is_editable();
+    test_tower_disarm_the_active_watch();
     test_tower_periods_protect_the_fast_watches();
     test_tower_period_scales_freshness();
     test_tower_all_slow_still_turns();

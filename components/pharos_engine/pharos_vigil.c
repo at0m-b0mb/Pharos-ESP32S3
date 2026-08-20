@@ -18,6 +18,11 @@ void pv_reset(pv_state_t *s)
 {
     if (s) {
         memset(s, 0, sizeof(*s));
+        /* Movement is UNKNOWN until an IMU says otherwise, and unknown must
+         * never become a veto - a board with no motion sensor has to behave
+         * exactly as it did before there was one. */
+        s->moved = true;
+        s->moved_known = false;
     }
 }
 
@@ -161,6 +166,15 @@ static uint32_t sig_distance_permil(uint32_t a, uint32_t b)
     return nu ? (uint32_t)((nd * 1000u) / nu) : 0;
 }
 
+void pv_set_moved(pv_state_t *s, bool moved)
+{
+    if (!s) {
+        return;
+    }
+    s->moved = moved;
+    s->moved_known = true;
+}
+
 void pv_observe_locale(pv_state_t *s, uint32_t sig, uint64_t t_us)
 {
     if (!s || sig == 0) {
@@ -294,6 +308,27 @@ void pv_evaluate(const pv_state_t *s, uint64_t now_us, pv_verdict_t *out)
     uint32_t ceiling = 70;
     if (s->n_locales >= 3) ceiling = 92;
     else if (s->n_locales == 2) ceiling = 84;
+
+    /* THE MOVEMENT GATE.
+     *
+     * Locale turnover is evidence of movement, not proof of it - a router
+     * rebooting or half an estate dropping out of earshot looks identical to
+     * having walked somewhere. The accelerometer is wrong in entirely
+     * different circumstances, so when it says confidently that nobody went
+     * anywhere, FOLLOWING is withheld regardless of how many locales were
+     * counted.
+     *
+     * This is a CEILING rather than a subtraction, for the same reason every
+     * other ceiling in this project is: the evidence that was seen is still
+     * reported honestly, and what changes is how much can be concluded from
+     * it. The band drops to PERSISTENT - "this has been near you a while",
+     * which is true and is not an accusation of stalking.
+     *
+     * Only applied when the IMU actually answered. On a board without one,
+     * movement is unknown and unknown must never become a veto. */
+    if (s->moved_known && !s->moved && ceiling > 69u) {
+        ceiling = 69;
+    }
     const uint64_t span_us = (s->first_us && now_us > s->first_us)
                                  ? (now_us - s->first_us) : 0;
     const uint32_t span_min = (uint32_t)(span_us / 60000000ull);

@@ -140,6 +140,12 @@ typedef struct {
     unsigned n_locales;
     uint32_t cur_sig;
     unsigned cur_locale;
+
+    /* What the accelerometer says about whether anybody went anywhere. True
+     * by default, so a board with no IMU behaves exactly as it did before
+     * there was one - see pv_set_moved. */
+    bool moved;
+    bool moved_known;
     uint64_t first_us, last_us;
 } pv_state_t;
 
@@ -172,6 +178,27 @@ bool pv_mark_known(pv_state_t *s, const uint8_t addr[6]);
  * audible BSSIDs (the lens supplies a hash); when it differs enough from the
  * current one, a new locale begins. */
 void pv_observe_locale(pv_state_t *s, uint32_t sig, uint64_t t_us);
+
+/* DID THE PERSON ACTUALLY MOVE?
+ *
+ * A locale change is EVIDENCE of movement, not proof of it. Access points
+ * switch off at night, a neighbour reboots a router, you turn round in a big
+ * building and half the estate drops out of earshot - the signature turns over
+ * while you sat still, and a tracker that was merely nearby the whole time
+ * starts to look like one that followed you. For this subject in particular
+ * that is the worst possible way to be wrong: telling somebody they are being
+ * stalked when they are not.
+ *
+ * The board has an accelerometer (see pharos_motion.h), which is wrong in
+ * completely different circumstances - it cannot be fooled by a router
+ * rebooting, and it cannot see movement in a lift. Two families that fail
+ * independently.
+ *
+ * Tell the engine what it says. `moved` false means the device is confident
+ * NOBODY WENT ANYWHERE, and FOLLOWING is then withheld however many locales
+ * were recorded. Leave it unset - or pass true - on a board with no IMU, where
+ * the honest position is that movement is unknown and must not be a veto. */
+void pv_set_moved(pv_state_t *s, bool moved);
 
 /* Feed one BLE advertisement. `data`/`len` are the raw AD structures. */
 void pv_observe_adv(pv_state_t *s, const uint8_t addr[6], uint8_t addr_type,

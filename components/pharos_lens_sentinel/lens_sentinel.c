@@ -277,6 +277,17 @@ static bool k_sentinel_display(struct pharos_lens_display *o)
     snprintf(o->advice, sizeof(o->advice), "%s",
              s_baseline.adopted ? v.headline : "no baseline yet - console: sentinel adopt");
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+
+    /* THE ESTATE CHANGING IS NOT THE ESTATE BEING ATTACKED.
+     *
+     * A new access point since the baseline is worth knowing and is usually
+     * somebody's new router. Sentinel's own bands already separate ordinary
+     * drift from something that warrants a look, so the ring is given that
+     * rather than a raw difference count. */
+    o->has_alert = true;
+    o->alert = (v.band >= PS_BAND_INVESTIGATE) ? 2u
+             : (v.band >= PS_BAND_NOTABLE)     ? 1u
+                                               : 0u;
     return true;
 }
 

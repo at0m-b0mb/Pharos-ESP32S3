@@ -222,6 +222,20 @@ static bool k_whisper_display(struct pharos_lens_display *o)
     o->raw_score = v.score;
     o->ceiling = v.ceiling;
     o->has_score = true;
+
+    /* THERE IS ALMOST ALWAYS SOMETHING AT 19 kHz.
+     *
+     * Switching power supplies, monitors and rodent deterrents all live up
+     * there, and this lens sat at ELEVATED in every ordinary room because of
+     * it - which is also what let it monopolise the rotation before the hold
+     * was capped. A tone being present is worth a dot; a tone that PERSISTS
+     * with the structure of a beacon is the thing worth interrupting somebody
+     * for. */
+    o->has_alert = true;
+    o->alert = (v.band >= PAC_BAND_BEACON)     ? 3u
+             : (v.band >= PAC_BAND_PERSISTENT) ? 2u
+             : (v.band >= PAC_BAND_PRESENT)    ? 1u
+                                               : 0u;
     return true;
 }
 

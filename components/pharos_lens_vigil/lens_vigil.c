@@ -27,6 +27,7 @@
 #include "pharos_bus.h"
 #include "pharos_dot11.h"
 #include "pharos_lens.h"
+#include "pharos_ui.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
 #include "pharos_vigil.h"
@@ -115,6 +116,19 @@ static void vigil_event(const pharos_event_t *ev)
 
 static void vigil_tick(uint32_t dt_ms)
 {
+    /* Tell the engine whether anybody actually went anywhere.
+     *
+     * Locale turnover is evidence of movement, not proof: a rebooting router
+     * or turning round in a big building looks the same. The accelerometer is
+     * wrong in different circumstances, so when it says confidently that the
+     * device has not moved, Vigil withholds FOLLOWING - see pv_set_moved. */
+    {
+        uint8_t mstate = 0;
+        if (pharos_ui_motion(&mstate, NULL, NULL)) {
+            pv_set_moved(&s_engine, pharos_ui_has_travelled(0));
+        }
+    }
+
     if (xSemaphoreTake(s_lock, 0) != pdTRUE) {
         return;
     }
@@ -235,6 +249,19 @@ static bool k_vigil_display(struct pharos_lens_display *o)
              v.n_tags, v.n_following, v.n_locales);
     snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+
+    /* TRACKERS NEARBY ARE ORDINARY. BEING FOLLOWED IS NOT.
+     *
+     * This lens' own advice says as much - "trackers nearby, which is ordinary
+     * in a public place" - and then it handed the ring a score of 24 that got
+     * read as a finding anyway. The distinction the engine actually draws is
+     * between something being present and something MOVING WITH YOU, so that
+     * is the distinction the ring gets. */
+    o->has_alert = true;
+    o->alert = (v.band >= PV_BAND_FOLLOWING)  ? 3u
+             : (v.band >= PV_BAND_PERSISTENT) ? 2u
+             : (v.band >= PV_BAND_SEEN)       ? 1u
+                                              : 0u;
     return true;
 }
 

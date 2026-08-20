@@ -164,6 +164,18 @@ static bool k_squall_display(struct pharos_lens_display *o)
              v.worst_channel, v.n_graded, v.retry_permil / 10u);
     snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+
+    /* BUSY IS NOT JAMMED, AND THE ENGINE ALREADY KNOWS THE DIFFERENCE.
+     *
+     * A congested building scores high here and is nobody's fault; DENIAL -
+     * loud energy that does not decode - is the one state worth acting on. The
+     * ring is told which of those it is looking at rather than being handed a
+     * number that means either. */
+    o->has_alert = true;
+    o->alert = (v.worst == PQ_STATE_DENIAL)    ? 3u
+             : (v.worst == PQ_STATE_DEGRADED)  ? 2u
+             : (v.worst == PQ_STATE_CONGESTED) ? 1u
+                                                     : 0u;
     return true;
 }
 

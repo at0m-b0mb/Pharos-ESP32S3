@@ -26,6 +26,7 @@
 #include "pharos_region.h"
 #include "pharos_report.h"
 #include "pharos_theme.h"
+#include "pharos_ui.h"
 
 static const char *TAG = "lens.system";
 
@@ -386,6 +387,36 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "%u", pharos_lens_count());
         out->tone = PHAROS_TONE_DIM;
         return true;
+    case 17: {
+        /* The IMU the vendor BSP declares as absent. Worth a row because when
+         * it is missing, Vigil quietly loses a whole evidence family - and a
+         * capability that silently is not there is the kind of thing an
+         * operator should be able to check rather than assume. */
+        snprintf(out->left, sizeof(out->left), "motion sensor");
+        uint8_t st = 0;
+        uint32_t steps = 0;
+        if (!pharos_ui_motion(&st, &steps, NULL)) {
+            snprintf(out->right, sizeof(out->right), "absent");
+            out->tone = PHAROS_TONE_WARN;
+        } else {
+            static const char *k[] = { "settling", "still", "walking", "moving" };
+            snprintf(out->right, sizeof(out->right), "%s", (st < 4u) ? k[st] : "?");
+            out->tone = PHAROS_TONE_GOOD;
+        }
+        return true;
+    }
+    case 18: {
+        snprintf(out->left, sizeof(out->left), "steps this session");
+        uint32_t steps = 0;
+        if (!pharos_ui_motion(NULL, &steps, NULL)) {
+            snprintf(out->right, sizeof(out->right), "--");
+            out->tone = PHAROS_TONE_DIM;
+        } else {
+            snprintf(out->right, sizeof(out->right), "%u", (unsigned)steps);
+            out->tone = PHAROS_TONE_DIM;
+        }
+        return true;
+    }
     default:
         return false;
     }

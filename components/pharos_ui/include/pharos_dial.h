@@ -53,6 +53,54 @@ int pd_dial_hit(const pd_dial_t *d, int16_t x, int16_t y);
  * it by delta degrees. This is the crown gesture's whole model. */
 unsigned pd_dial_selected(const pd_dial_t *d, float rotation_deg);
 
+/* ---- the home ring's labels ------------------------------------------
+ *
+ * Thirteen names round a 466 px circle collided, and the collision was not
+ * where it looked. Spacing ALONG the arc was fine - about sixty pixels each -
+ * but the text is horizontal, so the two labels nearest the top of the dial
+ * (and the two nearest the bottom) end up side by side with only that gap
+ * between them, for names that want fifty. They ran into each other and read
+ * as one long word.
+ *
+ * Photographing the screen to find out whether a layout fits is a slow and
+ * unreliable way to answer a question that is pure arithmetic. So the layout
+ * is a function, and test_dial.c proves that for EVERY count the ring can
+ * carry, no two label boxes overlap and none escapes the safe radius. It has
+ * to hold for every count rather than the shipped default, because the ring is
+ * now something the operator configures.
+ *
+ * Where one radius will not do, adjacent labels alternate between two - a pair
+ * that is horizontally close is then vertically apart.
+ *
+ * `gap` is the clear space WANTED between two labels; the layout reports what
+ * it actually achieved in `gap_px` and never refuses, because the ring is
+ * something the operator configures and must be drawn as well as possible
+ * whatever they chose. It, and it is the whole
+ * difference between a ring that passes a test and one that looks right. The
+ * first version of this checked only for overlap, and thirteen names at one
+ * radius passed it - with five pixels between them, which reads as one long
+ * word on the glass. Not overlapping is not the same as legible. */
+typedef struct {
+    int16_t r_even, r_odd; /* label radius for even / odd items */
+    int16_t r_dot;         /* where the dots sit                */
+    bool staggered;        /* true when the two radii differ    */
+    int16_t gap_px;        /* clear space it managed between labels */
+} pd_ring_t;
+
+/* Lay out a ring of n labelled dots. `label_w` and `label_h` are the widest
+ * and tallest a label can be, in pixels. */
+void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
+                    pd_ring_t *out);
+
+/* The label radius for item i under that layout. */
+int16_t pd_ring_label_r(const pd_ring_t *r, unsigned i);
+
+/* True when no two of the n label boxes overlap and all sit inside the safe
+ * radius. This is what the test asserts; it is exported so the device can
+ * assert it too if anybody ever wants to. */
+bool pd_ring_fits(const pd_ring_t *r, unsigned n, int16_t label_w,
+                  int16_t label_h, int16_t gap);
+
 /* ---- the evidence gauge --------------------------------------------- */
 
 typedef struct {

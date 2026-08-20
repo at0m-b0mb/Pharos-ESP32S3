@@ -172,6 +172,27 @@ else
   ok "page visibility has exactly one owner"
 fi
 
+# [8] AND THE SAME FOR THE BSP.
+#
+# pharos_bsp.c has three build paths - host, no-vendor-BSP, and the real panel
+# - and only the last is ever compiled here. A new entry point added to one and
+# not the others compiles clean and breaks a build nobody runs, which is
+# exactly how the HUD's stub branch rotted. Three definitions each.
+echo
+echo "[8] the BSP's build paths all define the same entry points"
+bsp_c=components/pharos_bsp/pharos_bsp.c
+bsp_bad=0
+for sym in pharos_bsp_imu_present pharos_bsp_imu_read pharos_bsp_brightness; do
+  count=$(grep -cE "^(void|bool|int) ${sym}\(" "$bsp_c" || true)
+  if [ "$count" -ne 3 ]; then
+    bad "$sym is defined $count time(s) in pharos_bsp.c - expected 3"
+    bsp_bad=1
+  fi
+done
+if [ "$bsp_bad" -eq 0 ]; then
+  ok "every audited BSP entry point is defined on all three paths"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   printf '%sSOURCES WIRED%s - firmware and host builds agree.\n' "$GRN" "$RST"

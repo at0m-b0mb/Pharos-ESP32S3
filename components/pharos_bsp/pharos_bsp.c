@@ -47,6 +47,14 @@ bool pharos_bsp_init(pharos_bsp_status_t *out) { (void)out; return false; }
 void pharos_bsp_last_status(pharos_bsp_status_t *out) { if (out) *out = s_last; }
 bool pharos_bsp_battery(pwr_battery_t *out) { (void)out; return false; }
 void pharos_bsp_brightness(uint8_t level) { (void)level; }
+/* No IMU off the real board. ABSENT, not STILL: pharos_motion.h explains why
+ * "nothing is measuring" must never be reported as "nothing is moving". */
+bool pharos_bsp_imu_present(void) { return false; }
+bool pharos_bsp_imu_read(int32_t *x, int32_t *y, int32_t *z)
+{
+    (void)x; (void)y; (void)z;
+    return false;
+}
 bool pharos_bsp_rotate(int degrees) { (void)degrees; return false; }
 int pharos_bsp_rotation(void) { return 0; }
 bool pharos_bsp_orientation(int16_t *p, int16_t *r) { (void)p; (void)r; return false; }
@@ -97,6 +105,14 @@ bool pharos_bsp_battery(pwr_battery_t *out)
 }
 
 void pharos_bsp_brightness(uint8_t level) { (void)level; }
+/* No IMU off the real board. ABSENT, not STILL: pharos_motion.h explains why
+ * "nothing is measuring" must never be reported as "nothing is moving". */
+bool pharos_bsp_imu_present(void) { return false; }
+bool pharos_bsp_imu_read(int32_t *x, int32_t *y, int32_t *z)
+{
+    (void)x; (void)y; (void)z;
+    return false;
+}
 bool pharos_bsp_orientation(int16_t *p, int16_t *r)
 {
     if (p) *p = 0;
@@ -417,6 +433,212 @@ static bool axp_wr(uint8_t reg, uint8_t val)
     }
     const uint8_t b[2] = { reg, val };
     return i2c_master_transmit(s_axp, b, sizeof(b), pdMS_TO_TICKS(50)) == ESP_OK;
+}
+
+/* ---- QMI8658 six-axis IMU ------------------------------------------
+ *
+ * The vendor BSP says BSP_CAPS_IMU 0 and ships no driver, but its own header
+ * lists an IMU on the shared bus and the board's documentation names the part.
+ * So: probe both of its possible addresses, verify WHO_AM_I, and refuse to
+ * report anything if the answer is wrong.
+ *
+ * That last part matters more here than usual. Something else lives at 0x6A on
+ * plenty of boards, and reading a stranger's registers as acceleration would
+ * produce a confident stream of numbers that mean nothing - which, fed into
+ * the motion engine, would become confident statements about whether somebody
+ * walked. An unverified chip is treated as no chip. */
+#define QMI_ADDR_LO 0x6A
+#define QMI_ADDR_HI 0x6B
+#define QMI_REG_WHOAMI 0x00
+#define QMI_REG_CTRL1  0x02
+#define QMI_REG_CTRL2  0x03
+#define QMI_REG_CTRL7  0x08
+#define QMI_REG_AX_L   0x35
+#define QMI_REG_RESET  0x60
+#define QMI_REG_STATUS0 0x2E
+#define QMI_WHOAMI_VAL 0x05
+
+static i2c_master_dev_handle_t s_imu;
+static bool s_imu_probed;
+static bool s_imu_present;
+
+/* Only for the log line below - the engine does its own. */
+static int32_t isqrt_i32(int32_t v)
+{
+    if (v <= 0) {
+        return 0;
+    }
+    int32_t r = 0, b = 1 << 15;
+    while (b > v) b >>= 2;
+    while (b) {
+        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }
+        else            { r >>= 1; }
+        b >>= 2;
+    }
+    return r;
+}
+
+static bool imu_rd(uint8_t reg, uint8_t *val, size_t n)
+{
+    if (!s_imu) {
+        return false;
+    }
+    return i2c_master_transmit_receive(s_imu, &reg, 1, val, n,
+                                       pdMS_TO_TICKS(50)) == ESP_OK;
+}
+
+static bool imu_wr(uint8_t reg, uint8_t val)
+{
+    if (!s_imu) {
+        return false;
+    }
+    const uint8_t b[2] = { reg, val };
+    return i2c_master_transmit(s_imu, b, sizeof(b), pdMS_TO_TICKS(50)) == ESP_OK;
+}
+
+static bool imu_try(uint8_t addr)
+{
+    i2c_master_bus_handle_t bus = bsp_i2c_get_handle();
+    if (!bus) {
+        return false;
+    }
+    const i2c_device_config_t cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = addr,
+        .scl_speed_hz = 100000,
+    };
+    if (i2c_master_bus_add_device(bus, &cfg, &s_imu) != ESP_OK) {
+        return false;
+    }
+    uint8_t who = 0;
+    if (!imu_rd(QMI_REG_WHOAMI, &who, 1) || who != QMI_WHOAMI_VAL) {
+        i2c_master_bus_rm_device(s_imu);
+        s_imu = NULL;
+        return false;
+    }
+    ESP_LOGI(TAG, "QMI8658 IMU found at 0x%02X", addr);
+    return true;
+}
+
+static void imu_probe(void)
+{
+    if (s_imu_probed) {
+        return;
+    }
+    s_imu_probed = true;
+
+    if (!imu_try(QMI_ADDR_LO) && !imu_try(QMI_ADDR_HI)) {
+        ESP_LOGW(TAG, "no QMI8658 answered; motion sensing unavailable");
+        return;
+    }
+
+    /* A SOFT RESET FIRST.
+     *
+     * Without it the part can come up in whatever state the previous firmware
+     * left it, and the configuration below then lands on top of that rather
+     * than replacing it. That is what happened here: WHO_AM_I answered, the
+     * writes appeared to succeed, and every axis read railed at full scale.
+     * The datasheet's init sequence starts with a reset for exactly this
+     * reason. */
+    imu_wr(QMI_REG_RESET, 0xB0);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    /* CTRL1: address auto-increment for block reads, little-endian.
+     * CTRL2: bits [6:4] are full scale (001 = +/-4 g), bits [3:0] the output
+     *        rate (0110 = 125 Hz). This was 0x24 - which is 010, +/-8 g - so
+     *        every reading came back at half its true value and a device flat
+     *        on a desk measured 473 mg of gravity instead of 1000. Nothing
+     *        crashed; the swing thresholds simply became twice as hard to
+     *        reach, which would have quietly made walking hard to detect.
+     * CTRL7: accelerometer on, GYROSCOPE OFF - nothing here needs angular
+     *        rate, and leaving it running would cost current on a device that
+     *        may be in somebody's pocket for hours. */
+    imu_wr(QMI_REG_CTRL1, 0x40);
+    imu_wr(QMI_REG_CTRL2, 0x16);
+    imu_wr(QMI_REG_CTRL7, 0x01);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    /* READ THE CONFIGURATION BACK.
+     *
+     * A write that silently did not land is indistinguishable from one that
+     * did, right up until the data is nonsense - which is how a railed
+     * accelerometer got as far as the motion engine. Reading the control
+     * registers back turns "I asked for this" into "it is set to this". */
+    {
+        uint8_t c1 = 0, c2 = 0, c7 = 0, st0 = 0;
+        imu_rd(QMI_REG_CTRL1, &c1, 1);
+        imu_rd(QMI_REG_CTRL2, &c2, 1);
+        imu_rd(QMI_REG_CTRL7, &c7, 1);
+        imu_rd(QMI_REG_STATUS0, &st0, 1);
+        ESP_LOGI(TAG, "QMI8658 ctrl1=0x%02X ctrl2=0x%02X ctrl7=0x%02X st0=0x%02X",
+                 c1, c2, c7, st0);
+        if (c2 != 0x16 || !(c7 & 0x01)) {
+            ESP_LOGW(TAG, "QMI8658 did not take its configuration");
+        }
+    }
+
+    /* Prove it is actually producing data before claiming it works: a chip
+     * that answers WHO_AM_I but was never configured would stream zeroes,
+     * and zeroes read as "perfectly still" forever. */
+    int32_t x = 0, y = 0, z = 0;
+    s_imu_present = true;
+    if (!pharos_bsp_imu_read(&x, &y, &z)) {
+        s_imu_present = false;
+        ESP_LOGW(TAG, "QMI8658 did not return a sample; motion unavailable");
+        return;
+    }
+    /* GRAVITY HAS TO READ AS GRAVITY.
+     *
+     * Whatever way up the board is, the magnitude at rest is one g. Checking
+     * only that it is "not near zero" let a wrong full-scale setting through:
+     * the part answered, the numbers looked plausible, and every reading was
+     * half its true value - so the swing thresholds became twice as hard to
+     * reach and walking would have gone undetected for a reason nothing on the
+     * device could report.
+     *
+     * A band around one g catches a mis-scaled range, a part left asleep, and
+     * a chip that is not a QMI8658 at all. It is also a real self-test: if
+     * this passes, the units downstream are the units the engine expects. */
+    const int32_t mag2 = x * x + y * y + z * z;
+    if (mag2 < 700L * 700L || mag2 > 1400L * 1400L) {
+        s_imu_present = false;
+        ESP_LOGW(TAG,
+                 "QMI8658 reads %ld,%ld,%ld mg - |a|=%ld, expected ~1000 at "
+                 "rest; scale or range is wrong, motion disabled",
+                 (long)x, (long)y, (long)z, (long)isqrt_i32(mag2));
+        return;
+    }
+    ESP_LOGI(TAG, "motion sensing live (%ld,%ld,%ld mg at rest)", (long)x,
+             (long)y, (long)z);
+}
+
+bool pharos_bsp_imu_present(void)
+{
+    imu_probe();
+    return s_imu_present;
+}
+
+bool pharos_bsp_imu_read(int32_t *x_mg, int32_t *y_mg, int32_t *z_mg)
+{
+    if (!s_imu) {
+        return false;
+    }
+    uint8_t raw[6];
+    if (!imu_rd(QMI_REG_AX_L, raw, sizeof(raw))) {
+        return false;
+    }
+    /* Little-endian signed 16-bit per axis. At +/-4 g full scale the LSB is
+     * 4000 mg / 32768 - done as a multiply and shift so the hot path stays
+     * integer. */
+    for (unsigned i = 0; i < 3; i++) {
+        const int16_t v = (int16_t)((uint16_t)raw[i * 2] |
+                                    ((uint16_t)raw[i * 2 + 1] << 8));
+        const int32_t mg = ((int32_t)v * 4000) / 32768;
+        if (i == 0 && x_mg) *x_mg = mg;
+        if (i == 1 && y_mg) *y_mg = mg;
+        if (i == 2 && z_mg) *z_mg = mg;
+    }
+    return true;
 }
 
 static void axp_probe(void)

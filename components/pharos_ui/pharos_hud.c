@@ -144,7 +144,6 @@ static lv_obj_t *s_h_core;
 static lv_obj_t *s_h_clock;
 static lv_obj_t *s_h_head;
 static lv_obj_t *s_h_sub;
-static lv_obj_t *s_h_hint;
 static lv_obj_t *s_h_arc;
 static lv_obj_t *s_h_ring;
 static lv_obj_t *s_home_hint;
@@ -982,11 +981,17 @@ bool pharos_hud_create(void)
     s_h_head  = mk_label(s_page_home, &lv_font_montserrat_18, HUD_GREEN, 0, 20, "");
     s_h_sub   = mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER, 0, 48, "");
 
-    /* Discoverability. The core is the largest target on the device and there
-     * was nothing to suggest it did anything - a big obvious button nobody
-     * knows is a button. Outside the core so it does not crowd the reading. */
-    s_h_hint  = mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER, 0, 148,
-                         "tap the middle for the full picture");
+    /* THE HINT THAT COLLIDED WITH THE RING.
+     *
+     * "tap the middle for the full picture" is thirty-four characters - about
+     * 225 px - and it was drawn at y=148, immediately under a ring of labels
+     * whose lowest sit at y=136. They touched, and on the glass the sentence
+     * ran straight through VIGIL, WHISPER and SENTINEL.
+     *
+     * There is no room for a line that wide anywhere outside the core: the
+     * label ring owns the middle band and the dots own the one outside it. So
+     * the hint moved INTO the core, where it shares the sub-line - see
+     * paint_home() - and this label is gone. */
 
     /* ---- overlays ---- */
 
@@ -1153,13 +1158,20 @@ static void home_layout(unsigned n)
     }
     s_h_laid = n;
 
+    /* The geometry is computed, not guessed - see pd_ring_layout(), whose
+     * spacing at every count is pinned by test_ring.c. Photographing the
+     * screen to find out whether the names fit was how thirteen of them
+     * shipped reading as one long word. */
+    pd_ring_t g;
+    pd_ring_layout(n, 62, 14, 12, &g);
+
     pd_dial_t d;
     pd_dial_layout(n, -90.0f, 150, 205, &d);
     for (unsigned i = 0; i < n; i++) {
         const float a = pd_dial_item_angle(&d, i);
-        const pr_point_t p = pr_polar(168, a);
+        const pr_point_t p = pr_polar(g.r_dot, a);
         const pr_point_t t = pr_polar(202, a);
-        const pr_point_t lp = pr_polar(140, a);
+        const pr_point_t lp = pr_polar(pd_ring_label_r(&g, i), a);
 
         s_h_pos[i].x = p.x;
         s_h_pos[i].y = p.y;

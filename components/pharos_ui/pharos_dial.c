@@ -187,3 +187,159 @@ int16_t pd_label_size(unsigned chars, int16_t dy, int16_t r)
     }
     return 0; /* shorten the string; do not draw and hope */
 }
+
+/* ---- the home ring's labels; see pharos_dial.h ---------------------- */
+
+#include <math.h>
+
+static void ring_label_box(const pd_ring_t *r, unsigned i, unsigned n,
+                           int16_t w, int16_t h, float *x0, float *y0,
+                           float *x1, float *y1)
+{
+    const float step = 360.0f / (float)n;
+    const float a = -90.0f + step * (float)i;
+    const float rad = (float)pd_ring_label_r(r, i);
+    const float cx = rad * cosf(a * 3.14159265f / 180.0f);
+    const float cy = rad * sinf(a * 3.14159265f / 180.0f);
+    *x0 = cx - (float)w / 2.0f;
+    *x1 = cx + (float)w / 2.0f;
+    *y0 = cy - (float)h / 2.0f;
+    *y1 = cy + (float)h / 2.0f;
+}
+
+int16_t pd_ring_label_r(const pd_ring_t *r, unsigned i)
+{
+    if (!r) {
+        return 0;
+    }
+    return (i & 1u) ? r->r_odd : r->r_even;
+}
+
+bool pd_ring_fits(const pd_ring_t *r, unsigned n, int16_t label_w,
+                  int16_t label_h, int16_t gap)
+{
+    if (!r || n < 2u) {
+        return true;
+    }
+    for (unsigned i = 0; i < n; i++) {
+        float ax0, ay0, ax1, ay1;
+        ring_label_box(r, i, n, label_w, label_h, &ax0, &ay0, &ax1, &ay1);
+
+        /* Inside the safe radius, corners included - a box whose centre is in
+         * bounds can still have a corner off the glass. */
+        const float corners[4][2] = {
+            { ax0, ay0 }, { ax1, ay0 }, { ax0, ay1 }, { ax1, ay1 },
+        };
+        for (unsigned c = 0; c < 4; c++) {
+            const float d = sqrtf(corners[c][0] * corners[c][0] +
+                                  corners[c][1] * corners[c][1]);
+            if (d > (float)PR_SAFE_R) {
+                return false;
+            }
+        }
+
+        /* Against every other label. Only the immediate neighbours can
+         * realistically touch, but checking all of them costs nothing here and
+         * cannot be fooled by an unusual count. */
+        for (unsigned k = i + 1u; k < n; k++) {
+            float bx0, by0, bx1, by1;
+            ring_label_box(r, k, n, label_w, label_h, &bx0, &by0, &bx1, &by1);
+            /* Inflated by the required gap, so "just touching" fails. */
+            const float g = (float)gap;
+            const bool apart = (ax1 + g <= bx0) || (bx1 + g <= ax0) ||
+                               (ay1 + g <= by0) || (by1 + g <= ay0);
+            if (!apart) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Best gap achievable at a given pair of radii, or a negative number when a
+ * label corner would leave the glass. */
+static float ring_score(const pd_ring_t *r, unsigned n, int16_t w, int16_t h)
+{
+    float worst = 1e9f;
+    for (unsigned i = 0; i < n; i++) {
+        float ax0, ay0, ax1, ay1;
+        ring_label_box(r, i, n, w, h, &ax0, &ay0, &ax1, &ay1);
+        const float corners[4][2] = {
+            { ax0, ay0 }, { ax1, ay0 }, { ax0, ay1 }, { ax1, ay1 },
+        };
+        for (unsigned c = 0; c < 4; c++) {
+            if (sqrtf(corners[c][0] * corners[c][0] +
+                      corners[c][1] * corners[c][1]) > (float)PR_SAFE_R) {
+                return -1.0f;
+            }
+        }
+        for (unsigned k = i + 1u; k < n; k++) {
+            float bx0, by0, bx1, by1;
+            ring_label_box(r, k, n, w, h, &bx0, &by0, &bx1, &by1);
+            const float gx = (bx0 - ax1) > (ax0 - bx1) ? (bx0 - ax1) : (ax0 - bx1);
+            const float gy = (by0 - ay1) > (ay0 - by1) ? (by0 - ay1) : (ay0 - by1);
+            const float g = (gx > gy) ? gx : gy;
+            if (g < worst) {
+                worst = g;
+            }
+        }
+    }
+    return (n < 2u) ? 1e9f : worst;
+}
+
+/* BEST EFFORT, NEVER FAILURE.
+ *
+ * An earlier version returned "does not fit" for thirteen watches, which is
+ * true and useless: the ring is something the operator configures, so the
+ * layout has to produce the best arrangement for whatever they chose rather
+ * than give up and overlap. What the caller needs to know is how much room it
+ * managed - `gap_px` - so the shipped default can be set somewhere comfortable
+ * and anything tighter is a choice made knowingly.
+ *
+ * The measured numbers on this 466 px dial, seven-character names: eight
+ * watches clear each other by 64 px, ten by 30, twelve by 24, and thirteen by
+ * 10 - which is the point at which it starts reading as one long word. */
+void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
+                    pd_ring_t *out)
+{
+    if (!out) {
+        return;
+    }
+    out->r_dot = 168;
+    out->r_even = 142;
+    out->r_odd = 142;
+    out->staggered = false;
+    out->gap_px = 0;
+    if (n < 2u) {
+        out->gap_px = 999;
+        return;
+    }
+
+    /* One radius first: an unstaggered ring is tidier, and for a handful of
+     * watches it clears the requirement outright. */
+    for (int16_t r = 142; r <= 156; r = (int16_t)(r + 2)) {
+        pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = 168,
+                        .staggered = false, .gap_px = 0 };
+        const float g = ring_score(&t, n, label_w, label_h);
+        if (g >= (float)gap) {
+            *out = t;
+            out->gap_px = (int16_t)g;
+            return;
+        }
+    }
+
+    /* Otherwise the widest breathing room two radii can buy. */
+    float best = -1.0f;
+    for (int16_t re = 130; re <= 156; re = (int16_t)(re + 2)) {
+        for (int16_t ro = 100; ro <= 156; ro = (int16_t)(ro + 2)) {
+            pd_ring_t t = { .r_even = re, .r_odd = ro, .r_dot = 168,
+                            .staggered = (re != ro), .gap_px = 0 };
+            const float g = ring_score(&t, n, label_w, label_h);
+            if (g > best) {
+                best = g;
+                *out = t;
+                out->gap_px = (int16_t)((g < 0.0f) ? 0.0f : g);
+            }
+        }
+    }
+}

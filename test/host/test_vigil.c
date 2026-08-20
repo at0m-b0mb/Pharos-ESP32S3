@@ -169,8 +169,83 @@ static void test_vigil_classify_extended(void)
     }
 }
 
+/* THE MOVEMENT GATE.
+ *
+ * A locale change is evidence of movement, not proof of it. Access points
+ * switch off, routers reboot, and turning round in a large building drops half
+ * the estate out of earshot - the signature turns over while somebody sat
+ * still, and a tracker that was merely nearby starts looking like a stalker.
+ *
+ * On this subject that is the worst available way to be wrong, so the
+ * accelerometer - which cannot be fooled by a rebooting router - can withhold
+ * the accusation. */
+static void feed_three_locales(pv_state_t *s, uint64_t base)
+{
+    static const uint8_t follow[6] = { 0x22, 0, 0, 0, 0, 0x02 };
+    const uint8_t tile_adv[] = { 0x03, 0x16, 0xED, 0xFE };
+    static const uint32_t sig[3] = { 0x55555555u, 0xAAAAAAAAu, 0x0F0F0F0Fu };
+
+    for (unsigned loc = 0; loc < 3u; loc++) {
+        const uint64_t at = base + (uint64_t)loc * 60000000ull;
+        pv_observe_locale(s, sig[loc], at);
+        for (int i = 0; i < 6; i++) {
+            pv_observe_adv(s, follow, 1, -60, tile_adv, sizeof(tile_adv),
+                           at + (uint64_t)i * 1000000ull);
+        }
+    }
+}
+
+static void test_vigil_movement_gates_following(void)
+{
+    banner("vigil: FOLLOWING needs evidence the person actually moved");
+
+    const uint64_t base = 1000000000ull;
+    const uint64_t end = base + 200000000ull;
+
+    /* Identical sighting history in every run; only the accelerometer differs. */
+    pv_state_t moved, still, no_imu;
+    pv_reset(&moved);
+    pv_reset(&still);
+    pv_reset(&no_imu);
+    pv_set_moved(&moved, true);
+    pv_set_moved(&still, false);
+    /* no_imu deliberately never calls pv_set_moved. */
+
+    feed_three_locales(&moved, base);
+    feed_three_locales(&still, base);
+    feed_three_locales(&no_imu, base);
+
+    pv_verdict_t vm, vs, vn;
+    pv_evaluate(&moved, end, &vm);
+    pv_evaluate(&still, end, &vs);
+    pv_evaluate(&no_imu, end, &vn);
+
+    CHECK(vm.ceiling > 69, "having moved, the ceiling allows FOLLOWING (%u)",
+          vm.ceiling);
+    CHECK(vs.ceiling <= 69,
+          "having not moved, it does not (%u)", vs.ceiling);
+    CHECK(vs.band < PV_BAND_FOLLOWING,
+          "so the accusation is withheld (band %s)", pv_band_name(vs.band));
+
+    /* It is a CEILING, not a deletion: the sightings still happened and are
+     * still reported. What changes is what may be concluded from them. */
+    CHECK_EQ(vs.n_tags, vm.n_tags);
+    CHECK_EQ(vs.n_locales, vm.n_locales);
+
+    /* AND THE RULE THAT KEEPS BOARDS WITHOUT AN IMU WORKING. */
+    CHECK_EQ(vn.ceiling, vm.ceiling);
+    CHECK(vn.band == vm.band, "no motion sensor is not a veto");
+
+    /* Movement reported later lifts the gate rather than latching it. */
+    pv_set_moved(&still, true);
+    pv_evaluate(&still, end, &vs);
+    CHECK_EQ(vs.ceiling, vm.ceiling);
+    CHECK(vs.band == vm.band, "and it lifts once they do move");
+}
+
 void test_vigil(void)
 {
+    test_vigil_movement_gates_following();
     test_vigil_tag_list();
     test_vigil_classify_extended();
     banner("vigil: classification");

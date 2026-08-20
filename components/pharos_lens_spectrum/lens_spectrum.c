@@ -215,6 +215,16 @@ static bool k_spectrum_display(struct pharos_lens_display *o)
     o->score = (uint8_t)((total_frames ? (best * 100u) / total_frames : 0u));
     o->ceiling = 100;
     o->has_score = true;
+
+    /* A CROWDED BAND IS NOT AN ATTACK.
+     *
+     * This score is one channel's share of the airtime, and in any ordinary
+     * flat it is high - the Wi-Fi is simply busy. Read as a threat it put an
+     * orange dot on the home ring and made the whole screen say "something is
+     * up" about a working router. Spectrum is a picture to go and look at, not
+     * a watch that raises anything. See pharos_lens_display::alert. */
+    o->has_alert = true;
+    o->alert = (o->score >= 80u) ? 1u : 0u;
     return true;
 }
 

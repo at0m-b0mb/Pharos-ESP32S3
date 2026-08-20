@@ -52,6 +52,22 @@ const char *pharos_disp_result_name(pharos_disp_result_t r);
  * gauge. Returns false if the PMU did not come up. */
 bool pharos_bsp_battery(pwr_battery_t *out);
 
+/* ---- the motion sensor ----
+ *
+ * The board carries a QMI8658 six-axis IMU on the same I2C bus as the touch
+ * controller and the PMU, and the vendor BSP declares BSP_CAPS_IMU 0 - there
+ * is no driver for it. This is that driver, deliberately minimal: the
+ * accelerometer, at 50 Hz, and nothing else. The gyroscope is left powered
+ * down because nothing here needs angular rate and it costs current.
+ *
+ * Returns false when no IMU answered, which callers must treat as UNKNOWN
+ * rather than as "not moving" - see pharos_motion.h. */
+bool pharos_bsp_imu_present(void);
+
+/* One acceleration sample in milli-g. False when there is no IMU or the read
+ * failed; the values are then untouched. */
+bool pharos_bsp_imu_read(int32_t *x_mg, int32_t *y_mg, int32_t *z_mg);
+
 /* Set panel brightness, 0..255. AMOLED, so 0 is truly off. */
 void pharos_bsp_brightness(uint8_t level);
 

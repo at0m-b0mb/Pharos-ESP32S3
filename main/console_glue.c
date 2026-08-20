@@ -26,6 +26,7 @@
 #include "pharos_audio.h"
 #include "pharos_hud.h"
 #include "pharos_survey.h"
+#include "pharos_tower.h"
 #include "pharos_survey_hook.h"
 #include "pharos_ui.h"
 
@@ -414,6 +415,73 @@ static int cli_ble(int argc, char **argv)
     return 0;
 }
 
+static int cli_motion(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    uint8_t st = 0;
+    uint32_t steps = 0, still = 0;
+    if (!pharos_ui_motion(&st, &steps, &still)) {
+        printf("motion   : no IMU answered\n");
+        printf("  the QMI8658 is on the shared I2C bus; the vendor BSP ships\n"
+               "  no driver for it, so this probes 0x6A and 0x6B itself.\n");
+        return 1;
+    }
+    static const char *k[] = { "unknown", "still", "walking", "moving" };
+    printf("motion   : %s\n", (st < 4u) ? k[st] : "?");
+    printf("  steps  : %u\n", (unsigned)steps);
+    if (still) {
+        printf("  still for %us\n", (unsigned)still);
+    }
+    printf("  travelled enough to judge \"following\": %s\n",
+           pharos_ui_has_travelled(0) ? "yes" : "no");
+    int32_t x = 0, y = 0, z = 0;
+    if (pharos_bsp_imu_read(&x, &y, &z)) {
+        printf("  raw    : %ld, %ld, %ld mg\n", (long)x, (long)y, (long)z);
+    }
+    return 0;
+}
+
+static int cli_ring(int argc, char **argv)
+{
+    const unsigned n = pharos_ui_ring_count();
+    if (argc >= 2) {
+        const int i = atoi(argv[1]);
+        if (i < 0 || (unsigned)i >= n) {
+            printf("watch out of range (0-%u)\n", n ? n - 1u : 0u);
+            return 1;
+        }
+        if (argc >= 3) {
+            const int p = atoi(argv[2]);
+            for (int k = 0; k < 8; k++) {
+                uint8_t cur = 1;
+                pharos_ui_ring_at((unsigned)i, NULL, NULL, &cur, NULL);
+                if ((int)cur == p) {
+                    break;
+                }
+                pharos_ui_ring_cycle_period((unsigned)i);
+            }
+        } else if (!pharos_ui_ring_toggle((unsigned)i)) {
+            printf("refused: that is the last watch armed\n");
+            return 1;
+        }
+    }
+    printf("ring: %ums a lap, rotation %s\n", (unsigned)pharos_ui_ring_lap_ms(),
+           pharos_ui_ring_running() ? "running" : "PAUSED");
+    for (unsigned i = 0; i < n; i++) {
+        const char *name = NULL;
+        bool armed = false;
+        uint8_t period = 1, st = 0;
+        if (!pharos_ui_ring_at(i, &name, &armed, &period, &st)) {
+            break;
+        }
+        printf("  %2u  %-9s %-3s  every %u lap(s)\n", i, name ? name : "?",
+               armed ? "on" : "off", (unsigned)period);
+    }
+    printf("  ring <n> toggles; ring <n> <1-%u> sets how often\n",
+           (unsigned)PTW_MAX_PERIOD);
+    return 0;
+}
+
 static int cli_survey(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -685,6 +753,22 @@ void pharos_console_start(void)
         .func = &cli_nav,
     };
     esp_console_cmd_register(&nav);
+
+    const esp_console_cmd_t motion = {
+        .command = "motion",
+        .help = "the accelerometer: still, walking, or moving",
+        .hint = NULL,
+        .func = &cli_motion,
+    };
+    esp_console_cmd_register(&motion);
+
+    const esp_console_cmd_t ring = {
+        .command = "ring",
+        .help = "choose which watches the home screen carries",
+        .hint = "[<n> [1-4]]",
+        .func = &cli_ring,
+    };
+    esp_console_cmd_register(&ring);
 
     const esp_console_cmd_t survey = {
         .command = "survey",

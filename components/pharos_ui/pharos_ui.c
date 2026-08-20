@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "nvs.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -32,6 +33,7 @@
 #include "pharos_dial.h"
 #include "pharos_hud.h"
 #include "pharos_theme.h"
+#include "pharos_motion.h"
 #include "pharos_survey.h"
 #include "pharos_survey_hook.h"
 #include "pharos_tower.h"
@@ -171,11 +173,23 @@ static unsigned s_order_n;
  * hold this - it is unmounted every few seconds. */
 static psv_t s_survey;
 
+/* ---- motion ----------------------------------------------------------
+ *
+ * Sampled here rather than in a lens because it must run whatever lens the
+ * rotation is on: Vigil needs to know whether the person walked somewhere
+ * during the forty seconds it was NOT holding the radio, and a lens that is
+ * unmounted cannot measure that. */
+static pm_engine_t s_motion;
+
 static ptw_state_st s_tower;
 static bool s_tower_on;
 static const char *s_tower_pending; /* lens the rotation wants next */
 static unsigned s_home_sel;         /* which dot the side zones point at */
 static int s_home_tap = -1;         /* a dot touched on the glass, or -1 */
+/* Display position -> tower index. The ring carries only ARMED watches, so the
+ * two are not the same once anything has been switched off. */
+static uint8_t s_home_map[PHAROS_HUD_HOME_MAX];
+static unsigned s_home_map_n;
 static uint32_t s_paints, s_paint_misses;
 
 /* How a lens' own display maps onto the one scale the ring can draw. Every
@@ -293,27 +307,36 @@ static void tower_arm_all(void)
      * and is missed if you are elsewhere; a STANDING FACT changes over minutes
      * and is none the worse for being checked every other lap. Adding more
      * surveys now costs the event detectors nothing. */
-    static const struct { const char *id; uint8_t period; } k_ring[] = {
+    /* `on` is whether it ships ARMED. All thirteen are available and one tap
+     * away in the Ring lens; ten are on to begin with, because that is what
+     * the dial can label comfortably.
+     *
+     * That number is measured, not chosen by eye: pd_ring_layout() leaves
+     * 21 px between names at ten watches, 12 px at twelve, and 10 px at
+     * thirteen - which is the point at which two names read as one long word.
+     * See test_ring.c, which pins the spacing at every count. Somebody who
+     * wants all thirteen can have them, knowing what they are trading. */
+    static const struct { const char *id; uint8_t period; bool on; } k_ring[] = {
         /* Events: every lap. Miss the lap, miss the attack. */
-        { "wifi.watch",   1 }, /* deauthentication - the headliner    */
-        { "wifi.karma",   1 }, /* a radio answering to any name       */
-        { "wifi.mirage",  1 }, /* beacon and SSID floods              */
-        { "wifi.harvest", 1 }, /* handshake and PMKID collection      */
-        { "wifi.twin",    1 }, /* evil twin / rogue AP                */
-        { "rf.rival",     1 }, /* Flippers and pentest hardware       */
+        { "wifi.watch",   1, true  }, /* deauthentication - the headliner  */
+        { "wifi.karma",   1, true  }, /* a radio answering to any name     */
+        { "wifi.mirage",  1, true  }, /* beacon and SSID floods            */
+        { "wifi.harvest", 1, true  }, /* handshake and PMKID collection    */
+        { "wifi.twin",    1, true  }, /* evil twin / rogue AP              */
+        { "rf.rival",     1, true  }, /* Flippers and pentest hardware     */
 
         /* Standing facts: every other lap is plenty. */
-        { "wifi.census",  2 }, /* how well-defended the neighbours are */
-        { "wifi.probe",   2 }, /* what devices leak by asking          */
-        { "wifi.squall",  2 }, /* busy, broken, or jammed              */
-        { "ble.vigil",    2 }, /* is a tracker travelling with you     */
-        { "mic.whisper",  2 }, /* ultrasonic beacons in the room       */
+        { "wifi.census",  2, true  }, /* how safe the neighbours are       */
+        { "wifi.probe",   2, true  }, /* what devices leak by asking       */
+        { "wifi.squall",  2, true  }, /* busy, broken, or jammed           */
+        { "ble.vigil",    2, true  }, /* is a tracker travelling with you  */
+        { "mic.whisper",  2, false }, /* ultrasonic beacons in the room    */
 
         /* Slower still: a baseline drifts over many minutes, and the
          * spectrum waterfall is a picture to go and look at rather than
          * something that needs catching in the act. */
-        { "wifi.sentinel", 3 },
-        { "wifi.spectrum", 3 },
+        { "wifi.sentinel", 3, false },
+        { "wifi.spectrum", 3, false },
     };
     const unsigned want = (unsigned)(sizeof(k_ring) / sizeof(k_ring[0]));
 
@@ -341,14 +364,24 @@ static void tower_arm_all(void)
          * than that - so the longest names would have overlapped their
          * neighbours rather than been read. Every lens name is legible at
          * eight ("SENTINEL", "SPECTRUM", "HARVEST"). */
-        char up[9];
+        /* Seven characters. Thirteen labels round a 466 px circle leaves
+         * about sixty pixels of arc each, and the ones that meet horizontally
+         * at the top and bottom of the dial have less than that - so the long
+         * names ran into their neighbours. Staggered radii (see home_layout)
+         * do most of the work; this does the rest. */
+        char up[8];
         unsigned k = 0;
         for (; l->name[k] && k < sizeof(up) - 1; k++) {
             const char c = l->name[k];
             up[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
         }
         up[k] = '\0';
-        ptw_arm_every(&s_tower, l->id, up, k_ring[i].period);
+        const int slot = ptw_arm_every(&s_tower, l->id, up, k_ring[i].period);
+        if (slot >= 0 && !k_ring[i].on) {
+            /* Available, not armed. Refused only if it would empty the ring,
+             * which cannot happen while anything above it is on. */
+            ptw_set_armed(&s_tower, (unsigned)slot, false);
+        }
     }
     ESP_LOGI(TAG, "watchtower: %u watches armed, %ums each (%us a lap)",
              s_tower.n, (unsigned)s_tower.dwell_ms,
@@ -405,20 +438,40 @@ static void paint_home(void)
     ptw_summary_t sum;
     ptw_summarise(&s_tower, now, &sum);
 
+    /* ONLY THE ARMED WATCHES GET A DOT.
+     *
+     * A watch somebody switched off must not occupy a slot on the ring - the
+     * spacing is computed from the count, so leaving gaps would spread twelve
+     * dots over thirteen places and lie about what is being watched. The map
+     * carries display position back to tower index, because a tap arrives as
+     * the former and every other call here takes the latter. */
     struct pharos_hud_home h;
     memset(&h, 0, sizeof(h));
-    h.n = s_tower.n;
-    for (unsigned i = 0; i < s_tower.n && i < PHAROS_HUD_HOME_MAX; i++) {
-        h.label[i] = s_tower.w[i].name;
-        h.state[i] = (uint8_t)s_tower.w[i].state;
-        h.fade[i] = (uint8_t)ptw_freshness(&s_tower, i, now);
-        h.score[i] = s_tower.w[i].score;
+    s_home_map_n = 0;
+    for (unsigned i = 0; i < s_tower.n && s_home_map_n < PHAROS_HUD_HOME_MAX; i++) {
+        if (!s_tower.w[i].armed) {
+            continue;
+        }
+        const unsigned d = s_home_map_n;
+        s_home_map[d] = (uint8_t)i;
+        h.label[d] = s_tower.w[i].name;
+        h.state[d] = (uint8_t)s_tower.w[i].state;
+        h.fade[d] = (uint8_t)ptw_freshness(&s_tower, i, now);
+        h.score[d] = s_tower.w[i].score;
+        s_home_map_n++;
     }
+    h.n = s_home_map_n;
     h.active = -1;
     {
         const pharos_lens_t *live = pharos_lens_active();
         if (live && s_tower_on) {
-            h.active = ptw_find(&s_tower, live->id);
+            const int idx = ptw_find(&s_tower, live->id);
+            for (unsigned d = 0; d < s_home_map_n; d++) {
+                if ((int)s_home_map[d] == idx) {
+                    h.active = (int)d;
+                    break;
+                }
+            }
         }
     }
     h.headline = sum.headline;
@@ -440,16 +493,27 @@ static void paint_home(void)
     }
     h.worst_score = (sum.worst_index >= 0) ? s_tower.w[sum.worst_index].score : 0;
 
+    /* THE SUB-LINE, WHICH NOW CARRIES THE HINT TOO.
+     *
+     * It read "SPECTRUM" on its own when something was elevated, which on the
+     * glass looked like a stray fourteenth label rather than a statement about
+     * the ring - there was already a SPECTRUM label out on the rim, so the
+     * word appeared twice with nothing to distinguish them. It says what the
+     * name MEANS now.
+     *
+     * And when there is nothing to report it carries the "tap the middle"
+     * hint, which used to be a 225 px line of its own drawn straight through
+     * the label ring. */
     static char sub[40];
     if (!s_fence_ok) {
         snprintf(sub, sizeof(sub), "FENCE UNVERIFIED");
     } else if (!s_tower_on) {
         snprintf(sub, sizeof(sub), "hold to start the %u watches", sum.armed);
     } else if (sum.worst_index >= 0 && sum.worst >= PTW_ELEVATED) {
-        /* Name the watch that found it, so "which sensor" needs no tapping. */
-        snprintf(sub, sizeof(sub), "%s", s_tower.w[sum.worst_index].name);
+        snprintf(sub, sizeof(sub), "worst: %s",
+                 s_tower.w[sum.worst_index].name);
     } else {
-        snprintf(sub, sizeof(sub), "%u watches armed, taking turns", sum.armed);
+        snprintf(sub, sizeof(sub), "%u watches - tap for detail", sum.armed);
     }
     h.sub = sub;
 
@@ -558,8 +622,11 @@ static void home_apply(void)
         }
         return;
     }
+    if ((unsigned)want >= s_home_map_n) {
+        return;
+    }
     s_home_sel = (unsigned)want;
-    home_open((unsigned)want);
+    home_open(s_home_map[want]);
 }
 
 static void row_apply(void)
@@ -619,18 +686,18 @@ static void nav_apply(void)
     if (s_view == VIEW_HOME) {
         switch ((pharos_nav_t)want) {
         case PHAROS_NAV_NEXT:
-            if (s_tower.n) {
-                s_home_sel = (s_home_sel + 1u) % s_tower.n;
+            if (s_home_map_n) {
+                s_home_sel = (s_home_sel + 1u) % s_home_map_n;
             }
             return;
         case PHAROS_NAV_PREV:
-            if (s_tower.n) {
-                s_home_sel = (s_home_sel + s_tower.n - 1u) % s_tower.n;
+            if (s_home_map_n) {
+                s_home_sel = (s_home_sel + s_home_map_n - 1u) % s_home_map_n;
             }
             return;
         case PHAROS_NAV_SELECT:
-            if (s_tower.n) {
-                home_open(s_home_sel);
+            if (s_home_sel < s_home_map_n) {
+                home_open(s_home_map[s_home_sel]);
             }
             return;
         case PHAROS_NAV_DETAIL:
@@ -639,14 +706,19 @@ static void nav_apply(void)
             return;
         case PHAROS_NAV_HOME:
         default:
-            /* Already home. A hold here toggles the rotation, which is the
-             * one thing somebody standing at the home screen might want and
-             * has nowhere else to ask for. */
-            s_tower_on = !s_tower_on;
-            if (!s_tower_on) {
-                lens_halt();
+            /* Already home. A hold opens the ring's own settings.
+             *
+             * It used to toggle the rotation, silently - so a stray long-press
+             * could stop the device watching with nothing on screen to say it
+             * had happened. That is a bad thing for a monitor to be able to do
+             * by accident. The pause is still available, as a labelled row on
+             * the page this now opens. */
+            if (lens_switch("sys.ring")) {
+                s_view = VIEW_DETAIL;
+                s_detail_page = 0;
+                s_detail_cursor = 0;
+                ESP_LOGI(TAG, "watchtower: editing the ring");
             }
-            ESP_LOGI(TAG, "watchtower %s", s_tower_on ? "running" : "paused");
             return;
         }
     }
@@ -1005,6 +1077,34 @@ void pharos_ui_tap_row(unsigned row_on_page)
 
 /* ---- the survey hooks; see pharos_survey_hook.h ---- */
 
+/* One accelerometer sample per UI tick - about 20 Hz, which is a dozen samples
+ * per footfall at ordinary walking cadence. Cheap: one 6-byte I2C read. */
+static void motion_pump(void)
+{
+    if (!s_motion.present) {
+        return;
+    }
+    int32_t x = 0, y = 0, z = 0;
+    if (pharos_bsp_imu_read(&x, &y, &z)) {
+        pm_observe(&s_motion, x, y, z, (uint64_t)esp_timer_get_time());
+    }
+}
+
+bool pharos_ui_motion(uint8_t *state, uint32_t *steps, uint32_t *still_for_s)
+{
+    pm_verdict_t v;
+    pm_evaluate(&s_motion, (uint64_t)esp_timer_get_time(), &v);
+    if (state)       *state = (uint8_t)v.state;
+    if (steps)       *steps = v.steps;
+    if (still_for_s) *still_for_s = v.still_for_s;
+    return v.present;
+}
+
+bool pharos_ui_has_travelled(uint32_t since_steps)
+{
+    return pm_has_travelled(&s_motion, since_steps);
+}
+
 void pharos_survey_network(const uint8_t bssid[6], uint8_t grade, uint32_t flags)
 {
     psv_note_network(&s_survey, bssid, grade, flags,
@@ -1029,6 +1129,132 @@ bool pharos_survey_read(struct psv_report *out)
     }
     psv_summarise(&s_survey, (uint64_t)esp_timer_get_time(), (psv_report_t *)out);
     return true;
+}
+
+/* ---- customising the ring; see pharos_ui.h ---- */
+
+/* REMEMBERED ACROSS BOOTS.
+ *
+ * A ring somebody spent a minute tuning and then lost to a power cycle is a
+ * setting nobody tunes twice. Stored as a bitmap of armed watches plus a byte
+ * of period per watch, keyed by POSITION in the ring order - which is a
+ * deliberate trade: reordering the ring in a future firmware resets everyone's
+ * choice, and that is better than a stale id-keyed map silently arming the
+ * wrong watches. The version byte makes that reset explicit. */
+#define RING_NVS_VERSION 1u
+
+static void ring_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    uint16_t armed = 0;
+    uint8_t period[PTW_MAX_WATCHES];
+    memset(period, 1, sizeof(period));
+    for (unsigned i = 0; i < s_tower.n && i < 16u; i++) {
+        if (s_tower.w[i].armed) {
+            armed |= (uint16_t)(1u << i);
+        }
+        period[i] = s_tower.w[i].period ? s_tower.w[i].period : 1u;
+    }
+    nvs_set_u8(h, "ring_ver", RING_NVS_VERSION);
+    nvs_set_u8(h, "ring_n", (uint8_t)s_tower.n);
+    nvs_set_u16(h, "ring_on", armed);
+    nvs_set_blob(h, "ring_per", period, sizeof(period));
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void ring_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint8_t ver = 0, n = 0;
+    uint16_t armed = 0;
+    if (nvs_get_u8(h, "ring_ver", &ver) != ESP_OK || ver != RING_NVS_VERSION ||
+        nvs_get_u8(h, "ring_n", &n) != ESP_OK || n != (uint8_t)s_tower.n ||
+        nvs_get_u16(h, "ring_on", &armed) != ESP_OK) {
+        /* A ring of a different shape than the one saved: the positions no
+         * longer mean the same watches, so the saved choice is discarded
+         * rather than applied to the wrong ones. */
+        nvs_close(h);
+        return;
+    }
+    uint8_t period[PTW_MAX_WATCHES];
+    size_t len = sizeof(period);
+    if (nvs_get_blob(h, "ring_per", period, &len) == ESP_OK &&
+        len == sizeof(period)) {
+        for (unsigned i = 0; i < s_tower.n; i++) {
+            ptw_set_period(&s_tower, i, period[i]);
+        }
+    }
+    for (unsigned i = 0; i < s_tower.n && i < 16u; i++) {
+        /* set_armed refuses to empty the ring, so a corrupt all-zero bitmap
+         * cannot leave the device watching nothing. */
+        ptw_set_armed(&s_tower, i, (armed & (1u << i)) != 0u);
+    }
+    nvs_close(h);
+    ESP_LOGI(TAG, "watchtower: restored ring (%ums a lap)",
+             (unsigned)ptw_lap_ms(&s_tower));
+}
+
+unsigned pharos_ui_ring_count(void) { return s_tower.n; }
+
+bool pharos_ui_ring_at(unsigned i, const char **name, bool *armed,
+                       uint8_t *period, uint8_t *state)
+{
+    if (i >= s_tower.n) {
+        return false;
+    }
+    if (name)   *name = s_tower.w[i].name;
+    if (armed)  *armed = s_tower.w[i].armed;
+    if (period) *period = s_tower.w[i].period ? s_tower.w[i].period : 1u;
+    if (state)  *state = (uint8_t)s_tower.w[i].state;
+    return true;
+}
+
+bool pharos_ui_ring_toggle(unsigned i)
+{
+    if (i >= s_tower.n) {
+        return false;
+    }
+    if (!ptw_set_armed(&s_tower, i, !s_tower.w[i].armed)) {
+        return false; /* refused - the last watch cannot be switched off */
+    }
+    ring_save();
+    ESP_LOGI(TAG, "watchtower: %s %s (%ums a lap)", s_tower.w[i].name,
+             s_tower.w[i].armed ? "on" : "off",
+             (unsigned)ptw_lap_ms(&s_tower));
+    return true;
+}
+
+bool pharos_ui_ring_cycle_period(unsigned i)
+{
+    uint8_t p = 0;
+    if (!pharos_ui_ring_at(i, NULL, NULL, &p, NULL)) {
+        return false;
+    }
+    p = (uint8_t)((p % PTW_MAX_PERIOD) + 1u);
+    if (!ptw_set_period(&s_tower, i, p)) {
+        return false;
+    }
+    ring_save();
+    return true;
+}
+
+uint32_t pharos_ui_ring_lap_ms(void) { return ptw_lap_ms(&s_tower); }
+bool pharos_ui_ring_running(void) { return s_tower_on; }
+
+void pharos_ui_ring_set_running(bool on)
+{
+    s_tower_on = on;
+    if (!on) {
+        lens_halt();
+    }
+    ESP_LOGI(TAG, "watchtower %s", on ? "running" : "paused");
 }
 
 void pharos_ui_tower_dump(char *buf, size_t cap)
@@ -1415,7 +1641,12 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
      * open. That is the thing the ring exists to fix: nobody should have to be
      * sitting inside the right lens at the moment an attack happens. */
     psv_reset(&s_survey, (uint64_t)esp_timer_get_time());
+    pm_reset(&s_motion);
+    pm_set_present(&s_motion, pharos_bsp_imu_present());
+    ESP_LOGI(TAG, "motion sensing %s",
+             s_motion.present ? "live" : "unavailable (no IMU answered)");
     tower_arm_all();
+    ring_load();
     s_tower_on = s_fence_ok && s_tower.n > 0;
     s_view = VIEW_HOME;
     s_cursor = 0;
@@ -1446,6 +1677,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         /* Fold whatever the active lens is seeing into the correlator. */
         aegis_pump(active, dt_ms);
 
+        motion_pump();
         boot_button_poll(dt_ms);
         nav_apply();
         row_apply();

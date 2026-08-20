@@ -87,6 +87,12 @@ void test_tower(void);
 /* Suite defined in test_survey.c */
 void test_survey(void);
 
+/* Suite defined in test_ring.c */
+void test_ring(void);
+
+/* Suite defined in test_motion.c */
+void test_motion(void);
+
 /* Suite defined in test_rival.c */
 void test_rival(void);
 

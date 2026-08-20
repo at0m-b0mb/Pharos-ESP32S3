@@ -237,6 +237,76 @@ int ptw_turn(ptw_state_st *s, uint64_t now_us, bool hold, bool *changed)
     return (int)s->cursor;
 }
 
+bool ptw_set_armed(ptw_state_st *s, unsigned i, bool armed)
+{
+    if (!s || i >= s->n) {
+        return false;
+    }
+    if (s->w[i].armed == armed) {
+        return true;
+    }
+    if (!armed) {
+        /* The last one cannot be switched off. The ring's own controls are
+         * reached THROUGH the ring, so a watchtower watching nothing would be
+         * a state somebody could enter and not obviously get out of. */
+        unsigned others = 0;
+        for (unsigned k = 0; k < s->n; k++) {
+            if (k != i && s->w[k].armed) {
+                others++;
+            }
+        }
+        if (!others) {
+            return false;
+        }
+    }
+    s->w[i].armed = armed;
+    if (armed) {
+        /* A watch just switched on has no reading, and must not inherit the
+         * stale one it had before it was switched off. */
+        s->w[i].seen_us = 0;
+        s->w[i].state = PTW_UNKNOWN;
+        s->w[i].score = 0;
+    } else if (s->cursor == i) {
+        /* It was holding the radio. Let the next turn move on rather than
+         * leaving the cursor on something that is no longer running. */
+        s->handover_us = 0;
+    }
+    return true;
+}
+
+bool ptw_set_period(ptw_state_st *s, unsigned i, uint8_t period)
+{
+    if (!s || i >= s->n) {
+        return false;
+    }
+    if (period < 1u) {
+        period = 1u;
+    }
+    if (period > PTW_MAX_PERIOD) {
+        period = PTW_MAX_PERIOD;
+    }
+    s->w[i].period = period;
+    return true;
+}
+
+uint32_t ptw_lap_ms(const ptw_state_st *s)
+{
+    if (!s) {
+        return 0;
+    }
+    /* The average lap, in the same terms rotation_us uses: total work of one
+     * full cycle of every period, divided by the laps in it. */
+    unsigned slices = 0;
+    for (unsigned i = 0; i < s->n; i++) {
+        if (!s->w[i].armed) {
+            continue;
+        }
+        const uint8_t p = s->w[i].period ? s->w[i].period : 1u;
+        slices += PTW_MAX_PERIOD / p;
+    }
+    return (uint32_t)((slices * s->dwell_ms) / PTW_MAX_PERIOD);
+}
+
 void ptw_summarise(const ptw_state_st *s, uint64_t now_us, ptw_summary_t *out)
 {
     if (!out) {

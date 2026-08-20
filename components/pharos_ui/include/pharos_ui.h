@@ -42,6 +42,33 @@ void pharos_ui_tap_row(unsigned row_on_page);
  * whose turn it is. Fills at most `cap` lines into `buf`. */
 void pharos_ui_tower_dump(char *buf, size_t cap);
 
+/* ---- customising the ring ----
+ *
+ * Which watches the home ring carries is the operator's choice: somebody
+ * working a Wi-Fi engagement does not need the microphone, and every watch left
+ * on is airtime the ones they care about do not get. The Ring lens edits this;
+ * the choice is remembered across boots.
+ */
+/* ---- motion ----
+ *
+ * The board's QMI8658, read once per UI tick. `state` is a pm_state_t carried
+ * as a byte. Returns false when no IMU answered - which callers must treat as
+ * UNKNOWN, never as "not moving"; see pharos_motion.h. */
+bool pharos_ui_motion(uint8_t *state, uint32_t *steps, uint32_t *still_for_s);
+
+/* Has the person gone somewhere since `since_steps`? The gate Vigil uses
+ * before it will call anything a follower. True on a board with no IMU. */
+bool pharos_ui_has_travelled(uint32_t since_steps);
+
+unsigned pharos_ui_ring_count(void);
+bool pharos_ui_ring_at(unsigned i, const char **name, bool *armed,
+                       uint8_t *period, uint8_t *state);
+bool pharos_ui_ring_toggle(unsigned i);
+bool pharos_ui_ring_cycle_period(unsigned i);
+uint32_t pharos_ui_ring_lap_ms(void);
+bool pharos_ui_ring_running(void);
+void pharos_ui_ring_set_running(bool on);
+
 #include "pharos_aegis.h"
 /* pharos_nav_t lives here; the nav request below speaks in it. */
 #include "pharos_hud.h"

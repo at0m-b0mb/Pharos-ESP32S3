@@ -390,6 +390,8 @@ int main(void)
     test_theme();
     test_tower();
     test_survey();
+    test_ring();
+    test_motion();
     test_census();
     test_twin();
     test_report();
