@@ -1,0 +1,272 @@
+/* Pharos - the Watchtower rotation. See pharos_tower.h for why this is a
+ * rotation and not six simultaneous watches. */
+#include "pharos_tower.h"
+
+#include <string.h>
+
+static void copy_bounded(char *dst, size_t cap, const char *src)
+{
+    size_t i = 0;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    for (; src[i] && i + 1u < cap; i++) {
+        dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
+
+void ptw_reset(ptw_state_st *s, uint32_t dwell_ms)
+{
+    if (!s) {
+        return;
+    }
+    memset(s, 0, sizeof(*s));
+    /* A floor, because a rotation faster than the engines' own windows would
+     * hand every watch a slice too short to conclude anything - six lenses all
+     * reporting UNKNOWN forever, which looks exactly like six broken lenses. */
+    s->dwell_ms = (dwell_ms < 2000u) ? 2000u : dwell_ms;
+}
+
+int ptw_find(const ptw_state_st *s, const char *id)
+{
+    if (!s || !id) {
+        return -1;
+    }
+    for (unsigned i = 0; i < s->n; i++) {
+        if (strcmp(s->w[i].id, id) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+int ptw_arm(ptw_state_st *s, const char *id, const char *name)
+{
+    if (!s || !id || !id[0] || s->n >= PTW_MAX_WATCHES) {
+        return -1;
+    }
+    if (ptw_find(s, id) >= 0) {
+        return -1;
+    }
+    ptw_watch_t *w = &s->w[s->n];
+    memset(w, 0, sizeof(*w));
+    copy_bounded(w->id, sizeof(w->id), id);
+    copy_bounded(w->name, sizeof(w->name), name ? name : id);
+    w->state = PTW_UNKNOWN;
+    w->armed = true;
+    return (int)s->n++;
+}
+
+void ptw_report(ptw_state_st *s, const char *id, ptw_state_t state,
+                uint8_t score, uint8_t ceiling, uint64_t now_us)
+{
+    const int i = ptw_find(s, id);
+    if (i < 0) {
+        return;
+    }
+    ptw_watch_t *w = &s->w[i];
+    w->state = state;
+    w->score = score;
+    w->ceiling = ceiling;
+    w->seen_us = now_us;
+}
+
+/* One full pass of the ring, in microseconds. Used as the unit for freshness
+ * so that arming another watch cannot quietly turn honest dots into lying
+ * ones: add a seventh watch and every reading is allowed to be correspondingly
+ * older before it counts as stale, because that is genuinely how much longer
+ * it now takes to get back round. */
+static uint64_t rotation_us(const ptw_state_st *s)
+{
+    unsigned armed = 0;
+    for (unsigned i = 0; i < s->n; i++) {
+        if (s->w[i].armed) {
+            armed++;
+        }
+    }
+    if (!armed) {
+        armed = 1;
+    }
+    return (uint64_t)armed * (uint64_t)s->dwell_ms * 1000ull;
+}
+
+ptw_freshness_t ptw_freshness(const ptw_state_st *s, unsigned i, uint64_t now_us)
+{
+    if (!s || i >= s->n) {
+        return PTW_EXPIRED;
+    }
+    const ptw_watch_t *w = &s->w[i];
+    /* Never having looked is not the same as having a stale reading, but for
+     * drawing purposes both are "do not stand behind this". */
+    if (!w->seen_us || now_us < w->seen_us) {
+        return PTW_EXPIRED;
+    }
+    const uint64_t age = now_us - w->seen_us;
+    const uint64_t rot = rotation_us(s);
+    if (age <= rot * PTW_AGEING_ROTATIONS) {
+        return PTW_FRESH;
+    }
+    if (age <= rot * PTW_EXPIRED_ROTATIONS) {
+        return PTW_AGEING;
+    }
+    return PTW_EXPIRED;
+}
+
+int ptw_turn(ptw_state_st *s, uint64_t now_us, bool hold, bool *changed)
+{
+    if (changed) {
+        *changed = false;
+    }
+    if (!s || !s->n) {
+        return -1;
+    }
+    unsigned armed = 0;
+    for (unsigned i = 0; i < s->n; i++) {
+        if (s->w[i].armed) {
+            armed++;
+        }
+    }
+    if (!armed) {
+        return -1;
+    }
+
+    /* First call: start the clock and take the first armed watch. */
+    if (!s->handover_us) {
+        s->handover_us = now_us;
+        s->cursor = 0;
+        while (!s->w[s->cursor].armed) {
+            s->cursor = (s->cursor + 1u) % s->n;
+        }
+        s->w[s->cursor].visits++;
+        if (changed) {
+            *changed = true;
+        }
+        return (int)s->cursor;
+    }
+
+    /* STAYING PUT WHILE SOMETHING IS HAPPENING.
+     *
+     * A rotation that walks away from an attack in progress to keep its rota
+     * tidy is worse than no rotation: the one moment the operator needs a full
+     * dwell is the moment evidence is arriving, and that is also exactly when
+     * the confidence ceiling most needs the airtime. The caller says when the
+     * active watch is earning its slice, and the tower simply waits. */
+    const uint64_t slice = (uint64_t)s->dwell_ms * 1000ull;
+    const bool slice_done =
+        (now_us >= s->handover_us) && (now_us - s->handover_us >= slice);
+
+    if (!slice_done) {
+        return (int)s->cursor; /* mid-slice; nothing to decide */
+    }
+
+    /* The slice is up. A watch that is hearing something may keep it - but
+     * only so many times in a row. An unbounded hold starves the whole ring,
+     * and it does so quietest where it matters most: the other watches simply
+     * never run, and their dots stay hollow forever. */
+    if (hold && s->held < PTW_MAX_HOLD_SLICES) {
+        s->held++;
+        s->handover_us = now_us; /* extend, do not accumulate debt */
+        return (int)s->cursor;
+    }
+    s->held = 0;
+
+    const unsigned was = s->cursor;
+    for (unsigned step = 0; step < s->n; step++) {
+        s->cursor = (s->cursor + 1u) % s->n;
+        if (s->w[s->cursor].armed) {
+            break;
+        }
+    }
+    if (s->cursor <= was) {
+        s->rotations++;
+    }
+    s->handover_us = now_us;
+    s->w[s->cursor].visits++;
+    if (changed) {
+        *changed = (s->cursor != was);
+    }
+    return (int)s->cursor;
+}
+
+void ptw_summarise(const ptw_state_st *s, uint64_t now_us, ptw_summary_t *out)
+{
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    out->worst_index = -1;
+    out->worst = PTW_UNKNOWN;
+    if (!s) {
+        out->headline = "no watches";
+        return;
+    }
+
+    for (unsigned i = 0; i < s->n; i++) {
+        const ptw_watch_t *w = &s->w[i];
+        if (!w->armed) {
+            continue;
+        }
+        out->armed++;
+
+        const ptw_freshness_t f = ptw_freshness(s, i, now_us);
+        if (!w->seen_us) {
+            out->unknown++;
+            continue;
+        }
+        if (f == PTW_EXPIRED) {
+            /* Had a reading once, but not one to stand behind now. It counts
+             * as neither reporting nor quiet - saying "all quiet" on the
+             * strength of a reading three rotations old is the exact comfort
+             * this engine exists to refuse. */
+            continue;
+        }
+        out->reporting++;
+        if (w->state <= PTW_QUIET) {
+            out->quiet++;
+        }
+        if (w->state == PTW_ALARM) {
+            out->alarms++;
+        }
+        if (w->state > out->worst ||
+            (w->state == out->worst && out->worst_index >= 0 &&
+             w->score > s->w[out->worst_index].score)) {
+            out->worst = w->state;
+            out->worst_index = (int)i;
+        }
+    }
+
+    /* The headline says what is TRUE of the watches that have actually looked
+     * recently - never "all quiet" on the strength of watches that have not. */
+    if (out->alarms) {
+        out->headline = (out->alarms > 1u) ? "ALERTS" : "ALERT";
+    } else if (out->worst == PTW_ELEVATED) {
+        out->headline = "something is up";
+    } else if (out->worst == PTW_NOTED) {
+        out->headline = "worth a look";
+    } else if (!out->armed) {
+        out->headline = "no watches";
+    } else if (!out->reporting) {
+        out->headline = "still listening";
+    } else if (out->reporting < out->armed) {
+        /* Deliberately not "all quiet": some of the ring has not reported
+         * inside its own window, and the operator should know the picture is
+         * partial rather than be told everything is fine. */
+        out->headline = "quiet so far";
+    } else {
+        out->headline = "all quiet";
+    }
+}
+
+const char *ptw_state_name(ptw_state_t st)
+{
+    switch (st) {
+    case PTW_UNKNOWN:  return "not yet";
+    case PTW_QUIET:    return "quiet";
+    case PTW_NOTED:    return "noted";
+    case PTW_ELEVATED: return "elevated";
+    case PTW_ALARM:    return "ALARM";
+    default:           return "?";
+    }
+}

@@ -412,6 +412,15 @@ static int cli_ble(int argc, char **argv)
     return 0;
 }
 
+static int cli_tower(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    static char buf[1024];
+    pharos_ui_tower_dump(buf, sizeof(buf));
+    printf("%s", buf);
+    return 0;
+}
+
 static int cli_tap(int argc, char **argv)
 {
     if (argc < 2) {
@@ -651,6 +660,14 @@ void pharos_console_start(void)
         .func = &cli_nav,
     };
     esp_console_cmd_register(&nav);
+
+    const esp_console_cmd_t tower = {
+        .command = "tower",
+        .help = "the watchtower ring: whose turn, and what each watch found",
+        .hint = NULL,
+        .func = &cli_tower,
+    };
+    esp_console_cmd_register(&tower);
 
     const esp_console_cmd_t tap = {
         .command = "tap",

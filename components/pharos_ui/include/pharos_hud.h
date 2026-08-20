@@ -107,6 +107,49 @@ void pharos_hud_set_nav_cb(pharos_hud_nav_cb_t cb);
 typedef void (*pharos_hud_row_cb_t)(unsigned row_on_page);
 void pharos_hud_set_row_cb(pharos_hud_row_cb_t cb);
 
+/* A dot on the home ring was touched. The HUD does the hit test itself,
+ * because the ring's geometry is the HUD's and asking the UI layer to reach
+ * into LVGL to find the touch point would put the coordinate system in two
+ * places. A press that lands near no dot is NOT reported here - it falls
+ * through to the ordinary nav meaning, so the bottom strip still works.
+ *
+ * Same rule as the others: this runs on LVGL's task, so record and return. */
+typedef void (*pharos_hud_home_cb_t)(unsigned dot);
+void pharos_hud_set_home_cb(pharos_hud_home_cb_t cb);
+
+/* HOME: every armed watch at once, around the rim.
+ *
+ * The answer to "I should not have to be sitting inside the right lens at the
+ * moment the attack happens". One dot per watch, positioned round the circle,
+ * coloured by what that watch last found and FADED by how long ago it found
+ * it - because there is one radio and the watches take turns, and a ring that
+ * drew a forty-second-old reading in the same ink as a live one would be
+ * claiming six receivers this device does not have.
+ *
+ * `dots` is the state per watch (a ptw_state_t), `fade` the freshness
+ * (a ptw_freshness_t), both carried as plain bytes so this header does not
+ * have to depend on the engine's. Tapping a dot activates that watch: see
+ * pharos_hud_home_hit(). */
+#define PHAROS_HUD_HOME_MAX 12
+struct pharos_hud_home {
+    unsigned n;
+    const char *label[PHAROS_HUD_HOME_MAX];
+    uint8_t state[PHAROS_HUD_HOME_MAX];
+    uint8_t fade[PHAROS_HUD_HOME_MAX];
+    uint8_t score[PHAROS_HUD_HOME_MAX];
+    int active;          /* which watch holds the radio, or -1     */
+    const char *headline;/* "all quiet", "ALERT", ...              */
+    const char *sub;     /* "6 watches armed"                      */
+    const char *clock;   /* wall time, or uptime if never set      */
+    uint8_t worst_state; /* drives the centre colour               */
+    uint8_t worst_score; /* drives the rim arc                     */
+};
+void pharos_hud_home(const struct pharos_hud_home *h);
+
+/* Which home dot is under the last touch, or -1. Uses the same layout the
+ * paint used, so the thing you press is the thing you saw. */
+int pharos_hud_home_hit(int16_t x, int16_t y);
+
 /* BROWSE: show one lens and what it is for. */
 void pharos_hud_browse(const char *name, const char *summary, const char *team,
                        unsigned index, unsigned total, uint32_t rgb);

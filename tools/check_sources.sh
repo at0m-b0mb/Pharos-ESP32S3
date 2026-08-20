@@ -153,6 +153,25 @@ if [ "$hud_bad" -eq 0 ]; then
   ok "every HUD entry point is defined once per branch"
 fi
 
+# [7] EXACTLY ONE PAGE IS UP.
+#
+# Each HUD page function used to hide the others by name. A fourth page was
+# added and three of those lists were not updated, so the home ring stayed
+# visible underneath whatever lens you opened and the two faces drew on top of
+# each other. page_show() derives the hiding from the page you ask for, and
+# nothing else may touch page visibility - otherwise the second list is back.
+echo
+echo "[7] only page_show() decides which HUD page is visible"
+stray=$(grep -n 'show(s_page_' components/pharos_ui/pharos_hud.c | \
+        grep -v 'want ==' || true)
+if [ -n "$stray" ]; then
+  while IFS= read -r line; do
+    bad "page visibility set outside page_show(): $line"
+  done <<< "$stray"
+else
+  ok "page visibility has exactly one owner"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   printf '%sSOURCES WIRED%s - firmware and host builds agree.\n' "$GRN" "$RST"

@@ -31,6 +31,7 @@
 
 /* PR_W / PR_H and the polar helpers - the panel geometry, shared with the
  * round-screen maths and with the renderer. */
+#include "pharos_dial.h"
 #include "pharos_round.h"
 
 /* Every colour here is EXACTLY representable in RGB565, which is what the
@@ -135,6 +136,20 @@ static lv_obj_t *s_fam_box[PHAROS_DISP_FAMILIES];
 static lv_obj_t *s_fam_txt[PHAROS_DISP_FAMILIES];
 
 /* detail view: the lens' own evidence as a list */
+/* ---- the home ring ---- */
+static lv_obj_t *s_page_home;
+static lv_obj_t *s_h_dot[PHAROS_HUD_HOME_MAX];
+static lv_obj_t *s_h_lbl[PHAROS_HUD_HOME_MAX];
+static lv_obj_t *s_h_core;
+static lv_obj_t *s_h_clock;
+static lv_obj_t *s_h_head;
+static lv_obj_t *s_h_sub;
+static lv_obj_t *s_h_arc;
+static lv_obj_t *s_h_ring;
+static lv_obj_t *s_h_tick[PHAROS_HUD_HOME_MAX];
+static lv_point_t s_h_pos[PHAROS_HUD_HOME_MAX];
+static unsigned s_h_n;
+
 static lv_obj_t *s_page_detail;
 static lv_obj_t *s_d_title;
 static lv_obj_t *s_d_hl;
@@ -163,6 +178,7 @@ static int s_zones_detail = -1;             /* which set is live   */
 static bool s_built;
 static pharos_hud_nav_cb_t s_nav_cb;
 static pharos_hud_row_cb_t s_row_cb;
+static pharos_hud_home_cb_t s_home_cb;
 static uint32_t s_toast_until_ms;
 
 /* ---- dirty checks ----------------------------------------------------
@@ -393,6 +409,7 @@ static void row_event(lv_event_t *e)
 }
 
 void pharos_hud_set_row_cb(pharos_hud_row_cb_t cb) { s_row_cb = cb; }
+void pharos_hud_set_home_cb(pharos_hud_home_cb_t cb) { s_home_cb = cb; }
 
 static void nav_event(lv_event_t *e)
 {
@@ -403,6 +420,22 @@ static void nav_event(lv_event_t *e)
     const pharos_nav_t what = (pharos_nav_t)(uintptr_t)lv_event_get_user_data(e);
     log_touch(code == LV_EVENT_LONG_PRESSED ? "hold zone" : "tap zone",
               (unsigned)what);
+
+    /* On the ring, a short press is aimed at a DOT, and only falls through to
+     * the zone's own meaning when it lands near none of them. */
+    if (code == LV_EVENT_SHORT_CLICKED && s_home_cb && s_page_home &&
+        !lv_obj_has_flag(s_page_home, LV_OBJ_FLAG_HIDDEN)) {
+        lv_indev_t *in = lv_indev_active();
+        lv_point_t p;
+        if (in) {
+            lv_indev_get_point(in, &p);
+            const int hit = pharos_hud_home_hit((int16_t)p.x, (int16_t)p.y);
+            if (hit >= 0) {
+                s_home_cb((unsigned)hit);
+                return;
+            }
+        }
+    }
     /* Record the intent and return. See the header: doing the real work here
      * runs it on LVGL's task, with LVGL's stack, and reboots the board. */
     if (code == LV_EVENT_LONG_PRESSED) {
@@ -426,6 +459,32 @@ static lv_obj_t *mk_zone_at(lv_obj_t *parent, lv_align_t align, int x, int y,
     lv_obj_add_event_cb(z, cb, LV_EVENT_SHORT_CLICKED, tag);
     lv_obj_add_event_cb(z, cb, LV_EVENT_LONG_PRESSED, tag);
     return z;
+}
+
+/* EXACTLY ONE PAGE IS UP.
+ *
+ * Each page function used to hide the others by name, which meant every new
+ * page had to be added to every existing function. A fourth page was added -
+ * the home ring - and three of those lists were not updated, so the ring
+ * stayed visible UNDERNEATH the lens you opened and the two faces drew on top
+ * of each other. Reported as "the UI of the home screen and the sensor were
+ * merging", which is exactly what it was.
+ *
+ * There is now one list, and it is derived: naming the page you want hides
+ * every other page by construction. A fifth page cannot reintroduce this. */
+typedef enum {
+    PAGE_HOME = 0,
+    PAGE_BROWSE,
+    PAGE_LIVE,
+    PAGE_DETAIL,
+} hud_page_t;
+
+static void page_show(hud_page_t want)
+{
+    show(s_page_home, want == PAGE_HOME);
+    show(s_page_browse, want == PAGE_BROWSE);
+    show(s_page_live, want == PAGE_LIVE);
+    show(s_page_detail, want == PAGE_DETAIL);
 }
 
 /* WHICH SET OF TARGETS IS LIVE.
@@ -807,6 +866,78 @@ bool pharos_hud_create(void)
     s_d_hint  = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, 0, 176, "");
     s_d_empty = mk_label(s_page_detail, &lv_font_montserrat_18, HUD_DIM, 0, 0, "");
 
+    /* ---- the home ring ----
+     *
+     * Twelve dots at most, laid out by pd_dial_layout() so the spacing is the
+     * host-tested geometry rather than a second copy of it here - and so that
+     * pd_dial_hit() can answer "which one did they press" from the same
+     * numbers that drew it. */
+    s_page_home = mk_box(scr);
+    lv_obj_set_size(s_page_home, 466, 466);
+    lv_obj_center(s_page_home);
+
+    /* The rim ring: the structure the dots sit on, so a quiet ring still
+     * reads as an instrument rather than as scattered dots on black. */
+    s_h_ring = mk_arc(s_page_home, 396, 2, HUD_TRACK, 0);
+    lv_arc_set_bg_angles(s_h_ring, 0, 360);
+    lv_arc_set_angles(s_h_ring, 0, 360);
+    lv_obj_set_style_arc_color(s_h_ring, lv_color_hex(HUD_TRACK), LV_PART_MAIN);
+
+    /* The worst score, as a sweep on the outside. One glance says how bad the
+     * worst thing on the ring is without reading any label. */
+    s_h_arc = mk_arc(s_page_home, 440, 10, HUD_CYAN, 0);
+
+    {
+        pd_dial_t d;
+        pd_dial_layout(PHAROS_HUD_HOME_MAX, -90.0f, 150, 205, &d);
+        for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
+            const float a = pd_dial_item_angle(&d, i);
+            const pr_point_t p = pr_polar(168, a);
+            const pr_point_t t = pr_polar(202, a);
+            s_h_pos[i].x = p.x;
+            s_h_pos[i].y = p.y;
+
+            /* A tick at the rim, so the ring has structure even where a watch
+             * is unarmed and its dot is hidden. */
+            s_h_tick[i] = mk_box(s_page_home);
+            lv_obj_set_size(s_h_tick[i], 3, 3);
+            lv_obj_align(s_h_tick[i], LV_ALIGN_CENTER, t.x - PR_CX, t.y - PR_CY);
+            lv_obj_set_style_radius(s_h_tick[i], LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_color(s_h_tick[i], lv_color_hex(HUD_TRACK), 0);
+            lv_obj_set_style_bg_opa(s_h_tick[i], LV_OPA_COVER, 0);
+
+            s_h_dot[i] = mk_box(s_page_home);
+            lv_obj_set_size(s_h_dot[i], 16, 16);
+            lv_obj_align(s_h_dot[i], LV_ALIGN_CENTER, p.x - PR_CX, p.y - PR_CY);
+            lv_obj_set_style_radius(s_h_dot[i], LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_opa(s_h_dot[i], LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(s_h_dot[i], 2, 0);
+            lv_obj_add_flag(s_h_dot[i], LV_OBJ_FLAG_HIDDEN);
+
+            /* The label sits inboard of its dot, pushed towards the middle so
+             * a twelve-character name never runs off the glass. */
+            const pr_point_t lp = pr_polar(133, a);
+            s_h_lbl[i] = mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER,
+                                  lp.x - PR_CX, lp.y - PR_CY, "");
+            lv_obj_add_flag(s_h_lbl[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    /* The core: the one thing somebody reads from across a room. */
+    s_h_core = mk_box(s_page_home);
+    lv_obj_set_size(s_h_core, 196, 196);
+    lv_obj_center(s_h_core);
+    lv_obj_set_style_radius(s_h_core, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_h_core, lv_color_hex(HUD_VOID), 0);
+    lv_obj_set_style_bg_opa(s_h_core, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_h_core, 1, 0);
+    lv_obj_set_style_border_color(s_h_core, lv_color_hex(HUD_TRACK), 0);
+
+    mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER, 0, -54, "PHAROS");
+    s_h_clock = mk_label(s_page_home, &lv_font_montserrat_26, HUD_TEXT, 0, -20, "");
+    s_h_head  = mk_label(s_page_home, &lv_font_montserrat_18, HUD_GREEN, 0, 20, "");
+    s_h_sub   = mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER, 0, 48, "");
+
     /* ---- overlays ---- */
 
     s_toast = mk_label(scr, &lv_font_montserrat_20, HUD_TEXT, 0, 86, "");
@@ -859,9 +990,7 @@ bool pharos_hud_create(void)
     lv_obj_add_flag(s_zone_page[1], LV_OBJ_FLAG_HIDDEN);
     s_zones_detail = 0;
 
-    show(s_page_live, false);
-    show(s_page_detail, false);
-    show(s_page_browse, true);
+    page_show(PAGE_BROWSE);
 
     s_built = true;
     return true;
@@ -927,6 +1056,101 @@ void pharos_hud_toast(const char *msg)
 
 /* ---- BROWSE: what does this tool actually do? ------------------------ */
 
+/* The colour of a watch's dot. Verdict colours, not theme colours - a red on
+ * the home ring must mean what a red on the Census page means. */
+static uint32_t home_state_colour(uint8_t st)
+{
+    switch (st) {
+    case 4:  return HUD_RED;    /* PTW_ALARM    */
+    case 3:  return HUD_ORANGE; /* PTW_ELEVATED */
+    case 2:  return HUD_AMBER;  /* PTW_NOTED    */
+    case 1:  return HUD_GREEN;  /* PTW_QUIET    */
+    default: return HUD_DENIED; /* PTW_UNKNOWN  */
+    }
+}
+
+void pharos_hud_home(const struct pharos_hud_home *h)
+{
+    if (!s_built || !h) {
+        return;
+    }
+    toast_tick();
+    page_show(PAGE_HOME);
+    zones_mode(false);
+
+    s_h_n = (h->n > PHAROS_HUD_HOME_MAX) ? PHAROS_HUD_HOME_MAX : h->n;
+
+    for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
+        const bool used = (i < s_h_n);
+        show(s_h_dot[i], used);
+        show(s_h_lbl[i], used);
+        show(s_h_tick[i], used);
+        if (!used) {
+            continue;
+        }
+        set_text(s_h_lbl[i], h->label[i] ? h->label[i] : "");
+
+        const uint32_t col = home_state_colour(h->state[i]);
+        /* FADE IS THE HONESTY. There is one radio and the watches take turns,
+         * so a dot is only as trustworthy as it is recent: a live reading is
+         * filled, an ageing one is dimmed, an expired one is drawn hollow -
+         * an outline with nothing inside it, which is exactly what the device
+         * knows about that watch right now. */
+        const uint8_t fade = h->fade[i];
+        const bool hollow = (fade >= 2u);
+        set_bg_colour(s_h_dot[i], hollow ? HUD_VOID : col);
+        lv_obj_set_style_bg_opa(s_h_dot[i],
+                                hollow ? LV_OPA_TRANSP
+                                       : (fade ? LV_OPA_50 : LV_OPA_COVER), 0);
+        lv_obj_set_style_border_color(s_h_dot[i], lv_color_hex(col), 0);
+        lv_obj_set_style_border_opa(s_h_dot[i],
+                                    hollow ? LV_OPA_70 : LV_OPA_COVER, 0);
+
+        /* The watch that currently holds the radio wears a bigger dot and a
+         * lit label, so "which one am I actually listening to" is answered
+         * without reading anything. */
+        const bool live = ((int)i == h->active);
+        lv_obj_set_size(s_h_dot[i], live ? 22 : 16, live ? 22 : 16);
+        lv_obj_align(s_h_dot[i], LV_ALIGN_CENTER,
+                     s_h_pos[i].x - PR_CX, s_h_pos[i].y - PR_CY);
+        set_text_colour(s_h_lbl[i], live ? HUD_TEXT
+                                         : (hollow ? HUD_DENIED : HUD_DIM));
+    }
+
+    set_text(s_h_clock, h->clock ? h->clock : "");
+    set_text(s_h_head, h->headline ? h->headline : "");
+    set_text(s_h_sub, h->sub ? h->sub : "");
+
+    const uint32_t wc = home_state_colour(h->worst_state);
+    set_text_colour(s_h_head, wc);
+    lv_obj_set_style_border_color(
+        s_h_core, lv_color_hex(h->worst_state >= 3u ? wc : HUD_TRACK), 0);
+
+    set_arc_colour(s_h_arc, wc);
+    set_arc_value(s_h_arc, h->worst_score);
+}
+
+int pharos_hud_home_hit(int16_t x, int16_t y)
+{
+    /* Nearest dot within a thumb's reach, rather than a wedge test: the dots
+     * are 16 px and a fingertip is about 90, so "which did they mean" is a
+     * distance question. PR_TOUCH_MIN is the same minimum the dial geometry is
+     * checked against. */
+    int best = -1;
+    int32_t best_d2 = (int32_t)PR_TOUCH_MIN * PR_TOUCH_MIN;
+    for (unsigned i = 0; i < s_h_n; i++) {
+        const int32_t dx = (int32_t)x - s_h_pos[i].x;
+        const int32_t dy = (int32_t)y - s_h_pos[i].y;
+        const int32_t d2 = dx * dx + dy * dy;
+        if (d2 <= best_d2) {
+            best_d2 = d2;
+            best = (int)i;
+        }
+    }
+    return best;
+}
+
+
 void pharos_hud_browse(const char *name, const char *summary, const char *team,
                        unsigned index, unsigned total, uint32_t rgb)
 {
@@ -934,9 +1158,7 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
         return;
     }
     toast_tick();
-    show(s_page_live, false);
-    show(s_page_detail, false);
-    show(s_page_browse, true);
+    page_show(PAGE_BROWSE);
     zones_mode(false);
 
     set_text(s_b_name, name ? name : "");
@@ -961,9 +1183,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
         return;
     }
     toast_tick();
-    show(s_page_browse, false);
-    show(s_page_detail, false);
-    show(s_page_live, true);
+    page_show(PAGE_LIVE);
     zones_mode(false); /* three columns and a bottom strip */
 
     if (!d) {
@@ -1046,9 +1266,7 @@ void pharos_hud_detail(const char *lens, const char *head_left,
         return;
     }
     toast_tick();
-    show(s_page_browse, false);
-    show(s_page_live, false);
-    show(s_page_detail, true);
+    page_show(PAGE_DETAIL);
     zones_mode(true); /* one target per row; see zones_mode() */
 
     set_text(s_d_title, lens ? lens : "");
@@ -1229,5 +1447,8 @@ void pharos_hud_splash(const char *version, bool fence_clean)
     (void)version; (void)fence_clean;
 }
 void pharos_hud_colourbars(void) {}
+void pharos_hud_home(const struct pharos_hud_home *h) { (void)h; }
+void pharos_hud_set_home_cb(pharos_hud_home_cb_t cb) { (void)cb; }
+int pharos_hud_home_hit(int16_t x, int16_t y) { (void)x; (void)y; return -1; }
 
 #endif

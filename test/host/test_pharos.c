@@ -388,6 +388,7 @@ int main(void)
     test_rival();
     test_acoustic();
     test_theme();
+    test_tower();
     test_census();
     test_twin();
     test_report();

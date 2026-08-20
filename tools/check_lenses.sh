@@ -101,6 +101,28 @@ else
   echo "[3] skipped (no ELF given; CI passes build/pharos.elf)"
 fi
 
+# EVERY WATCH ON THE HOME RING IS A LENS THAT EXISTS.
+#
+# The ring is a hand-written list of lens ids in pharos_ui.c. A typo there does
+# not break the build and does not crash: the ring simply carries one fewer
+# watch, which is indistinguishable from a deliberate choice. "rf.rival" was
+# written "ble.rival" and the only symptom was seven dots instead of eight.
+echo
+echo "[ring] every watch on the home ring resolves to a registered lens"
+ring_bad=0
+ring_ids=$(sed -n '/k_ring_order\[\] = {/,/};/p' components/pharos_ui/pharos_ui.c | \
+           grep -oE '"[a-z0-9]+\.[a-z0-9]+"' | tr -d '"')
+for rid in $ring_ids; do
+  if ! grep -rqF "\"$rid\"" components/pharos_lens_*/*.c; then
+    printf '%s  BAD%s  home ring names "%s", which no lens registers\n' "$RED" "$RST" "$rid"
+    ring_bad=1
+    fail=1
+  fi
+done
+if [ "$ring_bad" -eq 0 ]; then
+  printf '%s  ok%s   every ring watch resolves (%s)\n' "$GRN" "$RST" "$(echo $ring_ids | wc -w | tr -d ' ') watches"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   printf '%sLENSES INTACT%s\n' "$GRN" "$RST"

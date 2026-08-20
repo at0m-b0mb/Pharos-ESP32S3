@@ -16,6 +16,7 @@
 #define PHAROS_UI_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "pharos_bsp.h"
 
@@ -36,6 +37,10 @@ int pharos_ui_detail_cursor(int *opened);
  * page, exactly as a finger landing on it would. Used by the `tap` console
  * command, which is how the detail interaction is verified over USB. */
 void pharos_ui_tap_row(unsigned row_on_page);
+
+/* The watchtower, for the `tower` console command: how the ring is doing and
+ * whose turn it is. Fills at most `cap` lines into `buf`. */
+void pharos_ui_tower_dump(char *buf, size_t cap);
 
 #include "pharos_aegis.h"
 /* pharos_nav_t lives here; the nav request below speaks in it. */

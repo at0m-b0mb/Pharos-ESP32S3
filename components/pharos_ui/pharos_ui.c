@@ -32,6 +32,7 @@
 #include "pharos_dial.h"
 #include "pharos_hud.h"
 #include "pharos_theme.h"
+#include "pharos_tower.h"
 #include "pharos_radio.h"
 #include "pharos_lens.h"
 
@@ -144,12 +145,59 @@ void pharos_ui_aegis_ack(void)
  *
  * So the callback records an intent and returns. The UI task, which owns the
  * lens lifecycle already, performs it on the next tick. */
-typedef enum { VIEW_BROWSE = 0, VIEW_LIVE, VIEW_DETAIL, VIEW_OPENED } view_t;
+typedef enum { VIEW_HOME = 0, VIEW_BROWSE, VIEW_LIVE, VIEW_DETAIL,
+               VIEW_OPENED } view_t;
 
 static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
 static unsigned s_order_n;
+
+/* ---- the watchtower -------------------------------------------------
+ *
+ * "I should not have to be inside the right lens at the moment it happens."
+ * There is one 2.4 GHz receiver, so the watches take turns; see
+ * pharos_tower.h for why that is the honest reading of the request and what
+ * the ring has to show for it not to become a comfortable lie.
+ *
+ * s_tower_on is the mode, not a view: the rotation keeps running while the
+ * operator is reading a detail page, and stops the moment they pick a lens by
+ * hand - somebody who chose a watch did not ask to be moved off it. */
+static ptw_state_st s_tower;
+static bool s_tower_on;
+static const char *s_tower_pending; /* lens the rotation wants next */
+static unsigned s_home_sel;         /* which dot the side zones point at */
+static int s_home_tap = -1;         /* a dot touched on the glass, or -1 */
+static uint32_t s_paints, s_paint_misses;
+
+/* How a lens' own display maps onto the one scale the ring can draw. Every
+ * engine has its own bands; the ring needs a single answer to "how much should
+ * this worry somebody", so the score - which every engine already calibrates
+ * against its own ceiling - is what carries across. */
+static ptw_state_t tower_state_of(const struct pharos_lens_display *d)
+{
+    if (!d) {
+        return PTW_QUIET;
+    }
+    /* A lens whose score is not a threat scale states its own ring severity;
+     * see pharos_lens_display::alert. Only the lenses whose score genuinely
+     * measures threat let the ring read it off the number. */
+    if (d->has_alert) {
+        switch (d->alert) {
+        case 3:  return PTW_ALARM;
+        case 2:  return PTW_ELEVATED;
+        case 1:  return PTW_NOTED;
+        default: return PTW_QUIET;
+        }
+    }
+    if (!d->has_score) {
+        return PTW_QUIET; /* running, nothing to report is a real answer */
+    }
+    if (d->score >= 70u) return PTW_ALARM;
+    if (d->score >= 45u) return PTW_ELEVATED;
+    if (d->score >= 20u) return PTW_NOTED;
+    return PTW_QUIET;
+}
 static unsigned s_cursor;
-static view_t s_view = VIEW_BROWSE;
+static view_t s_view = VIEW_HOME;
 static unsigned s_detail_page;
 /* Which row the centre tap would open, as an absolute index across the whole
  * list. The page shown follows it, so moving the cursor off the bottom turns
@@ -201,6 +249,171 @@ static const char *lens_team(const pharos_lens_t *l)
 }
 
 static bool lens_launchable(const pharos_lens_t *l);
+static void theme_sync(void);
+static bool lens_switch(const char *id);
+
+/* Which lenses go on the ring.
+ *
+ * The observing lenses - the ones that answer a question about the room right
+ * now. A trainer has nothing to watch, and the settings page is not a watch,
+ * so putting either on the ring would pad the count in "6 watches armed" with
+ * things that cannot report. */
+static void tower_arm_all(void)
+{
+    /* THE RING IS ORDERED ON PURPOSE, AND IT IS SHORT ON PURPOSE.
+     *
+     * Registry order put Watch - the headline detector, the whole reason this
+     * project exists - tenth of twelve, and twelve watches at six seconds each
+     * is a seventy-second lap. Every dot would spend most of its life stale,
+     * which on a ring whose honesty rests on freshness is close to useless.
+     *
+     * So: a stated running order, headliners first, and a cap. Eight watches
+     * at five seconds is a forty-second lap, and eight labels fit round a
+     * 466 px circle without colliding. Anything not on the ring is still one
+     * press away through the browser - it just is not something the device
+     * promises to keep checking on its own. */
+    static const char *k_ring_order[] = {
+        "wifi.watch",   /* deauthentication - the headliner        */
+        "wifi.census",  /* what is out there and how safe it is    */
+        "wifi.twin",    /* evil twin / rogue AP                    */
+        "rf.rival",     /* Flippers, Pwnagotchis, pentest hardware */
+        "wifi.karma",   /* a radio answering to any name           */
+        "wifi.mirage",  /* beacon and SSID floods                  */
+        "wifi.harvest", /* handshake and PMKID collection          */
+        "wifi.probe",   /* what devices leak by asking             */
+    };
+    const unsigned want = (unsigned)(sizeof(k_ring_order) / sizeof(k_ring_order[0]));
+
+    ptw_reset(&s_tower, 5000);
+    for (unsigned i = 0; i < want && s_tower.n < PTW_MAX_WATCHES; i++) {
+        const pharos_lens_t *l = pharos_lens_find(k_ring_order[i]);
+        /* A name here that does not resolve is a typo or a renamed lens. It
+         * degrades gracefully - the ring just carries one fewer watch - and
+         * that is exactly why it has to be LOUD: "rf.rival" was written
+         * "ble.rival" and the only symptom was a ring with seven dots instead
+         * of eight, which looks like a design decision. tools/check_lenses.sh
+         * now fails the build on it; this catches a lens renamed at runtime. */
+        if (!l) {
+            ESP_LOGE(TAG, "watchtower: no lens '%s' - ring is short one watch",
+                     k_ring_order[i]);
+            continue;
+        }
+        if (!l->display || !lens_launchable(l)) {
+            ESP_LOGW(TAG, "watchtower: %s cannot join the ring%s", l->id,
+                     l->display ? " (radio locked)" : " (no display)");
+            continue;
+        }
+        char up[PTW_NAME_MAX + 1];
+        unsigned k = 0;
+        for (; l->name[k] && k < sizeof(up) - 1; k++) {
+            const char c = l->name[k];
+            up[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+        up[k] = '\0';
+        ptw_arm(&s_tower, l->id, up);
+    }
+    ESP_LOGI(TAG, "watchtower: %u watches armed, %ums each (%us a lap)",
+             s_tower.n, (unsigned)s_tower.dwell_ms,
+             (unsigned)((s_tower.n * s_tower.dwell_ms) / 1000u));
+}
+
+/* Open the watch a dot names.
+ *
+ * Picking a watch by hand STOPS the rotation. Somebody who chose Watch did not
+ * ask to be moved off it five seconds later, and a device that wandered away
+ * from the lens you just opened would be unusable. Long-pressing back to the
+ * ring resumes it. */
+static void home_open(unsigned i)
+{
+    if (i >= s_tower.n) {
+        return;
+    }
+    const pharos_lens_t *l = pharos_lens_find(s_tower.w[i].id);
+    if (!l) {
+        return;
+    }
+    if (!lens_launchable(l)) {
+        if (pharos_bsp_display_lock(30)) {
+            pharos_hud_toast("radio locked");
+            pharos_bsp_display_unlock();
+        }
+        return;
+    }
+    s_tower_on = false;
+    s_tower_pending = NULL;
+    if (lens_switch(l->id)) {
+        s_view = VIEW_LIVE;
+        /* Keep the browser's cursor with the ring, so leaving a lens the old
+         * way lands somewhere that makes sense. */
+        for (unsigned k = 0; k < s_order_n; k++) {
+            if (s_order[k] == l) {
+                s_cursor = k;
+                break;
+            }
+        }
+        ESP_LOGI(TAG, "watchtower: opened %s (rotation paused)", l->id);
+    }
+}
+
+static void paint_home(void)
+{
+    if (!pharos_bsp_display_lock(30)) {
+        s_paint_misses++;
+        return;
+    }
+    s_paints++;
+    pharos_hud_create();
+    theme_sync();
+
+    const uint64_t now = (uint64_t)esp_timer_get_time();
+    ptw_summary_t sum;
+    ptw_summarise(&s_tower, now, &sum);
+
+    struct pharos_hud_home h;
+    memset(&h, 0, sizeof(h));
+    h.n = s_tower.n;
+    for (unsigned i = 0; i < s_tower.n && i < PHAROS_HUD_HOME_MAX; i++) {
+        h.label[i] = s_tower.w[i].name;
+        h.state[i] = (uint8_t)s_tower.w[i].state;
+        h.fade[i] = (uint8_t)ptw_freshness(&s_tower, i, now);
+        h.score[i] = s_tower.w[i].score;
+    }
+    h.active = -1;
+    {
+        const pharos_lens_t *live = pharos_lens_active();
+        if (live && s_tower_on) {
+            h.active = ptw_find(&s_tower, live->id);
+        }
+    }
+    h.headline = sum.headline;
+    h.worst_state = (uint8_t)sum.worst;
+    h.worst_score = (sum.worst_index >= 0) ? s_tower.w[sum.worst_index].score : 0;
+
+    static char sub[40];
+    if (!s_fence_ok) {
+        snprintf(sub, sizeof(sub), "FENCE UNVERIFIED");
+    } else if (!s_tower_on) {
+        snprintf(sub, sizeof(sub), "%u watches - rotation paused", sum.armed);
+    } else if (sum.worst_index >= 0 && sum.worst >= PTW_ELEVATED) {
+        /* Name the watch that found it, so "which sensor" needs no tapping. */
+        snprintf(sub, sizeof(sub), "%s", s_tower.w[sum.worst_index].name);
+    } else {
+        snprintf(sub, sizeof(sub), "%u watches armed, taking turns", sum.armed);
+    }
+    h.sub = sub;
+
+    /* The clock is uptime until something sets the time - a wall clock this
+     * device has no way to know would be a made-up number on the largest text
+     * on the screen. */
+    static char clk[12];
+    const uint32_t up_s = (uint32_t)(now / 1000000ull);
+    snprintf(clk, sizeof(clk), "%02u:%02u", (unsigned)((up_s / 60u) % 100u),
+             (unsigned)(up_s % 60u));
+    h.clock = clk;
+
+    pharos_hud_home(&h);
+    pharos_bsp_display_unlock();
+}
 
 /* Paint the browse card for wherever the cursor is. */
 static void paint_browse(void)
@@ -251,6 +464,12 @@ static void request_apply(void)
 }
 
 /* Filed from LVGL's task. Record and return - see pharos_hud.h. */
+static void hud_home_cb(unsigned dot)
+{
+    s_home_tap = (int)dot;
+}
+
+/* Filed from LVGL's task. Record and return - see pharos_hud.h. */
 static void hud_row_cb(unsigned row_on_page)
 {
     s_row_pending = (int)row_on_page;
@@ -268,6 +487,19 @@ static void hud_row_cb(unsigned row_on_page)
  * finger is what says the press registered - on a control that CYCLES (theme,
  * volume, region) the value changing is the only other feedback, and if the
  * press missed there is none at all. */
+/* A dot touched on the ring. Same rule as everywhere else: LVGL's callback
+ * records, the UI task acts. */
+static void home_apply(void)
+{
+    const int want = s_home_tap;
+    s_home_tap = -1;
+    if (want < 0 || s_view != VIEW_HOME) {
+        return;
+    }
+    s_home_sel = (unsigned)want;
+    home_open((unsigned)want);
+}
+
 static void row_apply(void)
 {
     const int want = s_row_pending;
@@ -317,6 +549,44 @@ static void nav_apply(void)
     s_nav_pending = -1;
     if (!s_order_n) {
         return;
+    }
+
+    /* THE RING IS NOT A LIST. Left and right step the ring's own selection,
+     * the centre opens whatever is selected, and the bottom strip is what
+     * takes somebody out to the old one-lens-at-a-time browser. */
+    if (s_view == VIEW_HOME) {
+        switch ((pharos_nav_t)want) {
+        case PHAROS_NAV_NEXT:
+            if (s_tower.n) {
+                s_home_sel = (s_home_sel + 1u) % s_tower.n;
+            }
+            return;
+        case PHAROS_NAV_PREV:
+            if (s_tower.n) {
+                s_home_sel = (s_home_sel + s_tower.n - 1u) % s_tower.n;
+            }
+            return;
+        case PHAROS_NAV_SELECT:
+            if (s_tower.n) {
+                home_open(s_home_sel);
+            }
+            return;
+        case PHAROS_NAV_DETAIL:
+            s_view = VIEW_BROWSE;
+            paint_browse();
+            return;
+        case PHAROS_NAV_HOME:
+        default:
+            /* Already home. A hold here toggles the rotation, which is the
+             * one thing somebody standing at the home screen might want and
+             * has nowhere else to ask for. */
+            s_tower_on = !s_tower_on;
+            if (!s_tower_on) {
+                lens_halt();
+            }
+            ESP_LOGI(TAG, "watchtower %s", s_tower_on ? "running" : "paused");
+            return;
+        }
     }
 
     switch ((pharos_nav_t)want) {
@@ -433,10 +703,13 @@ static void nav_apply(void)
             s_view = VIEW_LIVE; /* one step back, not all the way out */
             return;
         }
+        /* Out of a lens goes back to the RING, not to the one-at-a-time
+         * browser: the ring is where somebody can see everything, so it is
+         * where "back" should land. The rotation picks up again by itself. */
         lens_halt();
-        s_view = VIEW_BROWSE;
-        ESP_LOGI(TAG, "stopped; back to browse");
-        paint_browse();
+        s_tower_on = true;
+        s_view = VIEW_HOME;
+        ESP_LOGI(TAG, "stopped; back to the watchtower");
         return;
     }
 
@@ -570,7 +843,6 @@ static bool lens_launchable(const pharos_lens_t *l)
  * detail line, a 0..100 gauge - so a new lens gets a screen for free. Where a
  * lens exposes a verdict snapshot we show it; otherwise we show that it is
  * running, which is still the truth and still better than a black panel. */
-static uint32_t s_paints, s_paint_misses;
 
 /* ---- the alarm latch -------------------------------------------------
  *
@@ -648,6 +920,42 @@ void pharos_ui_tap_row(unsigned row_on_page)
 {
     if (row_on_page < PHAROS_HUD_ROWS) {
         s_row_pending = (int)row_on_page;
+    }
+}
+
+void pharos_ui_tower_dump(char *buf, size_t cap)
+{
+    if (!buf || !cap) {
+        return;
+    }
+    const uint64_t now = (uint64_t)esp_timer_get_time();
+    ptw_summary_t sum;
+    ptw_summarise(&s_tower, now, &sum);
+    static const char *fresh[] = { "fresh", "ageing", "expired" };
+    size_t k = 0;
+    k += (size_t)snprintf(buf + k, (k < cap) ? cap - k : 0,
+                          "watchtower: %s, %u armed, dwell %ums, %u rotations\n"
+                          "  headline: %s   (reporting %u, quiet %u, unknown %u,"
+                          " alarms %u)\n",
+                          s_tower_on ? "running" : "PAUSED", sum.armed,
+                          (unsigned)s_tower.dwell_ms, (unsigned)s_tower.rotations,
+                          sum.headline, sum.reporting, sum.quiet, sum.unknown,
+                          sum.alarms);
+    for (unsigned i = 0; i < s_tower.n; i++) {
+        const ptw_watch_t *w = &s_tower.w[i];
+        const ptw_freshness_t f = ptw_freshness(&s_tower, i, now);
+        const uint32_t age_s =
+            w->seen_us ? (uint32_t)((now - w->seen_us) / 1000000ull) : 0u;
+        k += (size_t)snprintf(buf + k, (k < cap) ? cap - k : 0,
+                              "%s %-11s %-9s %3u/%-3u  %-7s %us ago  visits=%u\n",
+                              (i == s_tower.cursor) ? " >" : "  ", w->name,
+                              ptw_state_name(w->state), w->score, w->ceiling,
+                              fresh[f], (unsigned)age_s, (unsigned)w->visits);
+    }
+    if (k < cap) {
+        buf[k] = '\0';
+    } else if (cap) {
+        buf[cap - 1] = '\0';
     }
 }
 
@@ -788,8 +1096,56 @@ static void theme_sync(void)
     }
 }
 
+/* Hand the radio round the ring.
+ *
+ * Called every tick. The one rule that makes a rotation safe is in the engine
+ * (see ptw_turn): it does not walk away from a watch that is hearing
+ * something, because the moment evidence is arriving is the moment the
+ * confidence ceiling most needs the airtime. This decides what "hearing
+ * something" means and does the actual lens switch.
+ *
+ * The switch itself is deferred to the top of the loop rather than done here,
+ * for the same reason nav intents are: activating a lens restarts the radio,
+ * and doing that from inside a paint is how the device used to reboot. */
+static void tower_rotate(void)
+{
+    if (!s_tower_on || !s_tower.n) {
+        return;
+    }
+    const uint64_t now = (uint64_t)esp_timer_get_time();
+    const pharos_lens_t *live = pharos_lens_active();
+
+    /* Record what the watch holding the radio is currently saying, so its dot
+     * carries a real reading rather than the last one it happened to leave. */
+    bool hold = false;
+    if (live) {
+        struct pharos_lens_display d;
+        memset(&d, 0, sizeof(d));
+        if (live->display && live->display(&d)) {
+            const ptw_state_t st = tower_state_of(&d);
+            ptw_report(&s_tower, live->id, st, d.score, d.ceiling, now);
+            /* Anything above background keeps the radio where it is. */
+            hold = (st >= PTW_ELEVATED);
+        }
+    }
+
+    bool changed = false;
+    const int who = ptw_turn(&s_tower, now, hold, &changed);
+    if (who < 0 || !changed) {
+        return;
+    }
+    if (live && strcmp(live->id, s_tower.w[who].id) == 0) {
+        return;
+    }
+    s_tower_pending = s_tower.w[who].id;
+}
+
 static void paint(const pharos_lens_t *active)
 {
+    if (s_view == VIEW_HOME) {
+        paint_home();
+        return;
+    }
     if (s_view == VIEW_BROWSE) {
         return; /* the browse card is painted when the cursor moves */
     }
@@ -926,6 +1282,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     /* Touch is the primary control; the BOOT button is the fallback. */
     pharos_hud_set_nav_cb(on_nav);
     pharos_hud_set_row_cb(hud_row_cb);
+    pharos_hud_set_home_cb(hud_home_cb);
     boot_button_init();
 
     ESP_LOGI(TAG, "Lamp Room: %u lenses on the dial%s", count,
@@ -936,20 +1293,26 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     /* Default landing lens: Spectrum if the fence is clean (you look before
      * you judge), otherwise the System panel so the operator sees why radio
      * is locked. */
-    /* Land in BROWSE rather than straight into a lens: the first thing the
-     * operator should see is what this tool does, not a number with no
-     * explanation attached. */
-    s_view = VIEW_BROWSE;
+    /* Land on the WATCHTOWER: every armed watch on one ring, taking turns.
+     *
+     * The old landing was BROWSE - one lens card at a time - which meant the
+     * device could only tell you about whichever lens you had happened to
+     * open. That is the thing the ring exists to fix: nobody should have to be
+     * sitting inside the right lens at the moment an attack happens. */
+    tower_arm_all();
+    s_tower_on = s_fence_ok && s_tower.n > 0;
+    s_view = VIEW_HOME;
     s_cursor = 0;
+    s_home_sel = 0;
 
     /* Put the identity on the panel immediately, so the operator sees the
      * device is alive long before a lens has anything to say. */
     if (pharos_bsp_display_lock(200)) {
-        pharos_hud_splash("v2.0.1", s_fence_ok);
+        pharos_hud_splash("v2.1.0", s_fence_ok);
         pharos_bsp_display_unlock();
     }
     vTaskDelay(pdMS_TO_TICKS(1500)); /* let the identity be read */
-    paint_browse();
+    paint_home();
 
     uint64_t last_us = (uint64_t)esp_timer_get_time();
     uint32_t heartbeat = 0;
@@ -970,7 +1333,21 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         boot_button_poll(dt_ms);
         nav_apply();
         row_apply();
+        home_apply();
         request_apply();
+
+        /* Hand the radio round the ring, and make the switch the rotation
+         * asked for. Done here rather than inside tower_rotate() for the same
+         * reason nav intents are deferred: activating a lens restarts the
+         * radio, and that is not something to do from inside a paint. */
+        tower_rotate();
+        if (s_tower_pending) {
+            const char *id = s_tower_pending;
+            s_tower_pending = NULL;
+            if (!lens_switch(id)) {
+                ESP_LOGW(TAG, "watchtower: %s would not start", id);
+            }
+        }
 
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here
          * is push fresh text/values in under its lock; a short timeout means a

@@ -193,6 +193,13 @@ static bool k_probe_display(struct pharos_lens_display *o)
     o->score = worst.exposure;
     o->ceiling = 100;
     o->has_score = true;
+
+    /* PROBE MEASURES EXPOSURE, NOT ATTACK. A phone shouting the names of the
+     * networks it knows is leaking, and that is worth a dot on the ring - but
+     * it is the phone's own behaviour, not somebody doing something to it. See
+     * pharos_lens_display::alert. */
+    o->has_alert = true;
+    o->alert = leaky ? 1u : 0u;
     return true;
 }
 

@@ -1,5 +1,101 @@
 # Changelog
 
+## v2.1.0 — 2026-08-20
+
+### The Watchtower: every watch on one screen
+
+Asked for directly: "I want all the sensors on and everything shown on the home
+screen, so the person doesn't have to be in a specific sensor to know if the
+attack is happening."
+
+The naive reading of that is impossible. There is one 2.4 GHz receiver and one
+BLE controller in this device; six detectors cannot listen at once, and a home
+screen with six green dots on it would be claiming they do.
+
+So the watches take turns. Eight of them, five seconds each — a forty-second
+lap — and the ring keeps what each one last found. That is strictly better than
+switching lenses by hand: it never forgets and it never gets bored.
+
+It is also a duty cycle, and the whole design is about not hiding that:
+
+- **A reading has an age.** A live dot is filled, an ageing one is dimmed, an
+  expired one is drawn hollow — an outline with nothing in it, which is exactly
+  what the device knows about that watch right now.
+- **Freshness is counted in rotations, not seconds.** Arming another watch
+  genuinely slows every other watch down, so the window widens to match instead
+  of quietly turning honest dots into lying ones.
+- **Not having looked is not the same as having found nothing.** They are
+  separate states, counted separately, and "all quiet" is only ever said when
+  every armed watch has actually reported inside its own window.
+- **The confidence ceilings already knew.** Every engine scores against how much
+  of the channel it actually heard, so a watch on a duty cycle earns a lower
+  ceiling by itself. The rotation did not need a new honesty mechanism; it
+  needed the existing one left alone.
+
+Touch a dot to open that watch — one press, and the rotation pauses, because
+somebody who chose Watch did not ask to be moved off it five seconds later.
+Long-press back to the ring and it resumes.
+
+### Fixed: the home screen and the sensor drew on top of each other
+
+Reported as "when I clicked on the sensor the UI of the home screen and the
+sensor were merging". Exactly what it was.
+
+Each page function hid the others by name, so every new page had to be added to
+every existing function. The home ring was added and three of those lists were
+not updated. There is now one list and it is derived — naming the page you want
+hides every other page by construction — plus an audit that fails the build if
+anything sets page visibility outside that one function.
+
+### Fixed: one noisy watch could starve the entire ring
+
+Found on the first run on hardware. A watch that is hearing something keeps the
+radio, which is right — walking away from an attack in progress to keep a rota
+tidy would be the worst possible moment to leave. But the hold was unbounded,
+and the microphone watch sits at ELEVATED in any ordinary room because there is
+always something at 19 kHz. It took the radio and never gave it back: eleven of
+twelve watches had never run, and the ring was eleven hollow dots.
+
+A hold may now extend a slice; it may not abolish one.
+
+### Fixed: the home screen shouted ALERT about the neighbours
+
+Census scores how badly configured the networks *around* you are. A neighbour
+with WPS switched on scores 71, and the ring read that as an attack. A lens
+whose score is not a threat scale now says so, rather than the ring guessing
+from the number.
+
+### Fixed: a mistyped watch name silently shortened the ring
+
+`rf.rival` was written `ble.rival`. It did not fail to build and did not crash —
+the ring simply carried seven dots instead of eight, which is indistinguishable
+from a design decision. Now it is a build failure and a logged error.
+
+### Fixed: the detail rows were too small to press
+
+Reported as "it is very small so sometimes I am not able to click them
+correctly". Six rows at a 36 px pitch, on a 466 px circle across 1.75 inches —
+266 ppi, so 36 px is 3.4 mm, against a fingertip of about 9 mm. The rows were
+legible and untappable.
+
+Four rows at 58 px (5.5 mm), each with a touch target spanning the full width of
+the glass, so only the vertical dimension has to be right. Touching a row now
+acts on it directly — one press instead of stepping a cursor with the side zones
+and then pressing the centre. The focus pill under the finger is what says the
+press registered.
+
+Instrumented before changing anything: every press is logged with its
+coordinates, and thirty seconds of an untouched device produced zero events. The
+touch controller was fine; the targets were too small.
+
+### Fixed: a build without the vendor BSP could not compile
+
+A bulk edit had matched in both halves of `pharos_hud.c`, pasting the whole LVGL
+implementation into the no-panel branch — which then defined one function twice
+and referenced widgets that do not exist there. Nobody builds that branch, which
+is exactly how it survived. Audited now: every HUD entry point must be defined
+once per branch.
+
 ## v2.0.1 — 2026-08-19
 
 ### Fixed: hardware took half a minute to disappear

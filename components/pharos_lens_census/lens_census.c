@@ -351,6 +351,21 @@ static bool k_census_display(struct pharos_lens_display *o)
              (unsigned)v.caps_applied);
     snprintf(o->advice, sizeof(o->advice), "%s", pc_grade_advice(&v));
     o->score = v.score; o->ceiling = 100; o->has_score = true;
+
+    /* CENSUS IS A SURVEY, NOT A WATCH.
+     *
+     * This score says how badly configured the networks AROUND you are. A
+     * neighbour with WPS switched on scores high and is not attacking anybody
+     * - it is not even your network. Left to derive severity from the number,
+     * the home ring turned that into a red dot and a screen shouting ALERT,
+     * which is the alarm-inventing this project refuses everywhere else.
+     *
+     * So the ring is told directly: worth knowing, never an alarm. The one
+     * exception is an OPEN network carrying traffic, which is a live exposure
+     * rather than a weak configuration - and even that is ELEVATED, not an
+     * attack in progress. */
+    o->has_alert = true;
+    o->alert = (v.grade <= PC_GRADE_F && (v.caps_applied & PC_CAP_OPEN)) ? 2u : 1u;
     return true;
 }
 

@@ -81,6 +81,9 @@ void test_acoustic(void);
 /* Suite defined in test_theme.c */
 void test_theme(void);
 
+/* Suite defined in test_tower.c */
+void test_tower(void);
+
 /* Suite defined in test_rival.c */
 void test_rival(void);
 

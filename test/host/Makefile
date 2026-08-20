@@ -15,7 +15,8 @@ INCLUDES := \
   -I$(ROOT)/components/pharos_core/include \
   -I$(ROOT)/components/pharos_engine/include \
   -I$(ROOT)/components/pharos_radio/include \
-  -I$(ROOT)/components/pharos_ui/include
+  -I$(ROOT)/components/pharos_ui/include \
+  -I$(ROOT)/components/pharos_engine/include
 
 SRCS := \
   test_pharos.c \
@@ -36,7 +37,9 @@ SRCS := \
   test_rival.c \
   test_acoustic.c \
   test_theme.c \
+  test_tower.c \
   $(ROOT)/components/pharos_ui/pharos_theme.c \
+  $(ROOT)/components/pharos_engine/pharos_tower.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \

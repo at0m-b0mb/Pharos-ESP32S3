@@ -82,6 +82,24 @@ struct pharos_lens_display {
      * A lens that is not measuring the actual air sets this, and the HUD marks
      * it unmistakably on every frame. */
     bool simulated;
+
+    /* WHAT THIS READING MEANS ON THE HOME RING.
+     *
+     * The ring puts every watch on one scale, and the scores do not share one.
+     * Watch's score says an attack is probably happening. Census' score says
+     * the networks AROUND you are badly configured - which is worth knowing
+     * and is not an attack, and it is somebody else's network besides. Reading
+     * both as "how alarmed should I be" produced a home screen shouting ALERT
+     * because a neighbour had WPS switched on.
+     *
+     * So a lens whose score is not a threat scale says so here, and the ring
+     * uses this instead of guessing from the number. Leave has_alert false and
+     * the ring derives it from the score, which is right for the lenses whose
+     * score genuinely does measure threat.
+     *
+     * 0 = nothing, 1 = worth knowing, 2 = one real finding, 3 = act on this. */
+    uint8_t alert;
+    bool has_alert;
 };
 
 /* ---- the detail page -------------------------------------------------
