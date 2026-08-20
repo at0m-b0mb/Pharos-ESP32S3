@@ -18,6 +18,7 @@
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_rival.h"
+#include "pharos_survey_hook.h"
 
 static const char *TAG = "lens.rival";
 
@@ -318,6 +319,37 @@ static bool k_rival_display(struct pharos_lens_display *o)
     o->raw_score = v.raw_score;
     o->ceiling = 100;
     o->has_score = true;
+
+    /* FEED THE SESSION SURVEY.
+     *
+     * The one thing a live reading genuinely cannot tell you: that a Flipper
+     * was in the room twenty minutes ago and has since left. Rival is honest
+     * about the present tense and drops hardware once it goes quiet - which is
+     * right for a live dot and useless for "what happened while I was here".
+     *
+     * So every kind currently on the list is pushed as present, and the survey
+     * keeps the ones that stop appearing, in the past tense. */
+    {
+    /* ONCE A SECOND, NOT TEN TIMES.
+     *
+     * display() is called at the repaint rate, and walking the whole table to
+     * push facts the survey has already deduplicated is work with no output.
+     * The survey only needs to have heard each thing once; a second is far
+     * inside the rotation's own dwell, so nothing is missed. */
+    static uint64_t s_fed_us;
+    const uint64_t feed_now = (uint64_t)esp_timer_get_time();
+    if (feed_now - s_fed_us >= 1000000ull) {
+        s_fed_us = feed_now;
+        const uint64_t now = (uint64_t)esp_timer_get_time();
+        prv_device_t d;
+        for (unsigned i = 0; i < PR_MAX_SIGHTINGS; i++) {
+            if (!prv_device_at_now(&s_engine, i, now, &d)) {
+                break;
+            }
+            pharos_survey_tool((uint8_t)d.kind, true);
+        }
+    }
+    }
     return true;
 }
 

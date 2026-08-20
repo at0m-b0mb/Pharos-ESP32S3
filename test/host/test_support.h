@@ -84,6 +84,9 @@ void test_theme(void);
 /* Suite defined in test_tower.c */
 void test_tower(void);
 
+/* Suite defined in test_survey.c */
+void test_survey(void);
+
 /* Suite defined in test_rival.c */
 void test_rival(void);
 

@@ -38,8 +38,10 @@ SRCS := \
   test_acoustic.c \
   test_theme.c \
   test_tower.c \
+  test_survey.c \
   $(ROOT)/components/pharos_ui/pharos_theme.c \
   $(ROOT)/components/pharos_engine/pharos_tower.c \
+  $(ROOT)/components/pharos_engine/pharos_survey.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \

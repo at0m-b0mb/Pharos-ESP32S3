@@ -1,8 +1,7 @@
 idf_component_register(
-    SRCS "lens_census.c"
+    SRCS "lens_survey.c"
     INCLUDE_DIRS "."
-    REQUIRES pharos_core pharos_engine pharos_radio pharos_ui
-    PRIV_REQUIRES esp_timer
+    REQUIRES pharos_core pharos_engine pharos_ui
 
     # A lens registers itself from a constructor, so nothing in the project
     # holds a reference to this translation unit. WHOLE_ARCHIVE is what stops

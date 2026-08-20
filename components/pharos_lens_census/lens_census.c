@@ -23,6 +23,8 @@
 #include "pharos_census.h"
 #include "pharos_dot11.h"
 #include "pharos_lens.h"
+#include "pharos_survey.h"
+#include "pharos_survey_hook.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
 #include "pharos_twin.h"
@@ -366,6 +368,46 @@ static bool k_census_display(struct pharos_lens_display *o)
      * attack in progress. */
     o->has_alert = true;
     o->alert = (v.grade <= PC_GRADE_F && (v.caps_applied & PC_CAP_OPEN)) ? 2u : 1u;
+
+    /* FEED THE SESSION SURVEY.
+     *
+     * Census grades every network it hears and then loses all of it when the
+     * rotation moves on five seconds later - which is most of what this device
+     * knows about a place, thrown away. The survey deduplicates by address, so
+     * pushing the whole table on every display call is both correct and the
+     * simplest thing that works. */
+    /* ONCE A SECOND, NOT TEN TIMES.
+     *
+     * display() is called at the repaint rate, and walking the whole table to
+     * push facts the survey has already deduplicated is work with no output.
+     * The survey only needs to have heard each thing once; a second is far
+     * inside the rotation's own dwell, so nothing is missed. */
+    static uint64_t s_fed_us;
+    const uint64_t feed_now = (uint64_t)esp_timer_get_time();
+    if (feed_now - s_fed_us >= 1000000ull) {
+        s_fed_us = feed_now;
+    if (s_lock && xSemaphoreTake(s_lock, 0) == pdTRUE) {
+        for (unsigned i = 0; i < s_n_aps; i++) {
+            const pc_ap_t *ap = &s_aps[i];
+            const pc_verdict_t *g = &s_grades[i];
+            uint32_t f = 0;
+            const uint8_t c = g->caps_applied;
+            if (c & PC_CAP_OPEN)    f |= PSV_NET_OPEN;
+            if (c & PC_CAP_NO_MFP)  f |= PSV_NET_NO_MFP;
+            if (c & PC_CAP_WPS_PIN) f |= PSV_NET_WPS;
+            if (c & (PC_CAP_WEP | PC_CAP_WPA1 | PC_CAP_TKIP)) f |= PSV_NET_WEAK;
+            if (ap->hidden) f |= PSV_NET_HIDDEN;
+            if (ap->rsn.has_sae || ap->rsn.has_owe) f |= PSV_NET_MODERN;
+            /* Only networks heard well enough to grade. An ungraded entry is
+             * an admission of not knowing, and must not be counted as a fault
+             * nor as good news. */
+            if (g->grade != PC_GRADE_UNGRADED) {
+                pharos_survey_network(ap->bssid, (uint8_t)g->grade, f);
+            }
+        }
+        xSemaphoreGive(s_lock);
+    }
+    }
     return true;
 }
 

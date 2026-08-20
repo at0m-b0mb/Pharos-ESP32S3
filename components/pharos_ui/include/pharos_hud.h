@@ -114,6 +114,12 @@ void pharos_hud_set_row_cb(pharos_hud_row_cb_t cb);
  * through to the ordinary nav meaning, so the bottom strip still works.
  *
  * Same rule as the others: this runs on LVGL's task, so record and return. */
+/* The CORE of the ring - the disc in the middle carrying the headline - is a
+ * target too, and the largest one on the device. Touching it means "tell me
+ * more about all of this", which is the Survey. Reported as this value rather
+ * than a dot index. */
+#define PHAROS_HUD_HOME_CORE 0xFFFFu
+
 typedef void (*pharos_hud_home_cb_t)(unsigned dot);
 void pharos_hud_set_home_cb(pharos_hud_home_cb_t cb);
 
@@ -130,7 +136,7 @@ void pharos_hud_set_home_cb(pharos_hud_home_cb_t cb);
  * (a ptw_freshness_t), both carried as plain bytes so this header does not
  * have to depend on the engine's. Tapping a dot activates that watch: see
  * pharos_hud_home_hit(). */
-#define PHAROS_HUD_HOME_MAX 12
+#define PHAROS_HUD_HOME_MAX 16
 struct pharos_hud_home {
     unsigned n;
     const char *label[PHAROS_HUD_HOME_MAX];

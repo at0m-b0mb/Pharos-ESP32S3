@@ -57,7 +57,7 @@
 extern "C" {
 #endif
 
-#define PTW_MAX_WATCHES 12
+#define PTW_MAX_WATCHES 16
 #define PTW_NAME_MAX 11 /* what fits a rim label on a 466 px circle */
 #define PTW_ID_MAX 23
 
@@ -89,6 +89,7 @@ typedef enum {
  * cannot silently turn honest dots into lying ones. */
 #define PTW_AGEING_ROTATIONS 1u
 #define PTW_EXPIRED_ROTATIONS 3u
+#define PTW_MAX_PERIOD 4u
 
 /* HOW LONG A WATCH MAY HOLD THE RADIO BECAUSE IT IS HEARING SOMETHING.
  *
@@ -113,6 +114,7 @@ typedef struct {
     uint8_t ceiling;  /* what the duty cycle allowed it to earn  */
     uint64_t seen_us; /* when this reading was taken, 0 = never  */
     uint32_t visits;  /* how many times it has held the radio    */
+    uint8_t period;   /* take a turn every Nth lap; 1 = every lap */
     bool armed;       /* in the rotation at all                  */
 } ptw_watch_t;
 
@@ -143,6 +145,25 @@ void ptw_reset(ptw_state_st *s, uint32_t dwell_ms);
 /* Put a lens in the rotation. Returns its index, or -1 if the table is full
  * or the id is already present. */
 int ptw_arm(ptw_state_st *s, const char *id, const char *name);
+
+/* NOT EVERY WATCH NEEDS THE RADIO EQUALLY OFTEN.
+ *
+ * A deauthentication flood is an EVENT: it lasts seconds and is missed
+ * entirely if the receiver is elsewhere. A census of the networks around you
+ * is a STANDING FACT: it changes over minutes, and looking at it every lap
+ * buys nothing while costing the event detectors airtime they cannot spare.
+ *
+ * Arming every observer uniformly made that trade-off badly - thirteen watches
+ * at five seconds is a sixty-five second lap, so the flood detector was deaf
+ * for a minute at a time in order to keep re-counting the same access points.
+ *
+ * `period` is how many laps pass between this watch's turns. Event detectors
+ * take 1 and stay fast however many surveys are added beside them; surveys
+ * take 2 or more and are none the worse for it. Freshness scales with it, so a
+ * watch that is only due every third lap is not called stale for being on
+ * time - see ptw_freshness. */
+int ptw_arm_every(ptw_state_st *s, const char *id, const char *name,
+                  uint8_t period);
 
 /* A watch just reported. `score` and `ceiling` are the engine's own numbers;
  * `state` is what the lens makes of them. */

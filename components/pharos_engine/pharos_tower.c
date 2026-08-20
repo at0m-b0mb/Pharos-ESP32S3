@@ -42,7 +42,8 @@ int ptw_find(const ptw_state_st *s, const char *id)
     return -1;
 }
 
-int ptw_arm(ptw_state_st *s, const char *id, const char *name)
+int ptw_arm_every(ptw_state_st *s, const char *id, const char *name,
+                  uint8_t period)
 {
     if (!s || !id || !id[0] || s->n >= PTW_MAX_WATCHES) {
         return -1;
@@ -50,13 +51,38 @@ int ptw_arm(ptw_state_st *s, const char *id, const char *name)
     if (ptw_find(s, id) >= 0) {
         return -1;
     }
+    if (period < 1u) {
+        period = 1u;
+    }
+    if (period > PTW_MAX_PERIOD) {
+        /* A watch that only ran every fifth lap would be stale on the ring
+         * more often than not, which is a dot that means nothing. */
+        period = PTW_MAX_PERIOD;
+    }
     ptw_watch_t *w = &s->w[s->n];
     memset(w, 0, sizeof(*w));
     copy_bounded(w->id, sizeof(w->id), id);
     copy_bounded(w->name, sizeof(w->name), name ? name : id);
     w->state = PTW_UNKNOWN;
+    w->period = period;
     w->armed = true;
     return (int)s->n++;
+}
+
+int ptw_arm(ptw_state_st *s, const char *id, const char *name)
+{
+    return ptw_arm_every(s, id, name, 1u);
+}
+
+/* Is this watch due on the lap now in progress? */
+static bool due_now(const ptw_state_st *s, unsigned i)
+{
+    const ptw_watch_t *w = &s->w[i];
+    if (!w->armed) {
+        return false;
+    }
+    const uint8_t p = w->period ? w->period : 1u;
+    return (s->rotations % (uint32_t)p) == 0u;
 }
 
 void ptw_report(ptw_state_st *s, const char *id, ptw_state_t state,
@@ -80,16 +106,25 @@ void ptw_report(ptw_state_st *s, const char *id, ptw_state_t state,
  * it now takes to get back round. */
 static uint64_t rotation_us(const ptw_state_st *s)
 {
-    unsigned armed = 0;
+    /* A lap is however many watches are due on it, and that varies - so the
+     * unit of freshness is the AVERAGE lap: the total work of one full cycle
+     * of every period, divided by the laps in it. Using the shortest lap would
+     * declare a period-2 watch stale the moment it skipped a turn it was never
+     * due to take. */
+    unsigned slices = 0;
     for (unsigned i = 0; i < s->n; i++) {
-        if (s->w[i].armed) {
-            armed++;
+        if (!s->w[i].armed) {
+            continue;
         }
+        const uint8_t p = s->w[i].period ? s->w[i].period : 1u;
+        /* Turns this watch takes per PTW_MAX_PERIOD laps. */
+        slices += PTW_MAX_PERIOD / p;
     }
-    if (!armed) {
-        armed = 1;
+    if (!slices) {
+        slices = 1;
     }
-    return (uint64_t)armed * (uint64_t)s->dwell_ms * 1000ull;
+    const uint64_t cycle = (uint64_t)slices * (uint64_t)s->dwell_ms * 1000ull;
+    return cycle / PTW_MAX_PERIOD;
 }
 
 ptw_freshness_t ptw_freshness(const ptw_state_st *s, unsigned i, uint64_t now_us)
@@ -104,7 +139,10 @@ ptw_freshness_t ptw_freshness(const ptw_state_st *s, unsigned i, uint64_t now_us
         return PTW_EXPIRED;
     }
     const uint64_t age = now_us - w->seen_us;
-    const uint64_t rot = rotation_us(s);
+    /* Scaled by THIS watch's period: a survey that is only due every second
+     * lap must not be called stale for arriving exactly on schedule. */
+    const uint64_t rot =
+        rotation_us(s) * (uint64_t)(w->period ? w->period : 1u);
     if (age <= rot * PTW_AGEING_ROTATIONS) {
         return PTW_FRESH;
     }
@@ -173,14 +211,23 @@ int ptw_turn(ptw_state_st *s, uint64_t now_us, bool hold, bool *changed)
     s->held = 0;
 
     const unsigned was = s->cursor;
-    for (unsigned step = 0; step < s->n; step++) {
-        s->cursor = (s->cursor + 1u) % s->n;
-        if (s->w[s->cursor].armed) {
-            break;
+    /* Two full sweeps at most: one to find the next watch due on this lap, and
+     * if the lap has nothing else due, a second after the lap counter turns
+     * over. Without the second pass a ring of period-2 watches would stall the
+     * moment it reached an odd lap. */
+    bool moved = false;
+    for (unsigned pass = 0; pass < 2u && !moved; pass++) {
+        for (unsigned step = 0; step < s->n; step++) {
+            const unsigned next = (s->cursor + 1u) % s->n;
+            if (next <= s->cursor) {
+                s->rotations++; /* the lap turned over */
+            }
+            s->cursor = next;
+            if (due_now(s, s->cursor)) {
+                moved = true;
+                break;
+            }
         }
-    }
-    if (s->cursor <= was) {
-        s->rotations++;
     }
     s->handover_us = now_us;
     s->w[s->cursor].visits++;

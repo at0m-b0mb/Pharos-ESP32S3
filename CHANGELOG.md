@@ -1,5 +1,107 @@
 # Changelog
 
+## v2.2.0 — 2026-08-20
+
+### The Survey: what this place is actually like
+
+The question most people pick this device up to ask was the one nothing
+answered. Aegis remembers *attacks*; every other lens reported the present
+tense and forgot — and with the watches on a rotation, "the present tense" is a
+five-second glance every forty seconds. So Census would grade twenty-three
+networks, find the ones that would drop their clients under a flood, and lose
+all of it the moment the radio moved on.
+
+The Survey is where that goes. It accumulates over the whole session,
+deduplicated by address, and says it in words rather than jargon:
+
+    4 networks seen here
+    2 drop clients if hit
+    1 runs WPA3 or OWE
+
+Tap the middle of the home ring to open it, or type `survey` on the console.
+
+Its rules are host-tested, because this is the screen most able to frighten
+somebody for no reason:
+
+- **It counts what it saw**, never an estimate scaled up for coverage.
+- **A weak neighbour is not an attack** and is never worded as one — there is a
+  test that asserts the word "attack" appears in none of these lines.
+- **The good news is reported too.** A device that only ever lists faults
+  teaches its operator that everything is always bad.
+- **A full table says so** rather than quietly under-counting a busy place.
+- **The words match the numbers.** It said "most networks are floodable" when
+  one in four was; "most" now means most.
+
+### Thirteen sensors on the ring, and the fast ones stayed fast
+
+Arming every observer uniformly would have made a sixty-five second lap — so
+the deauthentication detector would be deaf for a minute at a stretch in order
+to re-count the same access points for the fourth time.
+
+Each watch now says how often it needs the radio. An event lasts seconds and is
+missed if you are elsewhere; a standing fact changes over minutes. Watch, Karma,
+Mirage, Harvest, Twin and Rival run every lap; Census, Probe, Squall, Vigil and
+Whisper every other; Sentinel and Spectrum every third. Adding more surveys now
+costs the event detectors nothing, and freshness scales with each watch's own
+period so a survey arriving exactly on schedule is not called stale for it.
+
+The ring lays itself out for however many watches actually armed, instead of
+for a fixed twelve.
+
+### Fixed: the greys were not grey
+
+The panel is RGB565, and the rounding lands differently on each channel. The
+Mono theme — whose entire point is having no hue at all — was rendering
+`0xD8D8D8` as `#dedbde` (magenta) and `0x161616` as `#101410` (green). A grey
+theme was quietly the only themed thing on the screen.
+
+Every palette value now sits on the 565 lattice, so what is written is
+bit-for-bit what the panel emits, and a future colour that does not is a test
+failure rather than a faint tint nobody can name.
+
+### Fixed: choosing a lens by hand and being ignored
+
+Only the home ring paused the rotation. Every other way of picking a lens — the
+browser, or typing `census` on the console — was overruled within a second as
+the rotation took the radio back. It looked like the device ignoring you. The
+rule now lives at the single point every path goes through.
+
+### Fixed: "all quiet" while not watching
+
+With the rotation paused, no watch reports, so the summary correctly found
+nothing to worry about and said "all quiet". True, and the most dangerous
+sentence this screen could show: the room is quiet because nobody is listening
+to it. It now says NOT WATCHING.
+
+### Fixed: a sentence cut in half
+
+"2 would drop clients if flooded" reached the glass as "2 would drop clients if
+f". The test that should have caught it allowed thirty-three characters against
+a column that holds twenty-five, and the slack hid a live truncation. Every
+line is now written and checked at the longest count that can occur.
+
+### Smoother, without starving the detector
+
+Five repaints a second is what a stepping gauge looks like. Pushing it to
+fifteen was measurably the wrong fix — the loop's own period went from 50 ms to
+93 ms, starving the analytics tick that does the actual detecting, to make a
+gauge look nicer.
+
+The arcs are animated by LVGL instead, interpolating between readings at the
+panel's own refresh rate. Smoother than the fast poll was, and cheaper than the
+slow one.
+
+### Also
+
+- A visible way back: every page now carries a line saying how to reach the
+  home ring, because there was none and "how do I get to the home screen" is not
+  a question anybody should have to ask.
+- Survey feeds are throttled to once a second; they were walking whole tables
+  ten times a second to push facts that were already deduplicated.
+- Only an ALARM holds the radio now. "Above background" let the microphone
+  watch — which sits at ELEVATED in any room with something at 19 kHz — hold
+  its slice every lap and stretch the whole rotation.
+
 ## v2.1.0 — 2026-08-20
 
 ### The Watchtower: every watch on one screen

@@ -72,8 +72,60 @@ static double lum(uint32_t rgb)
     return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 }
 
+/* THE COLOUR ASKED FOR IS THE COLOUR SHOWN.
+ *
+ * The panel is RGB565: five bits of red, six of green, five of blue. Anything
+ * else is rounded on the way to the glass, and the rounding is not uniform -
+ * it lands differently on each channel, so a colour meant to be neutral comes
+ * out tinted. That is exactly what happened: the Mono theme, whose entire
+ * point is having no hue at all, was rendering 0xD8D8D8 as #dedbde - magenta -
+ * and 0x161616 as #101410 - green. A grey theme was quietly the only themed
+ * thing on the screen.
+ *
+ * Every palette value now sits ON the 565 lattice, so what is written here is
+ * bit-for-bit what the panel emits, and a future colour that does not is a
+ * test failure rather than a faint tint nobody can name. */
+static uint32_t as_shown(uint32_t c)
+{
+    const uint32_t r5 = ((c >> 16) & 0xFF) >> 3;
+    const uint32_t g6 = ((c >> 8) & 0xFF) >> 2;
+    const uint32_t b5 = (c & 0xFF) >> 3;
+    return (((r5 << 3) | (r5 >> 2)) << 16) | (((g6 << 2) | (g6 >> 4)) << 8) |
+           ((b5 << 3) | (b5 >> 2));
+}
+
+static void test_theme_survives_the_panel(void)
+{
+    for (unsigned i = 0; i < pharos_theme_count(); i++) {
+        const pharos_theme_t *t = pharos_theme_at(i);
+        const uint32_t all[] = { t->accent, t->rim,    t->track,  t->track2,
+                                 t->pip_on, t->pip_up, t->text,   t->dim,
+                                 t->dimmer, t->denied, t->ghost };
+        for (unsigned k = 0; k < sizeof(all) / sizeof(all[0]); k++) {
+            CHECK(as_shown(all[k]) == all[k],
+                  "%s colour %u survives RGB565 unchanged", t->name, k);
+        }
+
+        /* And the achromatic theme must actually BE achromatic once the panel
+         * has had its way with it - which is a stricter thing than having been
+         * written as a grey. */
+        if (strcmp(t->name, "Mono") == 0) {
+            for (unsigned k = 0; k < sizeof(all) / sizeof(all[0]); k++) {
+                const uint32_t c = as_shown(all[k]);
+                const int r = (int)((c >> 16) & 0xFF);
+                const int g = (int)((c >> 8) & 0xFF);
+                const int b = (int)(c & 0xFF);
+                const int hi = (r > g ? (r > b ? r : b) : (g > b ? g : b));
+                const int lo = (r < g ? (r < b ? r : b) : (g < b ? g : b));
+                CHECK(hi - lo <= 3, "Mono colour %u is neutral on the glass", k);
+            }
+        }
+    }
+}
+
 void test_theme(void)
 {
+    test_theme_survives_the_panel();
     const unsigned n = pharos_theme_count();
     CHECK(n >= 2, "more than one theme, or the setting is pointless");
 

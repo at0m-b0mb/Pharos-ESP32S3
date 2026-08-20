@@ -20,6 +20,8 @@
 #include "pharos_bus.h"
 #include "pharos_dot11.h"
 #include "pharos_lens.h"
+#include "pharos_survey.h"
+#include "pharos_survey_hook.h"
 #include "pharos_probe.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
@@ -193,6 +195,32 @@ static bool k_probe_display(struct pharos_lens_display *o)
     o->score = worst.exposure;
     o->ceiling = 100;
     o->has_score = true;
+
+    /* FEED THE SESSION SURVEY. Deduplicated by address inside the survey, so
+     * pushing the whole table each time is correct and simple. A device that
+     * named nothing is not a leaky device and is filtered there. */
+    /* ONCE A SECOND, NOT TEN TIMES.
+     *
+     * display() is called at the repaint rate, and walking the whole table to
+     * push facts the survey has already deduplicated is work with no output.
+     * The survey only needs to have heard each thing once; a second is far
+     * inside the rotation's own dwell, so nothing is missed. */
+    static uint64_t s_fed_us;
+    const uint64_t feed_now = (uint64_t)esp_timer_get_time();
+    if (feed_now - s_fed_us >= 1000000ull) {
+        s_fed_us = feed_now;
+    for (unsigned i = 0; i < s_engine.n_devices; i++) {
+        const pp_device_t *d = &s_engine.devices[i];
+        if (!d->in_use) {
+            continue;
+        }
+        /* A locally-administered address is a private one: the bit exists to
+         * stop a device being followed, and announcing remembered network
+         * names undoes it completely. That pairing is the finding. */
+        const bool randomised = (d->addr[0] & 0x02) != 0;
+        pharos_survey_device(d->addr, d->n_networks, randomised);
+    }
+    }
 
     /* PROBE MEASURES EXPOSURE, NOT ATTACK. A phone shouting the names of the
      * networks it knows is leaking, and that is worth a dot on the ring - but

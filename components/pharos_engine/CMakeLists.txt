@@ -18,6 +18,7 @@ idf_component_register(
         "pharos_karma.c"
         "pharos_locate.c"
         "pharos_opsec.c"
+        "pharos_survey.c"
         "pharos_tower.c"
         "pharos_power.c"
         "pharos_probe.c"

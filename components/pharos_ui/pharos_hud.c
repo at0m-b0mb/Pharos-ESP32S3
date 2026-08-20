@@ -144,11 +144,14 @@ static lv_obj_t *s_h_core;
 static lv_obj_t *s_h_clock;
 static lv_obj_t *s_h_head;
 static lv_obj_t *s_h_sub;
+static lv_obj_t *s_h_hint;
 static lv_obj_t *s_h_arc;
 static lv_obj_t *s_h_ring;
+static lv_obj_t *s_home_hint;
 static lv_obj_t *s_h_tick[PHAROS_HUD_HOME_MAX];
 static lv_point_t s_h_pos[PHAROS_HUD_HOME_MAX];
 static unsigned s_h_n;
+static unsigned s_h_laid; /* how many slots the ring is currently laid out for */
 
 static lv_obj_t *s_page_detail;
 static lv_obj_t *s_d_title;
@@ -218,6 +221,27 @@ static void set_text_colour(lv_obj_t *o, uint32_t rgb)
     lv_obj_set_style_text_color(o, want, 0);
 }
 
+/* LVGL drives this, not the UI loop. */
+static void arc_anim_cb(void *obj, int32_t v)
+{
+    lv_arc_set_value((lv_obj_t *)obj, v);
+}
+
+/* THE NEEDLE GLIDES.
+ *
+ * The UI loop hands over a fresh reading ten times a second. Setting the arc
+ * directly made it step ten times a second, which is what "not smooth" looks
+ * like - and the obvious fix, running the loop faster, measurably starved the
+ * analytics tick that does the actual detecting.
+ *
+ * So LVGL interpolates instead. It is already awake at its own refresh rate to
+ * composite the screen; animating between the last value and the new one costs
+ * this project nothing and runs at the panel's rate rather than the loop's.
+ *
+ * A big jump is deliberately not slowed down to match: an arc that took a
+ * leisurely second to swing up to an alarm would be prettier and later. The
+ * duration is capped so the display never lags the finding by more than a
+ * couple of frames' worth of travel. */
 static void set_arc_value(lv_obj_t *o, int v)
 {
     if (!o) {
@@ -225,10 +249,26 @@ static void set_arc_value(lv_obj_t *o, int v)
     }
     if (v < 0) v = 0;
     if (v > 100) v = 100;
-    if (lv_arc_get_value(o) == v) {
+    const int32_t cur = lv_arc_get_value(o);
+    if (cur == v) {
         return;
     }
-    lv_arc_set_value(o, v);
+    const int32_t delta = (cur > v) ? (cur - v) : (v - cur);
+    if (delta <= 1) {
+        lv_arc_set_value(o, v); /* not worth an animation object */
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, o);
+    lv_anim_set_exec_cb(&a, arc_anim_cb);
+    lv_anim_set_values(&a, cur, v);
+    /* Roughly one paint interval of travel, longer for a big swing but never
+     * so long that the glass is telling you about a reading that has been
+     * superseded twice. */
+    lv_anim_set_duration(&a, (uint32_t)(delta > 40 ? 260 : 160));
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
 }
 
 /* The ceiling tick, placed by absolute angle within the 270-degree sweep. */
@@ -482,6 +522,19 @@ typedef enum {
 static void page_show(hud_page_t want)
 {
     show(s_page_home, want == PAGE_HOME);
+
+    /* THE HINT HAS TO BE TRUE ON THE PAGE IT IS SHOWN ON.
+     *
+     * A hold is "back one step", not "go home": from a detail page it lands on
+     * the live face, and only from there does it reach the ring. A single
+     * "hold for home" everywhere would be wrong on exactly the pages somebody
+     * most needs it to be right. */
+    show(s_home_hint, want != PAGE_HOME);
+    if (want == PAGE_DETAIL) {
+        set_text(s_home_hint, "hold to go back");
+    } else {
+        set_text(s_home_hint, "hold for the home ring");
+    }
     show(s_page_browse, want == PAGE_BROWSE);
     show(s_page_live, want == PAGE_LIVE);
     show(s_page_detail, want == PAGE_DETAIL);
@@ -888,37 +941,28 @@ bool pharos_hud_create(void)
     s_h_arc = mk_arc(s_page_home, 440, 10, HUD_CYAN, 0);
 
     {
-        pd_dial_t d;
-        pd_dial_layout(PHAROS_HUD_HOME_MAX, -90.0f, 150, 205, &d);
         for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
-            const float a = pd_dial_item_angle(&d, i);
-            const pr_point_t p = pr_polar(168, a);
-            const pr_point_t t = pr_polar(202, a);
-            s_h_pos[i].x = p.x;
-            s_h_pos[i].y = p.y;
+            s_h_pos[i].x = PR_CX;
+            s_h_pos[i].y = PR_CY;
 
             /* A tick at the rim, so the ring has structure even where a watch
-             * is unarmed and its dot is hidden. */
+             * is unarmed and its dot is hidden. Placed by home_layout(). */
             s_h_tick[i] = mk_box(s_page_home);
             lv_obj_set_size(s_h_tick[i], 3, 3);
-            lv_obj_align(s_h_tick[i], LV_ALIGN_CENTER, t.x - PR_CX, t.y - PR_CY);
             lv_obj_set_style_radius(s_h_tick[i], LV_RADIUS_CIRCLE, 0);
             lv_obj_set_style_bg_color(s_h_tick[i], lv_color_hex(HUD_TRACK), 0);
             lv_obj_set_style_bg_opa(s_h_tick[i], LV_OPA_COVER, 0);
 
             s_h_dot[i] = mk_box(s_page_home);
             lv_obj_set_size(s_h_dot[i], 16, 16);
-            lv_obj_align(s_h_dot[i], LV_ALIGN_CENTER, p.x - PR_CX, p.y - PR_CY);
             lv_obj_set_style_radius(s_h_dot[i], LV_RADIUS_CIRCLE, 0);
             lv_obj_set_style_bg_opa(s_h_dot[i], LV_OPA_COVER, 0);
             lv_obj_set_style_border_width(s_h_dot[i], 2, 0);
             lv_obj_add_flag(s_h_dot[i], LV_OBJ_FLAG_HIDDEN);
 
-            /* The label sits inboard of its dot, pushed towards the middle so
-             * a twelve-character name never runs off the glass. */
-            const pr_point_t lp = pr_polar(133, a);
+            /* The label sits inboard of its dot. Placed by home_layout(). */
             s_h_lbl[i] = mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER,
-                                  lp.x - PR_CX, lp.y - PR_CY, "");
+                                  0, 0, "");
             lv_obj_add_flag(s_h_lbl[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
@@ -938,7 +982,27 @@ bool pharos_hud_create(void)
     s_h_head  = mk_label(s_page_home, &lv_font_montserrat_18, HUD_GREEN, 0, 20, "");
     s_h_sub   = mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER, 0, 48, "");
 
+    /* Discoverability. The core is the largest target on the device and there
+     * was nothing to suggest it did anything - a big obvious button nobody
+     * knows is a button. Outside the core so it does not crowd the reading. */
+    s_h_hint  = mk_label(s_page_home, &lv_font_montserrat_12, HUD_DIMMER, 0, 148,
+                         "tap the middle for the full picture");
+
     /* ---- overlays ---- */
+
+    /* THE WAY BACK, ALWAYS ON SCREEN.
+     *
+     * The home ring is the boot screen and the centre of the device, and there
+     * was nothing anywhere that said how to return to it - so somebody who
+     * opened a lens had a round screen, three touch zones and no visible way
+     * out. "How do I get to the home screen" is a fair question to have to
+     * ask, and it should not be one.
+     *
+     * A single dim line, on every page except home itself, that never changes
+     * and never competes with the reading. */
+    s_home_hint = mk_label(scr, &lv_font_montserrat_12, HUD_DIMMER, 0, 202,
+                           "hold anywhere for home");
+    lv_obj_add_flag(s_home_hint, LV_OBJ_FLAG_HIDDEN);
 
     s_toast = mk_label(scr, &lv_font_montserrat_20, HUD_TEXT, 0, 86, "");
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
@@ -1020,8 +1084,12 @@ void pharos_hud_rebuild(void)
      * at yet. It cost a lens switch the first time the theme changed. */
     lv_indev_reset(NULL, NULL);
 
+    /* Any animation still running targets a widget that is about to be freed;
+     * LVGL would keep writing into it. Stop them before the clean, not after. */
+    lv_anim_delete_all();
     lv_obj_clean(scr);
     s_built = false;
+    s_h_laid = 0; /* the widgets are gone; the layout must be redone */
 
     /* Every pointer above just became dangling, and the dirty checks read the
      * widgets themselves - except these, which are caches OUTSIDE them and
@@ -1069,6 +1137,38 @@ static uint32_t home_state_colour(uint8_t st)
     }
 }
 
+/* THE RING FITS HOWEVER MANY WATCHES ARE ARMED.
+ *
+ * It was laid out once at construction for PHAROS_HUD_HOME_MAX slots, so eight
+ * watches sat in twelve slots with a third of the circle empty - and thirteen
+ * would have overlapped, because the spacing was for twelve. The number of
+ * watches is a runtime fact (a lens that will not start does not join), so the
+ * spacing has to be one too.
+ *
+ * Recomputed only when the count changes, which is almost never. */
+static void home_layout(unsigned n)
+{
+    if (n == s_h_laid || !n || n > PHAROS_HUD_HOME_MAX) {
+        return;
+    }
+    s_h_laid = n;
+
+    pd_dial_t d;
+    pd_dial_layout(n, -90.0f, 150, 205, &d);
+    for (unsigned i = 0; i < n; i++) {
+        const float a = pd_dial_item_angle(&d, i);
+        const pr_point_t p = pr_polar(168, a);
+        const pr_point_t t = pr_polar(202, a);
+        const pr_point_t lp = pr_polar(140, a);
+
+        s_h_pos[i].x = p.x;
+        s_h_pos[i].y = p.y;
+        lv_obj_align(s_h_dot[i], LV_ALIGN_CENTER, p.x - PR_CX, p.y - PR_CY);
+        lv_obj_align(s_h_tick[i], LV_ALIGN_CENTER, t.x - PR_CX, t.y - PR_CY);
+        lv_obj_align(s_h_lbl[i], LV_ALIGN_CENTER, lp.x - PR_CX, lp.y - PR_CY);
+    }
+}
+
 void pharos_hud_home(const struct pharos_hud_home *h)
 {
     if (!s_built || !h) {
@@ -1079,6 +1179,7 @@ void pharos_hud_home(const struct pharos_hud_home *h)
     zones_mode(false);
 
     s_h_n = (h->n > PHAROS_HUD_HOME_MAX) ? PHAROS_HUD_HOME_MAX : h->n;
+    home_layout(s_h_n);
 
     for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
         const bool used = (i < s_h_n);
@@ -1132,6 +1233,16 @@ void pharos_hud_home(const struct pharos_hud_home *h)
 
 int pharos_hud_home_hit(int16_t x, int16_t y)
 {
+    /* The core first: it is the biggest target on the device and it is in the
+     * middle, so it must not be stolen by a dot whose reach overlaps it. */
+    {
+        const int32_t dx = (int32_t)x - PR_CX;
+        const int32_t dy = (int32_t)y - PR_CY;
+        if (dx * dx + dy * dy <= 96 * 96) {
+            return (int)PHAROS_HUD_HOME_CORE;
+        }
+    }
+
     /* Nearest dot within a thumb's reach, rather than a wedge test: the dots
      * are 16 px and a fingertip is about 90, so "which did they mean" is a
      * distance question. PR_TOUCH_MIN is the same minimum the dial geometry is
@@ -1318,9 +1429,9 @@ void pharos_hud_detail(const char *lens, const char *head_left,
         }
         set_text(s_d_page, buf);
         set_text(s_d_up, (page > 0) ? LV_SYMBOL_UP : "");
-        set_text(s_d_hint, empty ? "hold to go back"
-                 : (openable ? "touch a row  -  hold to go back"
-                             : "hold to go back"));
+        /* The back instruction is on the shared hint below; this line says
+         * only what is specific to a list of rows. */
+        set_text(s_d_hint, (!empty && openable) ? "touch a row to open it" : "");
     }
 }
 
@@ -1356,8 +1467,12 @@ void pharos_hud_colourbars(void)
      * at yet. It cost a lens switch the first time the theme changed. */
     lv_indev_reset(NULL, NULL);
 
+    /* Any animation still running targets a widget that is about to be freed;
+     * LVGL would keep writing into it. Stop them before the clean, not after. */
+    lv_anim_delete_all();
     lv_obj_clean(scr);
     s_built = false;
+    s_h_laid = 0; /* the widgets are gone; the layout must be redone */
     s_page_browse = NULL;
     s_page_live = NULL;
     for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {

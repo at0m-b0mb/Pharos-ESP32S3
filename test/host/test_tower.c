@@ -349,8 +349,106 @@ static void test_tower_empty(void)
     CHECK(sum.worst_index == -1, "a NULL state is survivable");
 }
 
+/* WEIGHTED TURNS: adding surveys must not slow the event detectors.
+ *
+ * Thirteen watches at five seconds is a sixty-five second lap, so a
+ * deauthentication flood - which lasts seconds - would be missed while the
+ * receiver re-counted the same access points for the fourth time. Events take
+ * every lap; standing facts take every other one. */
+static void test_tower_periods_protect_the_fast_watches(void)
+{
+    banner("tower: a survey every other lap, an event detector every lap");
+    ptw_state_st s;
+    ptw_reset(&s, 5000);
+    ptw_arm_every(&s, "wifi.watch", "WATCH", 1);
+    ptw_arm_every(&s, "wifi.karma", "KARMA", 1);
+    ptw_arm_every(&s, "wifi.census", "CENSUS", 2);
+    ptw_arm_every(&s, "wifi.probe", "PROBE", 2);
+
+    bool changed = false;
+    uint64_t t = T0;
+    ptw_turn(&s, t, false, &changed);
+    for (unsigned i = 0; i < 60; i++) {
+        t += 5ull * SEC;
+        ptw_turn(&s, t, false, &changed);
+    }
+
+    const uint32_t fast = s.w[0].visits;
+    const uint32_t slow = s.w[2].visits;
+    CHECK(fast > 0 && slow > 0, "everybody gets the radio eventually");
+    CHECK(fast > slow, "but the event detector gets it more often");
+    /* Roughly twice as often, allowing for where the run happened to stop. */
+    CHECK(fast >= slow * 2u - 2u && fast <= slow * 2u + 2u,
+          "about twice: fast=%u slow=%u", (unsigned)fast, (unsigned)slow);
+    /* The two period-1 watches track each other, give or take wherever the
+     * run happened to stop mid-lap. */
+    const int32_t skew = (int32_t)s.w[0].visits - (int32_t)s.w[1].visits;
+    CHECK(skew >= -1 && skew <= 1, "the two fast watches stay level");
+
+    /* A period is clamped, because a watch nobody ever sees is a dot that
+     * means nothing. */
+    ptw_state_st c;
+    ptw_reset(&c, 5000);
+    ptw_arm_every(&c, "a", "A", 99);
+    CHECK(c.w[0].period <= PTW_MAX_PERIOD, "an absurd period is clamped");
+    ptw_arm_every(&c, "b", "B", 0);
+    CHECK_EQ(c.w[1].period, 1);
+}
+
+/* A survey arriving exactly on schedule must not be called stale for it. */
+static void test_tower_period_scales_freshness(void)
+{
+    banner("tower: a period-2 watch is not stale for being on time");
+    ptw_state_st s;
+    ptw_reset(&s, 5000);
+    ptw_arm_every(&s, "fast", "FAST", 1);
+    ptw_arm_every(&s, "slow", "SLOW", 2);
+
+    ptw_report(&s, "fast", PTW_QUIET, 0, 60, T0);
+    ptw_report(&s, "slow", PTW_QUIET, 0, 60, T0);
+
+    /* One fast and one slow watch: lap 0 runs both (10 s of slices), lap 1
+     * runs only the fast one (5 s), so the slow watch's own interval is 15 s
+     * and the fast one's is 7.5 s. Fourteen seconds is past the fast watch's
+     * window and inside the slow watch's - which is the whole point. */
+    const uint64_t t = T0 + 14ull * SEC;
+    CHECK(ptw_freshness(&s, 0, t) == PTW_AGEING, "the fast one has aged");
+    CHECK(ptw_freshness(&s, 1, t) == PTW_FRESH, "the slow one is on schedule");
+
+    /* And it does still go stale eventually. */
+    CHECK(ptw_freshness(&s, 1, T0 + 300ull * SEC) == PTW_EXPIRED,
+          "a period is not an excuse to never expire");
+}
+
+/* A ring made entirely of period-2 watches must not stall on an odd lap. */
+static void test_tower_all_slow_still_turns(void)
+{
+    banner("tower: a ring with nothing due this lap still moves on");
+    ptw_state_st s;
+    ptw_reset(&s, 5000);
+    ptw_arm_every(&s, "a", "A", 2);
+    ptw_arm_every(&s, "b", "B", 2);
+    ptw_arm_every(&s, "c", "C", 4);
+
+    bool changed = false;
+    uint64_t t = T0;
+    int who = ptw_turn(&s, t, false, &changed);
+    CHECK(who >= 0, "somebody starts");
+    for (unsigned i = 0; i < 80; i++) {
+        t += 5ull * SEC;
+        who = ptw_turn(&s, t, false, &changed);
+        CHECK(who >= 0 && who < 3, "the cursor never leaves the table");
+    }
+    for (unsigned i = 0; i < 3; i++) {
+        CHECK(s.w[i].visits > 0, "watch %u ran at least once", i);
+    }
+}
+
 void test_tower(void)
 {
+    test_tower_periods_protect_the_fast_watches();
+    test_tower_period_scales_freshness();
+    test_tower_all_slow_still_turns();
     test_tower_arming();
     test_tower_unknown_is_not_quiet();
     test_tower_freshness_fades();

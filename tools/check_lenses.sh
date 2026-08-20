@@ -110,7 +110,7 @@ fi
 echo
 echo "[ring] every watch on the home ring resolves to a registered lens"
 ring_bad=0
-ring_ids=$(sed -n '/k_ring_order\[\] = {/,/};/p' components/pharos_ui/pharos_ui.c | \
+ring_ids=$(sed -n '/k_ring\[\] = {/,/};/p' components/pharos_ui/pharos_ui.c | \
            grep -oE '"[a-z0-9]+\.[a-z0-9]+"' | tr -d '"')
 for rid in $ring_ids; do
   if ! grep -rqF "\"$rid\"" components/pharos_lens_*/*.c; then

@@ -32,6 +32,8 @@
 #include "pharos_dial.h"
 #include "pharos_hud.h"
 #include "pharos_theme.h"
+#include "pharos_survey.h"
+#include "pharos_survey_hook.h"
 #include "pharos_tower.h"
 #include "pharos_radio.h"
 #include "pharos_lens.h"
@@ -161,6 +163,14 @@ static unsigned s_order_n;
  * s_tower_on is the mode, not a view: the rotation keeps running while the
  * operator is reading a detail page, and stops the moment they pick a lens by
  * hand - somebody who chose a watch did not ask to be moved off it. */
+/* THE SESSION SURVEY.
+ *
+ * Lives here for the same reason the Aegis latch does: the UI loop is the one
+ * thing that runs continuously and always knows which lens is active, so it is
+ * the only place a picture can accumulate ACROSS the rotation. A lens cannot
+ * hold this - it is unmounted every few seconds. */
+static psv_t s_survey;
+
 static ptw_state_st s_tower;
 static bool s_tower_on;
 static const char *s_tower_pending; /* lens the rotation wants next */
@@ -272,21 +282,44 @@ static void tower_arm_all(void)
      * 466 px circle without colliding. Anything not on the ring is still one
      * press away through the browser - it just is not something the device
      * promises to keep checking on its own. */
-    static const char *k_ring_order[] = {
-        "wifi.watch",   /* deauthentication - the headliner        */
-        "wifi.census",  /* what is out there and how safe it is    */
-        "wifi.twin",    /* evil twin / rogue AP                    */
-        "rf.rival",     /* Flippers, Pwnagotchis, pentest hardware */
-        "wifi.karma",   /* a radio answering to any name           */
-        "wifi.mirage",  /* beacon and SSID floods                  */
-        "wifi.harvest", /* handshake and PMKID collection          */
-        "wifi.probe",   /* what devices leak by asking             */
+    /* THE RING IS ORDERED ON PURPOSE, AND WEIGHTED ON PURPOSE.
+     *
+     * Registry order put Watch - the headline detector, the whole reason this
+     * project exists - tenth of twelve. And arming everything uniformly makes
+     * a sixty-five second lap, so the flood detector would be deaf for a
+     * minute at a stretch in order to re-count the same access points.
+     *
+     * So each watch says how often it needs the radio. An EVENT lasts seconds
+     * and is missed if you are elsewhere; a STANDING FACT changes over minutes
+     * and is none the worse for being checked every other lap. Adding more
+     * surveys now costs the event detectors nothing. */
+    static const struct { const char *id; uint8_t period; } k_ring[] = {
+        /* Events: every lap. Miss the lap, miss the attack. */
+        { "wifi.watch",   1 }, /* deauthentication - the headliner    */
+        { "wifi.karma",   1 }, /* a radio answering to any name       */
+        { "wifi.mirage",  1 }, /* beacon and SSID floods              */
+        { "wifi.harvest", 1 }, /* handshake and PMKID collection      */
+        { "wifi.twin",    1 }, /* evil twin / rogue AP                */
+        { "rf.rival",     1 }, /* Flippers and pentest hardware       */
+
+        /* Standing facts: every other lap is plenty. */
+        { "wifi.census",  2 }, /* how well-defended the neighbours are */
+        { "wifi.probe",   2 }, /* what devices leak by asking          */
+        { "wifi.squall",  2 }, /* busy, broken, or jammed              */
+        { "ble.vigil",    2 }, /* is a tracker travelling with you     */
+        { "mic.whisper",  2 }, /* ultrasonic beacons in the room       */
+
+        /* Slower still: a baseline drifts over many minutes, and the
+         * spectrum waterfall is a picture to go and look at rather than
+         * something that needs catching in the act. */
+        { "wifi.sentinel", 3 },
+        { "wifi.spectrum", 3 },
     };
-    const unsigned want = (unsigned)(sizeof(k_ring_order) / sizeof(k_ring_order[0]));
+    const unsigned want = (unsigned)(sizeof(k_ring) / sizeof(k_ring[0]));
 
     ptw_reset(&s_tower, 5000);
     for (unsigned i = 0; i < want && s_tower.n < PTW_MAX_WATCHES; i++) {
-        const pharos_lens_t *l = pharos_lens_find(k_ring_order[i]);
+        const pharos_lens_t *l = pharos_lens_find(k_ring[i].id);
         /* A name here that does not resolve is a typo or a renamed lens. It
          * degrades gracefully - the ring just carries one fewer watch - and
          * that is exactly why it has to be LOUD: "rf.rival" was written
@@ -295,7 +328,7 @@ static void tower_arm_all(void)
          * now fails the build on it; this catches a lens renamed at runtime. */
         if (!l) {
             ESP_LOGE(TAG, "watchtower: no lens '%s' - ring is short one watch",
-                     k_ring_order[i]);
+                     k_ring[i].id);
             continue;
         }
         if (!l->display || !lens_launchable(l)) {
@@ -303,14 +336,19 @@ static void tower_arm_all(void)
                      l->display ? " (radio locked)" : " (no display)");
             continue;
         }
-        char up[PTW_NAME_MAX + 1];
+        /* Eight characters, not eleven: thirteen labels round a 466 px circle
+         * leaves about seventy pixels each, and eleven characters needs more
+         * than that - so the longest names would have overlapped their
+         * neighbours rather than been read. Every lens name is legible at
+         * eight ("SENTINEL", "SPECTRUM", "HARVEST"). */
+        char up[9];
         unsigned k = 0;
         for (; l->name[k] && k < sizeof(up) - 1; k++) {
             const char c = l->name[k];
             up[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
         }
         up[k] = '\0';
-        ptw_arm(&s_tower, l->id, up);
+        ptw_arm_every(&s_tower, l->id, up, k_ring[i].period);
     }
     ESP_LOGI(TAG, "watchtower: %u watches armed, %ums each (%us a lap)",
              s_tower.n, (unsigned)s_tower.dwell_ms,
@@ -339,9 +377,7 @@ static void home_open(unsigned i)
         }
         return;
     }
-    s_tower_on = false;
-    s_tower_pending = NULL;
-    if (lens_switch(l->id)) {
+    if (lens_switch(l->id)) { /* which pauses the rotation; see lens_switch */
         s_view = VIEW_LIVE;
         /* Keep the browser's cursor with the ring, so leaving a lens the old
          * way lands somewhere that makes sense. */
@@ -387,13 +423,28 @@ static void paint_home(void)
     }
     h.headline = sum.headline;
     h.worst_state = (uint8_t)sum.worst;
+
+    /* PAUSED IS NOT QUIET.
+     *
+     * With the rotation stopped the watches stop reporting, every dot goes
+     * hollow, and the summary - which only counts watches that have reported
+     * recently - correctly finds nothing to worry about and says "all quiet".
+     * Which is true, and is the most dangerous sentence this screen could
+     * show: the room is quiet because nobody is listening to it.
+     *
+     * The state of the device beats the state of the room. */
+    if (!s_tower_on && s_tower.n) {
+        h.headline = "NOT WATCHING";
+        h.worst_state = 2u; /* amber: this is a thing to notice, not an alarm */
+        h.worst_score = 0;
+    }
     h.worst_score = (sum.worst_index >= 0) ? s_tower.w[sum.worst_index].score : 0;
 
     static char sub[40];
     if (!s_fence_ok) {
         snprintf(sub, sizeof(sub), "FENCE UNVERIFIED");
     } else if (!s_tower_on) {
-        snprintf(sub, sizeof(sub), "%u watches - rotation paused", sum.armed);
+        snprintf(sub, sizeof(sub), "hold to start the %u watches", sum.armed);
     } else if (sum.worst_index >= 0 && sum.worst >= PTW_ELEVATED) {
         /* Name the watch that found it, so "which sensor" needs no tapping. */
         snprintf(sub, sizeof(sub), "%s", s_tower.w[sum.worst_index].name);
@@ -494,6 +545,17 @@ static void home_apply(void)
     const int want = s_home_tap;
     s_home_tap = -1;
     if (want < 0 || s_view != VIEW_HOME) {
+        return;
+    }
+    /* The middle of the ring: "tell me more about all of this". The Survey is
+     * the accumulated picture of the place - every network and device seen
+     * this session - which is exactly what somebody reaching for the centre of
+     * a summary screen is asking for. */
+    if ((unsigned)want == PHAROS_HUD_HOME_CORE) {
+        if (lens_switch("sys.survey")) {
+            s_view = VIEW_LIVE;
+            ESP_LOGI(TAG, "watchtower: opened the survey");
+        }
         return;
     }
     s_home_sel = (unsigned)want;
@@ -792,6 +854,19 @@ unsigned pharos_ui_pump(void)
 }
 
 /* Every lens change in the firmware goes through these two, on the UI task. */
+/* CHOOSING A LENS BY HAND STOPS THE ROTATION - WHEREVER THE CHOICE CAME FROM.
+ *
+ * home_open() paused the tower and nothing else did, so every OTHER way of
+ * picking a lens was broken: choose one from the browser, or type `census` on
+ * the console, and the rotation yanked the radio away within a second and
+ * moved on. It looked like the device ignoring you.
+ *
+ * The rule belongs at the one place every path goes through, not repeated at
+ * each of them - repeating it is how home_open ended up being the only one
+ * that had it. The rotation marks its own switches; everything else is a
+ * person, and a person who chose a lens meant it. */
+static bool s_tower_switching;
+
 static bool lens_switch(const char *id)
 {
     if (!s_lens_mtx) {
@@ -800,6 +875,11 @@ static bool lens_switch(const char *id)
     xSemaphoreTake(s_lens_mtx, portMAX_DELAY);
     const bool ok = pharos_lens_activate(id);
     xSemaphoreGive(s_lens_mtx);
+    if (ok && !s_tower_switching && s_tower_on) {
+        s_tower_on = false;
+        s_tower_pending = NULL;
+        ESP_LOGI(TAG, "watchtower: paused - %s was chosen by hand", id);
+    }
     return ok;
 }
 
@@ -921,6 +1001,34 @@ void pharos_ui_tap_row(unsigned row_on_page)
     if (row_on_page < PHAROS_HUD_ROWS) {
         s_row_pending = (int)row_on_page;
     }
+}
+
+/* ---- the survey hooks; see pharos_survey_hook.h ---- */
+
+void pharos_survey_network(const uint8_t bssid[6], uint8_t grade, uint32_t flags)
+{
+    psv_note_network(&s_survey, bssid, grade, flags,
+                     (uint64_t)esp_timer_get_time());
+}
+
+void pharos_survey_device(const uint8_t mac[6], uint8_t names, bool randomised)
+{
+    psv_note_device(&s_survey, mac, names, randomised,
+                    (uint64_t)esp_timer_get_time());
+}
+
+void pharos_survey_tool(uint8_t kind, bool present)
+{
+    psv_note_tool(&s_survey, kind, present, (uint64_t)esp_timer_get_time());
+}
+
+bool pharos_survey_read(struct psv_report *out)
+{
+    if (!out) {
+        return false;
+    }
+    psv_summarise(&s_survey, (uint64_t)esp_timer_get_time(), (psv_report_t *)out);
+    return true;
 }
 
 void pharos_ui_tower_dump(char *buf, size_t cap)
@@ -1124,8 +1232,15 @@ static void tower_rotate(void)
         if (live->display && live->display(&d)) {
             const ptw_state_t st = tower_state_of(&d);
             ptw_report(&s_tower, live->id, st, d.score, d.ceiling, now);
-            /* Anything above background keeps the radio where it is. */
-            hold = (st >= PTW_ELEVATED);
+            /* ONLY AN ALARM KEEPS THE RADIO.
+             *
+             * "Above background" was the rule, and it was too loose: the
+             * microphone watch sits at ELEVATED in any room with something at
+             * 19 kHz, so it held its slice every single lap and stretched the
+             * whole rotation. ELEVATED is often a standing fact about a place
+             * rather than an event in progress - and a standing fact will
+             * still be there next lap. An ALARM might not be. */
+            hold = (st >= PTW_ALARM);
         }
     }
 
@@ -1299,6 +1414,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
      * device could only tell you about whichever lens you had happened to
      * open. That is the thing the ring exists to fix: nobody should have to be
      * sitting inside the right lens at the moment an attack happens. */
+    psv_reset(&s_survey, (uint64_t)esp_timer_get_time());
     tower_arm_all();
     s_tower_on = s_fence_ok && s_tower.n > 0;
     s_view = VIEW_HOME;
@@ -1308,7 +1424,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     /* Put the identity on the panel immediately, so the operator sees the
      * device is alive long before a lens has anything to say. */
     if (pharos_bsp_display_lock(200)) {
-        pharos_hud_splash("v2.1.0", s_fence_ok);
+        pharos_hud_splash("v2.2.0", s_fence_ok);
         pharos_bsp_display_unlock();
     }
     vTaskDelay(pdMS_TO_TICKS(1500)); /* let the identity be read */
@@ -1344,16 +1460,42 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         if (s_tower_pending) {
             const char *id = s_tower_pending;
             s_tower_pending = NULL;
+            s_tower_switching = true;
             if (!lens_switch(id)) {
                 ESP_LOGW(TAG, "watchtower: %s would not start", id);
             }
+            s_tower_switching = false;
         }
 
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here
          * is push fresh text/values in under its lock; a short timeout means a
          * busy display never stalls the analytics tick. */
+        /* REPAINT RATE, AND WHY IT COULD GO UP.
+         *
+         * Five a second is what a stepping gauge looks like: the arc jumps in
+         * visible increments and the ring's dots change state between frames
+         * rather than during them. It was set low because the ORIGINAL HUD
+         * pushed every value into every widget on every frame and repainting
+         * faster meant flickering faster.
+         *
+         * That is no longer true. Every write goes through a dirty check
+         * against what the widget already holds, so a reading that has not
+         * moved invalidates nothing at all and a faster loop costs only the
+         * comparisons.
+         *
+         * But it is still not free, and pushing it to fifteen was measurably
+         * too far: the loop's own period went from 50 ms to 93 ms, which
+         * starves the analytics tick - the thing that actually detects
+         * attacks - to make a gauge look nicer. That is the wrong trade in
+         * this device of all devices.
+         *
+         * Ten a second, and SMOOTHNESS COMES FROM SOMEWHERE ELSE: the arcs are
+         * animated by LVGL, which interpolates between the values this loop
+         * hands it at its own 60-odd Hz refresh. The reading updates ten times
+         * a second and the needle glides, which is both nicer to look at and
+         * cheaper than asking this loop to do it. */
         since_paint += dt_ms;
-        if (since_paint >= 200) {
+        if (since_paint >= 100) {
             since_paint = 0;
             paint(active);
         }

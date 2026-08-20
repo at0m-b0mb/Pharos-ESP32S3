@@ -389,6 +389,7 @@ int main(void)
     test_acoustic();
     test_theme();
     test_tower();
+    test_survey();
     test_census();
     test_twin();
     test_report();

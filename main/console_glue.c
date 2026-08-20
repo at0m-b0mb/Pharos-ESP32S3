@@ -25,6 +25,8 @@
 #include "pharos_bsp.h"
 #include "pharos_audio.h"
 #include "pharos_hud.h"
+#include "pharos_survey.h"
+#include "pharos_survey_hook.h"
 #include "pharos_ui.h"
 
 #include "pharos_console.h"
@@ -412,6 +414,29 @@ static int cli_ble(int argc, char **argv)
     return 0;
 }
 
+static int cli_survey(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    psv_report_t r;
+    if (!pharos_survey_read((struct psv_report *)&r)) {
+        printf("no survey yet\n");
+        return 1;
+    }
+    printf("survey: %s  (%u min%s)\n", r.headline, (unsigned)r.minutes,
+           r.truncated ? ", counts are a floor" : "");
+    char line[40];
+    for (unsigned i = 0; i < 16 && psv_line(&r, i, line, sizeof(line)); i++) {
+        printf("  %s\n", line);
+    }
+    printf("  --\n");
+    printf("  networks %u  open %u  no-MFP %u  WPS %u  weak %u  modern %u\n",
+           r.networks, r.open, r.no_mfp, r.wps, r.weak, r.modern);
+    printf("  devices %u naming %u networks (%u followable)\n", r.devices,
+           r.names_leaked, r.trackable);
+    printf("  tools seen %u, here now %u\n", r.tools, r.tools_present);
+    return 0;
+}
+
 static int cli_tower(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -660,6 +685,14 @@ void pharos_console_start(void)
         .func = &cli_nav,
     };
     esp_console_cmd_register(&nav);
+
+    const esp_console_cmd_t survey = {
+        .command = "survey",
+        .help = "what this place is like: everything seen this session",
+        .hint = NULL,
+        .func = &cli_survey,
+    };
+    esp_console_cmd_register(&survey);
 
     const esp_console_cmd_t tower = {
         .command = "tower",
