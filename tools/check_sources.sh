@@ -83,6 +83,76 @@ for d in components/pharos_lens_*/; do
   fi
 done
 
+# ---------------------------------------------------------------------------
+echo
+echo "[$(( ${STAGE:-3} ))] no lens puts a large engine on the stack"
+#
+# pharos_ui_run() is called straight from app_main(), so every lens tick, every
+# display() and every lens switch runs on the MAIN task, whose stack is
+# CONFIG_ESP_MAIN_TASK_STACK_SIZE (8192 bytes). The detection engines are big
+# fixed-size structs - pw_engine_t alone is over ten kilobytes - and one of
+# them declared as a local is an immediate, total failure:
+#
+#     ***ERROR*** A stack overflow in task main has been detected.
+#
+# That shipped. lens_footprint.c declared `pw_engine_t eng;` inside a function
+# and it fit, barely, while the struct was about 6 KB; the v2 Watch rewrite
+# grew it past the stack and the device rebooted the moment the lens opened.
+# Nothing caught it because it is not a type error, a link error or a test
+# failure - it is a size that crossed a line nobody was watching.
+#
+# So watch the line. Any engine-sized type declared INDENTED (i.e. inside a
+# function) and not `static` is rejected. File-scope statics are the correct
+# pattern and are expected to carry EXT_RAM_BSS_ATTR so they land in PSRAM.
+BIG_TYPES='pw_engine_t|pp_engine_t|pf_engine_t|pk_engine_t|pc_engine_t|pt_engine_t|ps_engine_t|ph_engine_t|pv_engine_t|psq_engine_t'
+stack_hits=$(grep -rnE "^[[:space:]]+(${BIG_TYPES})[[:space:]]+[A-Za-z_]" \
+               components/pharos_lens_*/ main/ 2>/dev/null \
+             | grep -v 'static' || true)
+if [ -n "$stack_hits" ]; then
+  while IFS= read -r line; do
+    bad "engine on the stack (main task has only 8 KB): $line"
+  done <<< "$stack_hits"
+else
+  ok "no engine-sized local in any lens or in main"
+fi
+
+# And the file-scope ones should be in PSRAM, or internal .bss fills up - the
+# other half of the same lesson, already learned once at v1.2.0.
+for f in components/pharos_lens_*/*.c; do
+  decl=$(grep -nE "^static[[:space:]]+(${BIG_TYPES})[[:space:]]" "$f" 2>/dev/null || true)
+  if [ -n "$decl" ]; then
+    bad "$(basename "$f"): engine static without EXT_RAM_BSS_ATTR - put it in PSRAM"
+  fi
+done
+
+# [N] EVERY HUD ENTRY POINT IS DEFINED ONCE PER BUILD BRANCH.
+#
+# pharos_hud.c has two halves - the LVGL one and the no-panel one - and only
+# the first is ever compiled here, so a mistake in the second is invisible.
+# One did happen: a bulk edit matched in both halves and pasted the whole LVGL
+# implementation of pharos_hud_detail into the stub branch, which then defined
+# it twice and referenced widgets that do not exist there. Nothing caught it,
+# because nothing builds that branch.
+#
+# Each public entry point must appear exactly twice at file scope: once real,
+# once stubbed. Anything else means the halves have drifted.
+echo
+echo "[6] the two halves of the HUD still agree"
+hud_c=components/pharos_ui/pharos_hud.c
+hud_h=components/pharos_ui/include/pharos_hud.h
+hud_bad=0
+for sym in $(grep -oE '^(void|bool) pharos_hud_[a-z_]+\(' "$hud_h" | \
+             sed -E 's/^(void|bool) //; s/\($//' | sort -u); do
+  count=$(grep -cE "^(void|bool) ${sym}\(" "$hud_c" || true)
+  if [ "$count" -ne 2 ]; then
+    bad "$sym is defined $count time(s) in pharos_hud.c - expected 2 (real + stub)"
+    hud_bad=1
+  fi
+done
+if [ "$hud_bad" -eq 0 ]; then
+  ok "every HUD entry point is defined once per branch"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   printf '%sSOURCES WIRED%s - firmware and host builds agree.\n' "$GRN" "$RST"

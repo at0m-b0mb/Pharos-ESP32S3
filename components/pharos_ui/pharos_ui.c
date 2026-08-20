@@ -27,9 +27,11 @@
 #include "freertos/semphr.h"
 
 #include "pharos_aegis.h"
+#include "pharos_audio.h"
 #include "pharos_bus.h"
 #include "pharos_dial.h"
 #include "pharos_hud.h"
+#include "pharos_theme.h"
 #include "pharos_radio.h"
 #include "pharos_lens.h"
 
@@ -142,17 +144,34 @@ void pharos_ui_aegis_ack(void)
  *
  * So the callback records an intent and returns. The UI task, which owns the
  * lens lifecycle already, performs it on the next tick. */
-typedef enum { VIEW_BROWSE = 0, VIEW_LIVE } view_t;
+typedef enum { VIEW_BROWSE = 0, VIEW_LIVE, VIEW_DETAIL, VIEW_OPENED } view_t;
 
 static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
 static unsigned s_order_n;
 static unsigned s_cursor;
 static view_t s_view = VIEW_BROWSE;
+static unsigned s_detail_page;
+/* Which row the centre tap would open, as an absolute index across the whole
+ * list. The page shown follows it, so moving the cursor off the bottom turns
+ * the page rather than making the operator do both. */
+static unsigned s_detail_cursor;
+static unsigned s_opened_row;
+/* A row touched on the glass, 0..ROWS-1 within the page shown, or -1. Filed
+ * from LVGL's task and acted on by the UI task, same as s_nav_pending: doing
+ * the work in the callback runs it on LVGL's stack and reboots the board. */
+static int s_row_pending = -1;
 static volatile int s_nav_pending = -1; /* pharos_nav_t, or -1 for none */
 
 static void on_nav(pharos_nav_t what)
 {
     s_nav_pending = (int)what; /* record only - see the note above */
+}
+
+void pharos_ui_request_nav(pharos_nav_t what)
+{
+    /* Deliberately the same slot the touch callback writes, so a console-driven
+     * test cannot take a different path from a finger. */
+    on_nav(what);
 }
 
 /* Colour a lens by which team it serves, so the browser is readable at a
@@ -231,6 +250,64 @@ static void request_apply(void)
     }
 }
 
+/* Filed from LVGL's task. Record and return - see pharos_hud.h. */
+static void hud_row_cb(unsigned row_on_page)
+{
+    s_row_pending = (int)row_on_page;
+}
+
+/* ONE TOUCH DOES THE WHOLE JOB.
+ *
+ * Reaching a setting used to be: press a side zone until a cursor arrived on
+ * the row, then press the centre. Four presses to change the volume, on a
+ * device somebody is holding up one-handed. Touching the row is one press, and
+ * it lands on the row under the finger rather than wherever a counter had got
+ * to.
+ *
+ * The row is focused as well as acted on, because the pill appearing under the
+ * finger is what says the press registered - on a control that CYCLES (theme,
+ * volume, region) the value changing is the only other feedback, and if the
+ * press missed there is none at all. */
+static void row_apply(void)
+{
+    const int want = s_row_pending;
+    s_row_pending = -1;
+    if (want < 0 || (s_view != VIEW_DETAIL && s_view != VIEW_OPENED)) {
+        return;
+    }
+    if (s_view == VIEW_OPENED) {
+        /* An opened row is a page of readings, not a menu. Touching it closes
+         * it, which is what a finger reaching for a full-screen page means. */
+        s_view = VIEW_DETAIL;
+        s_detail_page = s_opened_row / PHAROS_HUD_ROWS;
+        return;
+    }
+    const pharos_lens_t *live = pharos_lens_active();
+    if (!live || !live->row) {
+        return;
+    }
+    const unsigned abs_row = s_detail_page * PHAROS_HUD_ROWS + (unsigned)want;
+
+    /* Never act on a row that is not there. The last page is usually short,
+     * and without this a press below the final row would edit or open
+     * whatever index happened to be one past the end of the list. */
+    struct pharos_lens_row probe;
+    memset(&probe, 0, sizeof(probe));
+    if (!live->row(abs_row, &probe)) {
+        return;
+    }
+    s_detail_cursor = abs_row;
+
+    if (live->row_edit && live->row_edit(abs_row)) {
+        return;
+    }
+    if (live->row_expand) {
+        s_opened_row = abs_row;
+        s_detail_page = 0;
+        s_view = VIEW_OPENED;
+    }
+}
+
 static void nav_apply(void)
 {
     const int want = s_nav_pending;
@@ -243,15 +320,84 @@ static void nav_apply(void)
     }
 
     switch ((pharos_nav_t)want) {
+    case PHAROS_NAV_DETAIL: {
+        /* Only meaningful while something is running and has rows to show. */
+        const pharos_lens_t *live = pharos_lens_active();
+        if (s_view == VIEW_DETAIL) {
+            s_view = VIEW_LIVE;
+            return;
+        }
+        if (s_view == VIEW_LIVE && live && live->row) {
+            s_detail_page = 0;
+            s_detail_cursor = 0;
+            s_view = VIEW_DETAIL;
+            return;
+        }
+        if (s_view == VIEW_LIVE) {
+            if (pharos_bsp_display_lock(30)) {
+                pharos_hud_toast("no detail here");
+                pharos_bsp_display_unlock();
+            }
+        }
+        return;
+    }
     case PHAROS_NAV_NEXT:
+        /* In DETAIL the sides move the CURSOR rather than changing lens - you
+         * are reading, not browsing, and losing your place to a stray tap
+         * would make a long list unusable. The page follows the cursor, so
+         * nobody has to move both. */
+        if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
+            /* PAGE, not step. Rows are touched directly now, so the side
+             * controls no longer have to walk a cursor to reach one - and a
+             * control that moves by a whole screen is worth its size. */
+            s_detail_page++;
+            s_detail_cursor = s_detail_page * PHAROS_HUD_ROWS;
+            return;
+        }
         s_cursor = (s_cursor + 1u) % s_order_n;
         break;
     case PHAROS_NAV_PREV:
+        if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
+            if (s_detail_page) {
+                s_detail_page--;
+            }
+            s_detail_cursor = s_detail_page * PHAROS_HUD_ROWS;
+            return;
+        }
         s_cursor = (s_cursor + s_order_n - 1u) % s_order_n;
         break;
     case PHAROS_NAV_SELECT: {
+        if (s_view == VIEW_OPENED) {
+            s_view = VIEW_DETAIL; /* close it again */
+            s_detail_page = 0;
+            return;
+        }
+        if (s_view == VIEW_DETAIL) {
+            const pharos_lens_t *live = pharos_lens_active();
+            /* Change it if it is changeable, otherwise open it. A lens may
+             * offer both, row by row. */
+            if (live && live->row_edit && live->row_edit(s_detail_cursor)) {
+                return;
+            }
+            if (live && live->row_expand) {
+                s_opened_row = s_detail_cursor;
+                s_detail_page = 0;
+                s_view = VIEW_OPENED;
+            }
+            return;
+        }
         if (s_view == VIEW_LIVE) {
-            return; /* already running; the centre does nothing here */
+            /* The centre used to do nothing here, and that hole is why a
+             * SUSPICIOUS Watch reading was a dead end: the way to raise the
+             * confidence ceiling is to stop hopping, and no control on the
+             * glass did it. A running lens may now claim the tap. This runs on
+             * the UI task, which is the only task allowed to touch the radio -
+             * see the note on the touch callback above. */
+            const pharos_lens_t *live = pharos_lens_active();
+            if (live && live->on_select) {
+                live->on_select();
+            }
+            return;
         }
         const pharos_lens_t *l = s_order[s_cursor % s_order_n];
         if (!l) {
@@ -278,6 +424,15 @@ static void nav_apply(void)
     }
     case PHAROS_NAV_HOME:
     default:
+        if (s_view == VIEW_OPENED) {
+            s_view = VIEW_DETAIL;
+            s_detail_page = 0;
+            return;
+        }
+        if (s_view == VIEW_DETAIL) {
+            s_view = VIEW_LIVE; /* one step back, not all the way out */
+            return;
+        }
         lens_halt();
         s_view = VIEW_BROWSE;
         ESP_LOGI(TAG, "stopped; back to browse");
@@ -417,10 +572,238 @@ static bool lens_launchable(const pharos_lens_t *l)
  * running, which is still the truth and still better than a black panel. */
 static uint32_t s_paints, s_paint_misses;
 
+/* ---- the alarm latch -------------------------------------------------
+ *
+ * Alerts fire on a band CHANGE, not on a band. A flood that sits at FLOOD
+ * LIKELY for four minutes is one event; a device that shrieks continuously
+ * gets muted, and a muted alarm is worse than no alarm because it is still
+ * trusted. Rising into a band is worth a sound - staying in it is worth the
+ * screen.
+ *
+ * Only RISING edges alert, plus one falling note when the reading returns all
+ * the way to quiet, which is the other thing an operator actually wants to
+ * know without looking. Tracked per lens id so that switching lenses does not
+ * fire an alert for a band the new lens was already sitting in. */
+static char s_alarm_lens[32];
+static uint8_t s_alarm_band;
+
+static void alarm_pump(const pharos_lens_t *active,
+                       const struct pharos_lens_display *d)
+{
+    if (!active || !d || !d->has_score) {
+        return;
+    }
+    /* The band the score falls in, using the same thresholds the face colours
+     * by, so what is heard and what is seen can never disagree. */
+    uint8_t band;
+    if (d->score >= 75)      band = 4;
+    else if (d->score >= 60) band = 3;
+    else if (d->score >= 40) band = 2;
+    else if (d->score >= 20) band = 1;
+    else                     band = 0;
+
+    if (strcmp(s_alarm_lens, active->id) != 0) {
+        /* New lens: adopt its current band silently. */
+        strncpy(s_alarm_lens, active->id, sizeof(s_alarm_lens) - 1);
+        s_alarm_lens[sizeof(s_alarm_lens) - 1] = '\0';
+        s_alarm_band = band;
+        return;
+    }
+    if (band > s_alarm_band) {
+        pharos_audio_alert(pharos_audio_alert_for_band(band));
+    } else if (band == 0 && s_alarm_band >= 2) {
+        pharos_audio_alert(PHAROS_ALERT_CLEAR);
+    }
+    s_alarm_band = band;
+}
+
+/* Pull one page of the active lens' own rows and put them on the glass.
+ *
+ * The lens fills rows by absolute index and the HUD does the slicing, so a
+ * lens never has to know how tall the screen is. The row count is discovered
+ * by asking one past the end - lists here are tens of entries, not thousands,
+ * and a lens that would rather not be asked simply leaves ->row NULL. */
+/* The lens' name in capitals, in a static buffer - the HUD copies it. */
+static const char *lens_caps(const pharos_lens_t *active)
+{
+    static char name[16];
+    unsigned k = 0;
+    if (active) {
+        for (; active->name[k] && k < sizeof(name) - 1; k++) {
+            const char c = active->name[k];
+            name[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+    }
+    name[k] = '\0';
+    return name;
+}
+
+/* Test seam: a row touch, as if a finger had landed on it.
+ *
+ * The detail page is the hardest part of this device to verify - it is six
+ * lines of small text on a round screen and a photograph cannot show which
+ * row the next press would act on. Driving it from the console makes the whole
+ * interaction testable over USB. */
+void pharos_ui_tap_row(unsigned row_on_page)
+{
+    if (row_on_page < PHAROS_HUD_ROWS) {
+        s_row_pending = (int)row_on_page;
+    }
+}
+
+int pharos_ui_detail_cursor(int *opened)
+{
+    if (opened) {
+        *opened = (s_view == VIEW_OPENED) ? (int)s_opened_row : -1;
+    }
+    if (s_view != VIEW_DETAIL && s_view != VIEW_OPENED) {
+        return -1;
+    }
+    return (int)s_detail_cursor;
+}
+
+static void paint_detail(const pharos_lens_t *active)
+{
+    struct pharos_lens_row rows[PHAROS_HUD_ROWS];
+    unsigned total = 0;
+
+    /* THE OPENED ROW. A grade with no way to ask "why" is a claim rather than
+     * a finding, so a lens that can say more about one of its rows gets a page
+     * to say it on. */
+    /* THE OPENED ROW MAY HAVE GONE.
+     *
+     * These lists are live: a Flipper is switched off, a network stops
+     * beaconing, and the row somebody opened thirty seconds ago is no longer
+     * anything. Staying on an empty expansion would present a page about
+     * nothing; dropping back to the list shows what is actually there. */
+    if (s_view == VIEW_OPENED && active && active->row_expand) {
+        struct pharos_lens_row gone;
+        memset(&gone, 0, sizeof(gone));
+        if (!active->row_expand(s_opened_row, 0, &gone)) {
+            s_view = VIEW_DETAIL;
+            s_detail_page = s_opened_row / PHAROS_HUD_ROWS;
+        }
+    }
+
+    const bool opened = (s_view == VIEW_OPENED);
+    if (opened && active && active->row_expand) {
+        struct pharos_lens_row probe;
+        while (total < 240u) {
+            memset(&probe, 0, sizeof(probe));
+            if (!active->row_expand(s_opened_row, total, &probe)) {
+                break;
+            }
+            total++;
+        }
+        const unsigned pages =
+            total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
+        if (s_detail_page >= pages) {
+            s_detail_page = pages - 1u;
+        }
+        unsigned n = 0;
+        const unsigned base = s_detail_page * PHAROS_HUD_ROWS;
+        for (; n < PHAROS_HUD_ROWS; n++) {
+            memset(&rows[n], 0, sizeof(rows[n]));
+            if (!active->row_expand(s_opened_row, base + n, &rows[n])) {
+                break;
+            }
+        }
+        /* Head the page with the row you opened, so a page of numbers is
+         * never orphaned from the thing it describes. */
+        memset(&probe, 0, sizeof(probe));
+        const bool named = active->row && active->row(s_opened_row, &probe);
+        pharos_hud_detail(lens_caps(active), named ? probe.left : "DETAIL",
+                          "\xEF\x81\x93", rows, n, s_detail_page, pages, -1,
+                          false);
+        return;
+    }
+
+    /* The list. The lens fills rows by absolute index and the HUD does the
+     * slicing, so a lens never has to know how tall the screen is. */
+    if (active && active->row) {
+        struct pharos_lens_row probe;
+        while (total < 240u) {
+            memset(&probe, 0, sizeof(probe));
+            if (!active->row(total, &probe)) {
+                break;
+            }
+            total++;
+        }
+    }
+
+    const unsigned pages = total ? ((total + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS) : 1u;
+    /* The page is now driven by the page controls, not by a cursor walking off
+     * the bottom - so it is the page that gets clamped, and the cursor that
+     * follows it. A list that shrinks under you (devices going stale is the
+     * normal case here) must not leave the view past the end. */
+    if (s_detail_page >= pages) {
+        s_detail_page = pages - 1u;
+    }
+    if (total && s_detail_cursor >= total) {
+        s_detail_cursor = total - 1u;
+    }
+
+    unsigned n = 0;
+    if (active && active->row) {
+        const unsigned base = s_detail_page * PHAROS_HUD_ROWS;
+        for (; n < PHAROS_HUD_ROWS; n++) {
+            memset(&rows[n], 0, sizeof(rows[n]));
+            if (!active->row(base + n, &rows[n])) {
+                break;
+            }
+        }
+    }
+
+    const int focus = total ? (int)(s_detail_cursor % PHAROS_HUD_ROWS) : -1;
+    pharos_hud_detail(lens_caps(active), active ? active->row_head_left : NULL,
+                      active ? active->row_head_right : NULL, rows, n,
+                      s_detail_page, pages, focus,
+                      active && (active->row_expand || active->row_edit));
+}
+
+/* Apply a theme change wherever the paint loop next happens to be.
+ *
+ * The lens that changes the theme runs on this task but must not reach into
+ * the HUD - a settings screen knowing how to rebuild the face is the kind of
+ * coupling that means the NEXT settings screen has to know it too. So the
+ * lens moves a number, and the one place that owns the face notices. */
+static void theme_sync(void)
+{
+    static unsigned seen = (unsigned)-1;
+    const unsigned now = pharos_theme_index();
+    if (seen == now) {
+        return;
+    }
+    const bool first = (seen == (unsigned)-1);
+    seen = now;
+    if (!first) {
+        /* The browse card is painted on view entry rather than per frame, and
+         * a theme can only be changed from a lens' detail page, so by the time
+         * anyone gets back to BROWSE it has been repainted anyway. */
+        pharos_hud_rebuild();
+        /* And nothing the teardown raised is a real intent. Tearing the face
+         * down and building it again is not a thing a finger did. */
+        s_nav_pending = -1;
+        s_row_pending = -1;
+    }
+}
+
 static void paint(const pharos_lens_t *active)
 {
     if (s_view == VIEW_BROWSE) {
         return; /* the browse card is painted when the cursor moves */
+    }
+    if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
+        if (!pharos_bsp_display_lock(30)) {
+            s_paint_misses++;
+            return;
+        }
+        s_paints++;
+        pharos_hud_create();
+        theme_sync();
+        paint_detail(active);
+        pharos_bsp_display_unlock();
+        return;
     }
     if (!pharos_bsp_display_lock(30)) {
         /* Counted, not ignored: a paint that never lands is exactly what a
@@ -436,11 +819,17 @@ static void paint(const pharos_lens_t *active)
      * Without this, a single missed lock at boot would leave the panel blank
      * for the whole session. */
     pharos_hud_create();
+    theme_sync();
 
     if (!active) {
-        pharos_hud_update("PHAROS", "--", s_fence_ok ? "idle" : "FENCE UNVERIFIED",
-                          s_fence_ok ? "no lens running" : "radio locked",
-                          0, s_fence_ok ? 0x7FA6B5 : 0xE8503F);
+        struct pharos_lens_display idle;
+        memset(&idle, 0, sizeof(idle));
+        snprintf(idle.big, sizeof(idle.big), "--");
+        snprintf(idle.band, sizeof(idle.band), "%s",
+                 s_fence_ok ? "idle" : "FENCE UNVERIFIED");
+        snprintf(idle.advice, sizeof(idle.advice), "%s",
+                 s_fence_ok ? "no lens running" : "radio locked");
+        pharos_hud_live("PHAROS", &idle, s_fence_ok ? 0x7FA6B5 : 0xE8503F);
         pharos_bsp_display_unlock();
         return;
     }
@@ -460,29 +849,30 @@ static void paint(const pharos_lens_t *active)
      * as a "score", identically for every lens. It climbed forever and meant
      * nothing - which is precisely how it was reported from the field. The
      * engines were computing real verdicts all along and this function was
-     * ignoring them. */
+     * ignoring them.
+     *
+     * ONE call does the whole face now. It used to be three - live(), then
+     * ceiling(), then advice() - and the second and third disagreed with the
+     * first about whether the summary label should be visible, so it was
+     * hidden and shown again on every repaint. That was half the flicker. */
     struct pharos_lens_display d;
     memset(&d, 0, sizeof(d));
 
     if (active->display && active->display(&d)) {
-        pharos_hud_ceiling(d.has_score ? d.ceiling : 0);
-        pharos_hud_live(name, d.big, d.band, d.detail,
-                        d.has_score ? d.score : 0, d.has_score ? 0 : 0x7FA6B5);
-        pharos_hud_advice(d.advice);
+        alarm_pump(active, &d);
+        pharos_hud_live(name, &d, 0);
     } else {
         /* No verdict yet. Say so plainly and show what IS true - how much has
          * been heard - rather than dressing a counter up as a measurement. */
         pharos_radio_stats_t st;
         pharos_radio_stats(&st);
-        char detail[48];
-        snprintf(detail, sizeof(detail), "ch %u  %s",
+        snprintf(d.detail, sizeof(d.detail), "ch %u  %s",
                  (unsigned)st.current_channel, st.camped ? "camped" : "hopping");
-        char frames[16];
-        snprintf(frames, sizeof(frames), "%u",
+        snprintf(d.big, sizeof(d.big), "%u",
                  (unsigned)(st.frames_seen > 99999 ? 99999 : st.frames_seen));
-        pharos_hud_ceiling(0);
-        pharos_hud_live(name, frames, "frames heard", detail, 0, 0x7FA6B5);
-        pharos_hud_advice("listening - no verdict yet");
+        snprintf(d.band, sizeof(d.band), "frames heard");
+        snprintf(d.advice, sizeof(d.advice), "listening - no verdict yet");
+        pharos_hud_live(name, &d, 0x7FA6B5);
     }
 
     pharos_bsp_display_unlock();
@@ -535,6 +925,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
 
     /* Touch is the primary control; the BOOT button is the fallback. */
     pharos_hud_set_nav_cb(on_nav);
+    pharos_hud_set_row_cb(hud_row_cb);
     boot_button_init();
 
     ESP_LOGI(TAG, "Lamp Room: %u lenses on the dial%s", count,
@@ -554,7 +945,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
     /* Put the identity on the panel immediately, so the operator sees the
      * device is alive long before a lens has anything to say. */
     if (pharos_bsp_display_lock(200)) {
-        pharos_hud_splash("v1.14.0", s_fence_ok);
+        pharos_hud_splash("v2.0.0", s_fence_ok);
         pharos_bsp_display_unlock();
     }
     vTaskDelay(pdMS_TO_TICKS(1500)); /* let the identity be read */
@@ -578,6 +969,7 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
 
         boot_button_poll(dt_ms);
         nav_apply();
+        row_apply();
         request_apply();
 
         /* Repaint at ~5 Hz. LVGL runs on the BSP's own task, so all we do here

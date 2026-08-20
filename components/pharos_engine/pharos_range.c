@@ -50,6 +50,13 @@ void pr_range_init(pr_range_t *r, const pr_config_t *cfg)
     set_mac(r->victim,     0x3C, 0x71, 0xBF, 0xAA, 0xBB, 0xCC);
     set_mac(r->attacker,   0x02, 0x66, 0x6E, 0x00, 0x00, 0x99);
     set_mac(r->phone,      0x9A, 0x11, 0x22, 0x33, 0x44, 0x55); /* randomised */
+
+    /* The access point has been up for a while, so its counter is well into
+     * its range; the attacker's tool has just started and its own counter is
+     * near zero. That gap is not a detail - it is precisely what the Watch
+     * engine's order test reads, and it is what a real capture looks like. */
+    r->ap_seq = 2400;
+    r->atk_seq = 30;
 }
 
 /* Fill a management-frame event. Helper keeps the scenario code readable. */
@@ -116,22 +123,111 @@ bool pr_range_next(pr_range_t *r, pharos_event_t *out)
          * the AP's address but arriving at a different signal level. */
         if (r->phase == 0) {
             r->t_us += 100000;
+            r->ap_seq = (uint16_t)((r->ap_seq + 3) & 0x0FFF);
             mk_mgmt(out, r->t_us, PHAROS_ST_BEACON, BCAST, r->ap_bssid,
                     jitter(r, -45, 2), 0, 0 /* no MFP: the flood will work */);
+            out->u.dot11.seq = r->ap_seq;
+            out->u.dot11.rsn_flags = PHAROS_RSN_F_PRESENT | PHAROS_RSN_F_PSK;
             if (++r->emitted >= 12) { r->phase = 1; r->emitted = 0; }
             return true;
         }
         {
             const uint32_t total = 40 + (uint32_t)inten;
             if (r->emitted >= total) return false;
-            /* Frames per step scale with intensity; the attacker claims the
-             * AP's address but is heard ~20 dB louder (it is in the room). */
             r->t_us += 8000;
+
+            /* The access point does not stop working while it is being
+             * attacked, so it keeps beaconing right through the flood. That
+             * matters: the sequence-order test needs beacons on both sides of
+             * a disconnect before it will say anything. */
+            if ((r->emitted % 12u) == 11u) {
+                r->ap_seq = (uint16_t)((r->ap_seq + 3) & 0x0FFF);
+                mk_mgmt(out, r->t_us, PHAROS_ST_BEACON, BCAST, r->ap_bssid,
+                        jitter(r, -45, 2), 0, 0);
+                out->u.dot11.seq = r->ap_seq;
+                out->u.dot11.rsn_flags = PHAROS_RSN_F_PRESENT | PHAROS_RSN_F_PSK;
+                r->emitted++;
+                return true;
+            }
+
+            /* THE COMPETENT ATTACKER. It claims the AP's address AND rides the
+             * AP's sequence counter, so the order test has nothing to say. The
+             * only thing it cannot fake is where it is standing: it is heard
+             * ~23 dB quieter than the access point it claims to be.
+             *
+             * That is a MEASUREMENT, not a contradiction - which is exactly
+             * why this scenario stays capped for a hopping receiver while
+             * PR_SCENARIO_DEAUTH_PROVEN does not. The two together are the
+             * whole lesson about what confidence is made of. */
             mk_mgmt(out, r->t_us, PHAROS_ST_DEAUTH, BCAST, r->ap_bssid,
                     jitter(r, -68, 3), 7, 0);
+            out->u.dot11.seq = r->ap_seq;
             r->emitted++;
             return true;
         }
+
+    case PR_SCENARIO_DEAUTH_PROVEN:
+        /* The lesson this one teaches is the difference between a strong
+         * suspicion and a proof.
+         *
+         * The network here advertises 802.11w as REQUIRED, so every management
+         * frame it sends is cryptographically protected. The attacker cannot
+         * produce a protected frame - that is the entire point of 802.11w - so
+         * the deauthentication frames arrive in the clear. A frame that could
+         * not have come from the device it names is a contradiction, not a
+         * measurement, and a contradiction is just as true when it is heard
+         * during a 200 ms visit. This is the scenario where a HOPPING receiver
+         * is entitled to alarm, and the flood scenario above is the one where
+         * it is not.
+         *
+         * Phase 2 is the other half: the clients come straight back. */
+        if (r->phase == 0) {
+            r->t_us += 100000;
+            r->ap_seq = (uint16_t)((r->ap_seq + 4) & 0x0FFF);
+            mk_mgmt(out, r->t_us, PHAROS_ST_BEACON, BCAST, r->ap_bssid,
+                    jitter(r, -52, 2), 0, 0);
+            out->u.dot11.seq = r->ap_seq;
+            out->u.dot11.rsn_flags = PHAROS_RSN_F_PRESENT | PHAROS_RSN_F_SAE |
+                                     PHAROS_RSN_F_MFP_CAPABLE |
+                                     PHAROS_RSN_F_MFP_REQUIRED;
+            if (++r->emitted >= 16) { r->phase = 1; r->emitted = 0; }
+            return true;
+        }
+        if (r->phase == 1) {
+            const uint32_t total = 60 + (uint32_t)inten / 2u;
+            if (r->emitted >= total) { r->phase = 2; r->emitted = 0; return true; }
+            r->t_us += 12000;
+            r->atk_seq = (uint16_t)((r->atk_seq + 1) & 0x0FFF);
+            /* Unprotected, on a network that requires protection. Broadcast
+             * every fourth frame, the rest walking a handful of clients. */
+            {
+                uint8_t dst[6];
+                if ((r->emitted % 4u) == 0u) {
+                    memcpy(dst, BCAST, 6);
+                } else {
+                    memcpy(dst, r->victim, 6);
+                    dst[5] = (uint8_t)(0xCC + ((r->emitted / 9u) % 3u));
+                }
+                mk_mgmt(out, r->t_us, PHAROS_ST_DEAUTH, dst, r->ap_bssid,
+                        jitter(r, -34, 2), 7, 0);
+            }
+            out->u.dot11.seq = r->atk_seq;
+            r->emitted++;
+            return true;
+        }
+        /* Phase 2: the stampede back. This is the evidence the attack landed. */
+        if (r->emitted >= 24) return false;
+        r->t_us += 60000;
+        {
+            uint8_t client[6];
+            memcpy(client, r->victim, 6);
+            client[5] = (uint8_t)(0xCC + (r->emitted % 3u));
+            mk_mgmt(out, r->t_us, (r->emitted & 1u) ? PHAROS_ST_ASSOC_REQ
+                                                    : PHAROS_ST_AUTH,
+                    r->ap_bssid, client, jitter(r, -55, 4), 0, 0);
+        }
+        r->emitted++;
+        return true;
 
     case PR_SCENARIO_EVIL_TWIN:
         /* Real AP (protected) and a twin (open, software address, louder) both
@@ -181,6 +277,14 @@ static const pr_beat_t k_flood_beats[] = {
     { 5200, "That gap is the ceiling. Confidence is earned by standing still." },
 };
 
+static const pr_beat_t k_proven_beats[] = {
+    { 0,    "This network requires protected management frames." },
+    { 1600, "So every deauth it sends is signed. These are not." },
+    { 3000, "That is a contradiction, not a rate. Hopping does not weaken it." },
+    { 4200, "The clients come straight back: the attack landed." },
+    { 5400, "Ceiling 88 while hopping. Camping would still buy more." },
+};
+
 static const pr_beat_t k_twin_beats[] = {
     { 0,    "Two radios answer to one name. Multiplicity alone scores zero." },
     { 1500, "One is open while its sibling is protected: the posture family." },
@@ -209,24 +313,26 @@ static const pr_beat_t k_roaming_beats[] = {
 unsigned pr_range_beats(pr_scenario_t s, const pr_beat_t **beats)
 {
     switch (s) {
-    case PR_SCENARIO_DEAUTH_FLOOD: *beats = k_flood_beats;   return 5;
-    case PR_SCENARIO_EVIL_TWIN:    *beats = k_twin_beats;    return 4;
-    case PR_SCENARIO_PROBE_LEAK:   *beats = k_probe_beats;   return 4;
-    case PR_SCENARIO_CALM:         *beats = k_calm_beats;    return 2;
-    case PR_SCENARIO_ROAMING:      *beats = k_roaming_beats; return 3;
-    default:                       *beats = k_calm_beats;    return 0;
+    case PR_SCENARIO_DEAUTH_FLOOD:  *beats = k_flood_beats;   return 5;
+    case PR_SCENARIO_DEAUTH_PROVEN: *beats = k_proven_beats;  return 5;
+    case PR_SCENARIO_EVIL_TWIN:     *beats = k_twin_beats;    return 4;
+    case PR_SCENARIO_PROBE_LEAK:    *beats = k_probe_beats;   return 4;
+    case PR_SCENARIO_CALM:          *beats = k_calm_beats;    return 2;
+    case PR_SCENARIO_ROAMING:       *beats = k_roaming_beats; return 3;
+    default:                        *beats = k_calm_beats;    return 0;
     }
 }
 
 const char *pr_scenario_name(pr_scenario_t s)
 {
     switch (s) {
-    case PR_SCENARIO_CALM:         return "Calm network";
-    case PR_SCENARIO_ROAMING:      return "Roaming estate";
-    case PR_SCENARIO_DEAUTH_FLOOD: return "Deauth flood";
-    case PR_SCENARIO_EVIL_TWIN:    return "Evil twin";
-    case PR_SCENARIO_PROBE_LEAK:   return "Probe leak";
-    default:                       return "?";
+    case PR_SCENARIO_CALM:          return "Calm network";
+    case PR_SCENARIO_ROAMING:       return "Roaming estate";
+    case PR_SCENARIO_DEAUTH_FLOOD:  return "Deauth flood";
+    case PR_SCENARIO_DEAUTH_PROVEN: return "Proven forgery";
+    case PR_SCENARIO_EVIL_TWIN:     return "Evil twin";
+    case PR_SCENARIO_PROBE_LEAK:    return "Probe leak";
+    default:                        return "?";
     }
 }
 
@@ -239,6 +345,8 @@ const char *pr_scenario_teaches(pr_scenario_t s)
         return "Why many BSSIDs on one SSID is not an attack.";
     case PR_SCENARIO_DEAUTH_FLOOD:
         return "How a flood earns three families - and why hopping caps it.";
+    case PR_SCENARIO_DEAUTH_PROVEN:
+        return "Why a contradiction may alarm even from a hopping receiver.";
     case PR_SCENARIO_EVIL_TWIN:
         return "Why an alarm needs the posture gap, not just an odd radio.";
     case PR_SCENARIO_PROBE_LEAK:

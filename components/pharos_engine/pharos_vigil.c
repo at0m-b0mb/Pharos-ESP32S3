@@ -81,6 +81,45 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
             if (company == 0x0075 && plen >= 4) { /* Samsung */
                 return PV_KIND_SMARTTAG;
             }
+        } else if ((type == 0x08 || type == 0x09) && plen >= 3) {
+            /* Shortened or complete local name. Two things announce
+             * themselves here by name, and both are worth knowing about.
+             *
+             * A Flipper Zero ships advertising "Flipper <name>". It is not an
+             * attack by itself - it is a tool, and plenty of people carry one
+             * legitimately - but a defender walking a site should know one is
+             * in the room, because it is the single most capable piece of
+             * hobbyist RF hardware they are likely to meet.
+             *
+             * The serial bridges are the other. See PV_BREDR_BLIND in the
+             * header for why this is reported as a BRIDGE and never as a
+             * "skimmer": the same module is in doorbells and hobby projects,
+             * and calling one a card skimmer would be the most damaging false
+             * positive this project could produce. */
+            char nm[24];
+            uint8_t n = plen < (uint8_t)(sizeof(nm) - 1u) ? plen : (uint8_t)(sizeof(nm) - 1u);
+            for (uint8_t k = 0; k < n; k++) {
+                nm[k] = (char)p[k];
+            }
+            nm[n] = '\0';
+            if (n >= 7 && nm[0] == 'F' && nm[1] == 'l' && nm[2] == 'i' &&
+                nm[3] == 'p' && nm[4] == 'p' && nm[5] == 'e' && nm[6] == 'r') {
+                return PV_KIND_FLIPPER;
+            }
+            static const char *k_bridges[] = {
+                "HC-05", "HC-06", "HC-08", "JDY-", "AT-09", "MLT-BT05",
+                "FCD", "FREE2MOVE", "BT05", "HM-10",
+            };
+            for (unsigned b = 0; b < sizeof(k_bridges) / sizeof(k_bridges[0]); b++) {
+                const char *needle = k_bridges[b];
+                unsigned m = 0;
+                while (needle[m] && nm[m] && nm[m] == needle[m]) {
+                    m++;
+                }
+                if (!needle[m]) {
+                    return PV_KIND_SERIAL;
+                }
+            }
         } else if ((type == 0x16 || type == 0x14) && plen >= 2) {
             /* Service data / 16-bit service UUID, little-endian. */
             const uint16_t uuid = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
@@ -92,6 +131,9 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
             }
             if (uuid == 0xFD44 || uuid == 0xFD43) {
                 return PV_KIND_FINDMY; /* Apple service data */
+            }
+            if (uuid == 0xFE33) {
+                return PV_KIND_CHIPOLO;
             }
         }
         i = (uint8_t)(i + 1u + l);
@@ -353,6 +395,59 @@ void pv_evaluate(const pv_state_t *s, uint64_t now_us, pv_verdict_t *out)
     }
 }
 
+/* Rank key for one tag, highest first. Locales dominate because presence in
+ * several PLACES is what separates a tracker following you from one that was
+ * simply in the cafe; then how long it has been around; then sightings. */
+static uint64_t tag_rank(const pv_tag_t *t)
+{
+    const uint64_t span = (t->last_us > t->first_us) ? (t->last_us - t->first_us) : 0;
+    const uint64_t mins = span / 60000000ull;
+    return ((uint64_t)t->n_locales << 40) |
+           ((mins > 0xFFFFFull ? 0xFFFFFull : mins) << 20) |
+           (t->sightings > 0xFFFFFu ? 0xFFFFFu : t->sightings);
+}
+
+bool pv_tag_at(const pv_state_t *s, unsigned index, uint64_t now_us,
+               pv_tag_t *out, uint32_t *minutes)
+{
+    (void)now_us;
+    if (!s || !out) {
+        return false;
+    }
+    /* Select the index-th best by counting how many rank strictly above each
+     * candidate. O(n^2) over 32 entries on a UI repaint, and it needs no
+     * scratch array and cannot get its bookkeeping wrong the way a
+     * mark-as-consumed scan can - which the first version of this did. Ties
+     * break on table position so the order is stable between frames. */
+    for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+        if (!s->tags[i].in_use) {
+            continue;
+        }
+        const uint64_t ri = tag_rank(&s->tags[i]);
+        unsigned above = 0;
+        for (unsigned j = 0; j < PV_MAX_TAGS; j++) {
+            if (j == i || !s->tags[j].in_use) {
+                continue;
+            }
+            const uint64_t rj = tag_rank(&s->tags[j]);
+            if (rj > ri || (rj == ri && j < i)) {
+                above++;
+            }
+        }
+        if (above == index) {
+            *out = s->tags[i];
+            if (minutes) {
+                const uint64_t span = (s->tags[i].last_us > s->tags[i].first_us)
+                                          ? (s->tags[i].last_us - s->tags[i].first_us)
+                                          : 0;
+                *minutes = (uint32_t)(span / 60000000ull);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 const char *pv_kind_name(pv_kind_t k)
 {
     switch (k) {
@@ -360,6 +455,9 @@ const char *pv_kind_name(pv_kind_t k)
     case PV_KIND_FINDMY_LOST: return "Find My (separated)";
     case PV_KIND_TILE:        return "Tile";
     case PV_KIND_SMARTTAG:    return "SmartTag";
+    case PV_KIND_CHIPOLO:     return "Chipolo";
+    case PV_KIND_FLIPPER:     return "Flipper Zero";
+    case PV_KIND_SERIAL:      return "BLE serial bridge";
     case PV_KIND_GENERIC:     return "unnamed tracker";
     case PV_KIND_UNKNOWN:
     default:                  return "unknown";

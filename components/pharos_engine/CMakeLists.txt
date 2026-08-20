@@ -7,6 +7,7 @@
 # after the host tests went green.
 idf_component_register(
     SRCS
+        "pharos_acoustic.c"
         "pharos_aegis.c"
         "pharos_census.c"
         "pharos_chain.c"
@@ -21,6 +22,7 @@ idf_component_register(
         "pharos_probe.c"
         "pharos_range.c"
         "pharos_report.c"
+        "pharos_rival.c"
         "pharos_sentinel.c"
         "pharos_sha256.c"
         "pharos_squall.c"

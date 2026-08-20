@@ -238,6 +238,46 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             }
         }
         if (has_fixed) {
+            /* PWNAGOTCHI. A beacon with no SSID and information elements in
+             * the 222/224-226 range is the "whisper" advertisement a
+             * Pwnagotchi sends to find its peers - a real protocol riding on
+             * a beacon, which is why ordinary survey tools show nothing.
+             *
+             * Cheap to test: one bounded element walk on beacons only, and
+             * only after the SSID walk has already failed to find a name.
+             * The JSON payload carries the unit's chosen name, and since
+             * these beacons have no SSID the field is free to hold it - so
+             * every screen that already prints an SSID prints the
+             * Pwnagotchi's name instead of nothing. */
+            uint8_t w_len = 0;
+            const uint8_t *w = pharos_dot11_find_ie_from(body, blen, 12u, 222, &w_len);
+            if (!w) {
+                w = pharos_dot11_find_ie_from(body, blen, 12u, 224, &w_len);
+            }
+            if (w) {
+                ev.u.dot11.flags |= PHAROS_DOT11_F_WHISPER;
+                if (ev.u.dot11.ssid_len == 0 && w_len > 8u) {
+                    /* Pull "name":"..." out of the first payload chunk. A
+                     * scan rather than a parser: this is a hot path, the
+                     * payload is attacker-controlled, and a wrong answer here
+                     * costs a label rather than a verdict. */
+                    for (uint8_t k = 0; k + 8u < w_len; k++) {
+                        if (w[k] == '"' && w[k + 1] == 'n' && w[k + 2] == 'a' &&
+                            w[k + 3] == 'm' && w[k + 4] == 'e' && w[k + 5] == '"' &&
+                            w[k + 6] == ':' && w[k + 7] == '"') {
+                            uint8_t j = (uint8_t)(k + 8u);
+                            uint8_t n = 0;
+                            while (j < w_len && w[j] != '"' &&
+                                   n < PHAROS_EV_SSID_MAX) {
+                                ev.u.dot11.ssid[n++] = (char)w[j++];
+                            }
+                            ev.u.dot11.ssid_len = n;
+                            break;
+                        }
+                    }
+                }
+            }
+
             pharos_rsn_t rsn;
             memset(&rsn, 0, sizeof(rsn));
             if (pharos_dot11_rsn(body, blen, &rsn) && rsn.has_rsn) {
@@ -463,7 +503,8 @@ void pharos_radio_rx_stop(void) { s.running = false; s.bus = NULL; }
 #if !defined(PHAROS_HOST)
 
 static pharos_bus_t *s_ble_bus;
-static bool s_ble_running;
+static bool s_ble_running;  /* the NimBLE host is up            */
+static bool s_ble_scanning; /* ...and discovery is ACTIVE       */
 
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
 {
@@ -495,7 +536,10 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-static void ble_on_sync(void)
+/* Start (or restart) passive discovery. Split out of the sync callback because
+ * it has to be callable AGAIN, which is the whole point - see the note in
+ * pharos_radio_ble_scan_start. */
+static bool ble_start_disc(void)
 {
     struct ble_gap_disc_params p;
     memset(&p, 0, sizeof(p));
@@ -503,13 +547,25 @@ static void ble_on_sync(void)
     p.filter_duplicates = 0; /* we want repeats: persistence is the signal */
     p.itvl = 0x0060;         /* ~60 ms */
     p.window = 0x0030;       /* ~30 ms - a 50% duty listen              */
+    /* Cancel first: a discovery already in progress makes ble_gap_disc()
+     * return BLE_HS_EALREADY, and treating that as failure would break the
+     * common case of one BLE lens replacing another. */
+    (void)ble_gap_disc_cancel();
     const int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p,
                                 ble_gap_event, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
-    } else {
-        ESP_LOGI(TAG, "ble observer up (passive - transmits nothing)");
+        s_ble_scanning = false;
+        return false;
     }
+    s_ble_scanning = true;
+    ESP_LOGI(TAG, "ble observer up (passive - transmits nothing)");
+    return true;
+}
+
+static void ble_on_sync(void)
+{
+    ble_start_disc();
 }
 
 static void ble_host_task(void *param)
@@ -533,8 +589,25 @@ bool pharos_radio_ble_scan_start(pharos_bus_t *bus)
         return false;
     }
     s_ble_bus = bus;
+
+    /* THE HOST BEING UP IS NOT THE SAME AS THE RADIO LISTENING, AND CONFLATING
+     * THEM MADE BLE WORK EXACTLY ONCE PER BOOT.
+     *
+     * pharos_radio_ble_scan_stop() cancels discovery but deliberately leaves
+     * the NimBLE host running, because tearing the controller down and back up
+     * costs seconds and these lenses are switched constantly. This function
+     * then saw s_ble_running and returned true - having set the bus, and
+     * having restarted nothing. Discovery was still cancelled.
+     *
+     * So the FIRST lens to use Bluetooth after a boot worked, and every lens
+     * after it silently received not one advertisement while reporting that it
+     * had started successfully. Vigil found six trackers; Rival, opened after
+     * it, sat at zero advertisers per second and looked like a classifier bug.
+     *
+     * The two states are now separate and starting always (re)issues the
+     * discovery. */
     if (s_ble_running) {
-        return true;
+        return ble_start_disc();
     }
     const esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
@@ -555,6 +628,7 @@ void pharos_radio_ble_scan_stop(void)
         return;
     }
     ble_gap_disc_cancel();
+    s_ble_scanning = false;
     s_ble_bus = NULL;
     /* The NimBLE host stays up: tearing the controller down and back up costs
      * seconds and this lens is switched in and out constantly. Cancelling the

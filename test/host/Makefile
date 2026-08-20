@@ -32,9 +32,15 @@ SRCS := \
   test_aegis.c \
   test_squall.c \
   test_vigil.c \
+  test_watch.c \
+  test_rival.c \
+  test_acoustic.c \
+  test_theme.c \
+  $(ROOT)/components/pharos_ui/pharos_theme.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \
+  $(ROOT)/components/pharos_engine/pharos_acoustic.c \
   $(ROOT)/components/pharos_engine/pharos_aegis.c \
   $(ROOT)/components/pharos_engine/pharos_census.c \
   $(ROOT)/components/pharos_engine/pharos_console.c \
@@ -49,6 +55,7 @@ SRCS := \
   $(ROOT)/components/pharos_engine/pharos_probe.c \
   $(ROOT)/components/pharos_engine/pharos_range.c \
   $(ROOT)/components/pharos_engine/pharos_report.c \
+  $(ROOT)/components/pharos_engine/pharos_rival.c \
   $(ROOT)/components/pharos_engine/pharos_sentinel.c \
   $(ROOT)/components/pharos_engine/pharos_sha256.c \
   $(ROOT)/components/pharos_engine/pharos_squall.c \

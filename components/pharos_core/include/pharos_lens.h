@@ -33,14 +33,86 @@ typedef enum {
 
 /* A display-ready verdict. Fixed-size and self-contained: the UI must never
  * hold a pointer into a lens' state, which changes on another core. */
+/* How many evidence families the face can draw, and how many seconds of
+ * activity history the ribbon holds. Both are UI capacities, not engine ones:
+ * a lens with more families than this shows its strongest four. */
+#define PHAROS_DISP_FAMILIES 4
+#define PHAROS_DISP_HISTORY 16
+
 struct pharos_lens_display {
     char big[16];     /* the headline: a score, a grade, a word     */
     char band[24];    /* what that headline MEANS                   */
     char detail[48];  /* the supporting numbers                     */
     char advice[96];  /* what to do about it                        */
     uint8_t score;    /* 0..100, drives the gauge and its colour    */
+    uint8_t raw_score;/* what the evidence earned BEFORE the caps   */
     uint8_t ceiling;  /* the most this observation could have earned*/
     bool has_score;   /* false when the headline is not a score     */
+
+    /* WHY it thinks so, drawn as labelled pips rather than as anonymous dots.
+     * Bit i of `families` lights pip i; fam_label[i] names it and must point
+     * at storage that outlives the call - a string literal, in practice, never
+     * a buffer on the lens' stack. Leave the labels NULL to draw no pips. */
+    uint8_t families;
+    const char *fam_label[PHAROS_DISP_FAMILIES];
+
+    /* The last PHAROS_DISP_HISTORY seconds of activity, oldest first, each
+     * normalised to 0..255 by the lens against its own peak. A score says
+     * whether something is happening; this says what shape it is, which is
+     * the question an operator asks next. All zero draws a quiet timeline,
+     * which is itself information. */
+    uint8_t history[PHAROS_DISP_HISTORY];
+    bool has_history;
+
+    /* The one specific finding worth a line of glass - "sequence counter went
+     * backwards" rather than "the shape looks wrong". Empty when the lens has
+     * nothing more specific than its band advice to offer. */
+    char why[48];
+
+    /* THIS READING IS A SIMULATION, NOT THE ROOM.
+     *
+     * The training lenses play synthesised attacks through the real engines,
+     * which is the point of them - a learner sees the same arithmetic the
+     * field uses. But they therefore produce the same words: Range shows
+     * "FLOOD LIKELY 77" and Footprint "BLARING 77", and an operator who
+     * glances at one has no way to know the building is fine. That happened,
+     * and it is the worst failure this project can have: a drill mistaken for
+     * an incident.
+     *
+     * A lens that is not measuring the actual air sets this, and the HUD marks
+     * it unmistakably on every frame. */
+    bool simulated;
+};
+
+/* ---- the detail page -------------------------------------------------
+ *
+ * The live face answers "is something wrong, and how sure are you". That is
+ * the right thing to lead with, and it is deliberately one number.
+ *
+ * It is not the whole answer. A Census that grades the air around you and
+ * cannot then tell you WHICH networks it graded is asking to be taken on
+ * trust, which is the one thing this project refuses to do anywhere else. So
+ * a lens may also offer rows: its own evidence, in its own words, reachable
+ * from the live view.
+ *
+ * A row has two columns because nearly every useful line is a thing and a
+ * judgement about it - a network and its grade, a family and its score, a
+ * device and how many names it leaked.
+ *
+ * The lens does not choose colours. It states a TONE and the HUD maps it onto
+ * the one palette, so that red means the same thing on every page. */
+typedef enum {
+    PHAROS_TONE_NEUTRAL = 0, /* ordinary text                    */
+    PHAROS_TONE_DIM,         /* context, units, secondary detail */
+    PHAROS_TONE_GOOD,        /* nothing to do here               */
+    PHAROS_TONE_WARN,        /* worth knowing                    */
+    PHAROS_TONE_BAD,         /* act on this                      */
+} pharos_tone_t;
+
+struct pharos_lens_row {
+    char left[26];  /* the thing          */
+    char right[12]; /* the judgement      */
+    pharos_tone_t tone;
 };
 
 typedef struct pharos_lens {
@@ -99,6 +171,63 @@ typedef struct pharos_lens {
      * numbers the reports and the console do. Returning false means "I have
      * nothing to say yet", and the UI says THAT rather than inventing a value. */
     bool (*display)(struct pharos_lens_display *out);
+
+    /* The centre tap, while this lens is RUNNING.
+     *
+     * In BROWSE the centre starts a lens; in LIVE it used to do nothing at
+     * all, and that hole had a real cost. The Watch engine's confidence
+     * ceiling is set by how much of the channel the receiver hears, so the
+     * single most useful thing an operator can do about a suspicious reading
+     * is stop hopping and stand still - and there was no control on the glass
+     * that did it. The only way to camp was a console command over USB, which
+     * is not a thing you do while holding the device up in a corridor.
+     *
+     * Called on the UI task, never on LVGL's, so it may do real work. NULL
+     * means the centre stays inert for this lens. */
+    void (*on_select)(void);
+
+    /* The detail page: this lens' own evidence, one row at a time.
+     *
+     * Fill row `index` (0-based across the whole list; the HUD does its own
+     * paging) and return true, or return false when there are no more. A lens
+     * with nothing to list leaves this NULL and the detail page is not offered
+     * for it.
+     *
+     * Runs on the UI task and must not block: take the snapshot lock with a
+     * zero or tiny timeout and give up rather than stalling the repaint. */
+    bool (*row)(unsigned index, struct pharos_lens_row *out);
+
+    /* Column headings for that page, e.g. "NETWORK" and "GRADE". Either may
+     * be NULL. */
+    const char *row_head_left;
+    const char *row_head_right;
+
+    /* OPENING A ROW.
+     *
+     * A list of networks with a grade against each answers "which is worst".
+     * It does not answer "why", and a grade nobody can interrogate is a claim
+     * rather than a finding - the thing this project refuses everywhere else.
+     *
+     * A lens that can say more about one of its rows fills this: `row` selects
+     * which row was opened, `sub` walks the lines of its expansion, same
+     * two-column shape. Return false to end the expansion. NULL means this
+     * lens' rows do not open, and the UI then leaves the centre tap alone. */
+    bool (*row_expand)(unsigned row, unsigned sub, struct pharos_lens_row *out);
+
+    /* CHANGING A ROW.
+     *
+     * The System page listed the alarm, the region and the screen rotation and
+     * let you change exactly one of them, by tapping the centre of the LIVE
+     * face and cycling blind through four volumes. Everything else was a
+     * console command over USB - which is not a thing anybody does while
+     * holding a round screen in a corridor.
+     *
+     * So a row may be editable: put the cursor on it and the centre tap
+     * advances that setting, in place, with the row itself as the readout.
+     * Return true when something changed, false when this row is not editable
+     * - the UI then falls through to row_expand, so a lens can have some rows
+     * that open and others that change. */
+    bool (*row_edit)(unsigned row);
 } pharos_lens_t;
 
 /* Upper bound on registered lenses. Defined here (not just in the .c) because

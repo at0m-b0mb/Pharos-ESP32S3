@@ -39,6 +39,7 @@ typedef enum {
     PR_SCENARIO_CALM = 0,     /* a healthy network: the baseline to know   */
     PR_SCENARIO_ROAMING,      /* many BSSIDs, one SSID: the false positive */
     PR_SCENARIO_DEAUTH_FLOOD, /* the blue-team headliner                   */
+    PR_SCENARIO_DEAUTH_PROVEN,/* the same attack, but provably forged      */
     PR_SCENARIO_EVIL_TWIN,    /* a rogue AP undercutting its siblings      */
     PR_SCENARIO_PROBE_LEAK,   /* a device broadcasting its history         */
     PR_SCENARIO_COUNT,
@@ -70,6 +71,11 @@ typedef struct {
     uint8_t victim[6];
     uint8_t attacker[6];
     uint8_t phone[6];
+    /* 802.11 sequence counters, one per transmitter, because the Watch engine
+     * reasons about their ORDER and a scenario that left them all at zero was
+     * teaching the engine a lesson no real radio ever gives it. */
+    uint16_t ap_seq;
+    uint16_t atk_seq;
 } pr_range_t;
 
 void pr_range_init(pr_range_t *r, const pr_config_t *cfg);

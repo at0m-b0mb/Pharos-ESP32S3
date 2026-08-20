@@ -167,6 +167,50 @@ static bool k_squall_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* Squall grades the air per channel; the headline can only carry the worst
+ * one. This says which, and how many others are in the same state. */
+static bool k_squall_row(unsigned index, struct pharos_lens_row *out)
+{
+    pq_verdict_t v;
+    if (!pharos_lens_squall_snapshot(&v)) {
+        return false;
+    }
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "worst channel");
+        snprintf(out->right, sizeof(out->right), "ch %u", (unsigned)v.worst_channel);
+        out->tone = PHAROS_TONE_WARN;
+        return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "channels graded");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_graded);
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "showing denial");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_denial);
+        out->tone = v.n_denial ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
+        return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "merely congested");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.n_congested);
+        /* Congested is not attacked, and conflating them is how a busy office
+         * gets reported as a jamming incident. */
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "retransmissions");
+        snprintf(out->right, sizeof(out->right), "%u%%",
+                 (unsigned)(v.retry_permil / 10u));
+        out->tone = (v.retry_permil >= 400u) ? PHAROS_TONE_BAD
+                  : (v.retry_permil >= 200u) ? PHAROS_TONE_WARN
+                                             : PHAROS_TONE_GOOD;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static const pharos_lens_t k_squall = {
     .id = "wifi.squall",
     .name = "Squall",
@@ -183,6 +227,9 @@ static const pharos_lens_t k_squall = {
     .ingest = squall_ingest,
     .stage_report = k_squall_stage,
     .display = k_squall_display,
+    .row = k_squall_row,
+    .row_head_left = "AIR QUALITY",
+    .row_head_right = "VALUE",
 };
 
 PHAROS_LENS_REGISTER(&k_squall);

@@ -15,6 +15,7 @@
 
 #include "esp_console.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 #include "freertos/task.h"
 
 #include "pharos_bsp.h"
+#include "pharos_audio.h"
 #include "pharos_hud.h"
 #include "pharos_ui.h"
 
@@ -257,6 +259,14 @@ static int cli_diag(int argc, char **argv)
            pharos_bsp_display_lock(50) ? (pharos_bsp_display_unlock(), "acquired")
                                        : "COULD NOT ACQUIRE");
     printf("  hud     : %s\n", pharos_hud_present() ? "built" : "NOT BUILT");
+    printf("alarm     : %s\n",
+           pharos_audio_present()
+               ? (pharos_audio_enabled() ? "ready" : "ready (MUTED)")
+               : "no codec - silent");
+    printf("internal  : %u KB free (DMA-capable; the display flush and the "
+           "wifi driver compete for this)\n",
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL |
+                                              MALLOC_CAP_DMA) / 1024));
     printf("psram free: %u KB\n", (unsigned)(st.psram_free / 1024));
     printf("heap free : %u B (min %u)\n",
            (unsigned)esp_get_free_heap_size(),
@@ -282,6 +292,219 @@ static int cli_diag(int argc, char **argv)
 }
 
 /* `rotate` - which way is up on a round device is the operator's call. */
+/* Drive the screen exactly as a finger would.
+ *
+ * The touch zones are the only way to reach several views, which made them the
+ * only paths that could not be exercised without a hand on the glass - and so
+ * the only ones whose bugs reached the operator first. This files the SAME
+ * intent the touch callback files, applied by the same UI task on the same
+ * tick, so what is tested here is what a tap actually does. */
+/* Print exactly what the DETAIL page is showing.
+ *
+ * The screen is the product, and until now the only way to check what was on
+ * it was to photograph it. This asks the active lens for the same rows the HUD
+ * asks for, through the same callback, so a wrong column or a truncated name
+ * shows up in a log instead of in somebody's hand. */
+/* The alarm: hear it, mute it, set how loud. `alarm test` walks the whole
+ * vocabulary so the five sounds can be told apart deliberately rather than
+ * discovered one at a time during an incident. */
+static int cli_alarm(int argc, char **argv)
+{
+    if (!pharos_audio_present()) {
+        printf("no audio codec on this build/board - the device runs silent\n");
+        return 1;
+    }
+    if (argc < 2) {
+        printf("alarm: %s at %u%%\n",
+               pharos_audio_enabled() ? "enabled" : "MUTED",
+               (unsigned)pharos_audio_volume());
+        printf("  alarm on | off | vol <0-100> | test | notice|suspect|alarm|clear|ack\n");
+        return 0;
+    }
+    const char *w = argv[1];
+    if (strcmp(w, "on") == 0)  { pharos_audio_set_enabled(true);  printf("alarm on\n"); return 0; }
+    if (strcmp(w, "off") == 0) { pharos_audio_set_enabled(false); printf("alarm muted\n"); return 0; }
+    if (strcmp(w, "vol") == 0) {
+        if (argc < 3) { printf("vol <0-100>\n"); return 1; }
+        pharos_audio_set_volume((uint8_t)atoi(argv[2]));
+        printf("volume %u%%\n", (unsigned)pharos_audio_volume());
+        return 0;
+    }
+    if (strcmp(w, "test") == 0) {
+        static const struct { const char *n; pharos_alert_t a; } all[] = {
+            { "notice",  PHAROS_ALERT_NOTICE },
+            { "suspect", PHAROS_ALERT_SUSPECT },
+            { "alarm",   PHAROS_ALERT_ALARM },
+            { "clear",   PHAROS_ALERT_CLEAR },
+            { "ack",     PHAROS_ALERT_ACK },
+        };
+        for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+            printf("  %s\n", all[i].n);
+            pharos_audio_alert(all[i].a);
+            vTaskDelay(pdMS_TO_TICKS(900));
+        }
+        return 0;
+    }
+    if (strcmp(w, "notice") == 0)  { pharos_audio_alert(PHAROS_ALERT_NOTICE); return 0; }
+    if (strcmp(w, "suspect") == 0) { pharos_audio_alert(PHAROS_ALERT_SUSPECT); return 0; }
+    if (strcmp(w, "alarm") == 0)   { pharos_audio_alert(PHAROS_ALERT_ALARM); return 0; }
+    if (strcmp(w, "clear") == 0)   { pharos_audio_alert(PHAROS_ALERT_CLEAR); return 0; }
+    if (strcmp(w, "ack") == 0)     { pharos_audio_alert(PHAROS_ALERT_ACK); return 0; }
+    printf("unknown: %s\n", w);
+    return 1;
+}
+
+extern unsigned pharos_lens_rival_raw(unsigned index, uint8_t addr[6],
+                                      char *name, size_t cap, int8_t *rssi,
+                                      uint16_t *hits, uint8_t *adv,
+                                      uint8_t *adv_len);
+extern uint32_t pharos_lens_rival_raw_total(void);
+
+/* Every BLE advertiser in range, named or not.
+ *
+ * Rival's engine only admits hardware it can CLASSIFY, which is correct but
+ * makes one question unanswerable from the screen: is a device missing because
+ * the classifier is wrong, or because it is not transmitting? Those want
+ * completely different fixes. This prints the raw roster so the difference is
+ * visible instead of guessed at. */
+static int cli_ble(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const pharos_lens_t *l = pharos_lens_active();
+    if (!l || strcmp(l->id, "rf.rival") != 0) {
+        printf("start the Rival lens first: lens rf.rival\n");
+        return 1;
+    }
+    uint8_t addr[6];
+    char name[40];
+    int8_t rssi;
+    uint16_t hits;
+    uint8_t adv[31];
+    uint8_t adv_len = 0;
+    unsigned n = 0;
+    printf("BLE advertisers in range (%u advertisements total)\n",
+           (unsigned)pharos_lens_rival_raw_total());
+    for (unsigned i = 0; i < 64; i++) {
+        const unsigned total = pharos_lens_rival_raw(i, addr, name, sizeof(name),
+                                                     &rssi, &hits, adv, &adv_len);
+        if (total == 0) {
+            break;
+        }
+        n = total;
+        printf("  %02x:%02x:%02x:%02x:%02x:%02x  %4d dBm  %4u seen  \"%s\"\n",
+               addr[0], addr[1], addr[2], addr[3], addr[4], addr[5],
+               (int)rssi, (unsigned)hits, name);
+        /* The payload itself. Most of these advertisers are nameless because a
+         * passive listener never sees a scan response, so the bytes are the
+         * only thing there is to identify them by - and printing them is how a
+         * signature gets found rather than guessed. */
+        if (adv_len) {
+            printf("        ");
+            for (unsigned b = 0; b < adv_len; b++) {
+                printf("%02x", adv[b]);
+            }
+            printf("\n");
+        }
+    }
+    if (n == 0) {
+        printf("  (nothing - the observer is receiving no advertisements)\n");
+    }
+    return 0;
+}
+
+static int cli_tap(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: tap <0-%u>\n", PHAROS_HUD_ROWS - 1u);
+        return 1;
+    }
+    const int r = atoi(argv[1]);
+    if (r < 0 || r >= (int)PHAROS_HUD_ROWS) {
+        printf("row out of range (0-%u)\n", PHAROS_HUD_ROWS - 1u);
+        return 1;
+    }
+    pharos_ui_tap_row((unsigned)r);
+    printf("tap row %d filed\n", r);
+    return 0;
+}
+
+static int cli_rows(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const pharos_lens_t *l = pharos_lens_active();
+    if (!l) {
+        printf("no lens running\n");
+        return 1;
+    }
+    if (!l->row) {
+        printf("%s has no detail page\n", l->id);
+        return 0;
+    }
+    printf("%s detail - %s | %s\n", l->id,
+           l->row_head_left ? l->row_head_left : "",
+           l->row_head_right ? l->row_head_right : "");
+    static const char *tone[] = { "", "dim", "GOOD", "WARN", "BAD" };
+    int opened = -1;
+    const int cursor = pharos_ui_detail_cursor(&opened);
+    struct pharos_lens_row r;
+    unsigned i = 0;
+    for (; i < 240u; i++) {
+        memset(&r, 0, sizeof(r));
+        if (!l->row(i, &r)) {
+            break;
+        }
+        /* The marker is the point of printing this at all: which row the
+         * centre tap would act on is the thing a photograph cannot settle. */
+        printf("%s %2u  %-26s %-11s %s\n", ((int)i == cursor) ? " >" : "  ", i,
+               r.left, r.right, (r.tone < 5) ? tone[r.tone] : "");
+    }
+    printf("  (%u rows, %u page(s) of %u)\n", i,
+           i ? (i + PHAROS_HUD_ROWS - 1u) / PHAROS_HUD_ROWS : 1u, PHAROS_HUD_ROWS);
+    if (cursor < 0) {
+        printf("  detail page is not up (nav detail to open it)\n");
+    } else if (l->row_edit || l->row_expand) {
+        printf("  centre tap: %s row %d\n",
+               l->row_edit ? "changes or opens" : "opens", cursor);
+    }
+
+    /* And what the opened row is showing, since that is a second page nothing
+     * else can print. */
+    if (opened >= 0 && l->row_expand) {
+        printf("  -- row %d opened --\n", opened);
+        for (unsigned k = 0; k < 240u; k++) {
+            memset(&r, 0, sizeof(r));
+            if (!l->row_expand((unsigned)opened, k, &r)) {
+                break;
+            }
+            printf("     %2u  %-26s %-11s %s\n", k, r.left, r.right,
+                   (r.tone < 5) ? tone[r.tone] : "");
+        }
+    }
+    return 0;
+}
+
+static int cli_nav(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("nav <detail|next|prev|select|home>\n");
+        return 1;
+    }
+    const char *w = argv[1];
+    pharos_nav_t n;
+    if (strcmp(w, "detail") == 0)      n = PHAROS_NAV_DETAIL;
+    else if (strcmp(w, "next") == 0)   n = PHAROS_NAV_NEXT;
+    else if (strcmp(w, "prev") == 0)   n = PHAROS_NAV_PREV;
+    else if (strcmp(w, "select") == 0) n = PHAROS_NAV_SELECT;
+    else if (strcmp(w, "home") == 0)   n = PHAROS_NAV_HOME;
+    else {
+        printf("unknown direction: %s\n", w);
+        return 1;
+    }
+    pharos_ui_request_nav(n);
+    printf("nav %s filed\n", w);
+    return 0;
+}
+
 static int cli_rotate(int argc, char **argv)
 {
     if (argc < 2) {
@@ -340,8 +563,15 @@ static int cli_screen(int argc, char **argv)
             return 1;
         }
         pharos_hud_create();
-        pharos_hud_update("DIAG", "TEST", "screen test",
-                          "if you can read this, pixels work", 66, 0x3DDC84);
+        struct pharos_lens_display t;
+        memset(&t, 0, sizeof(t));
+        snprintf(t.big, sizeof(t.big), "TEST");
+        snprintf(t.band, sizeof(t.band), "screen test");
+        snprintf(t.detail, sizeof(t.detail), "if you can read this, pixels work");
+        t.score = 66;
+        t.ceiling = 96;
+        t.has_score = true;
+        pharos_hud_live("DIAG", &t, 0x3DDC84);
         pharos_bsp_display_unlock();
         printf("test pattern pushed - look at the panel\n");
         return 0;
@@ -413,6 +643,46 @@ void pharos_console_start(void)
         .func = &cli_rotate,
     };
     esp_console_cmd_register(&rotate);
+
+    const esp_console_cmd_t nav = {
+        .command = "nav",
+        .help = "drive the screen as a finger would",
+        .hint = "<detail|next|prev|select|home>",
+        .func = &cli_nav,
+    };
+    esp_console_cmd_register(&nav);
+
+    const esp_console_cmd_t tap = {
+        .command = "tap",
+        .help = "touch a detail row, as a finger would",
+        .hint = "<0-3>",
+        .func = &cli_tap,
+    };
+    esp_console_cmd_register(&tap);
+
+    const esp_console_cmd_t rows = {
+        .command = "rows",
+        .help = "print what the detail page is showing for the active lens",
+        .hint = NULL,
+        .func = &cli_rows,
+    };
+    esp_console_cmd_register(&rows);
+
+    const esp_console_cmd_t ble = {
+        .command = "ble",
+        .help = "list every BLE advertiser in range, named or not",
+        .hint = NULL,
+        .func = &cli_ble,
+    };
+    esp_console_cmd_register(&ble);
+
+    const esp_console_cmd_t alarm = {
+        .command = "alarm",
+        .help = "the alarm: on | off | vol <0-100> | test",
+        .hint = "[on|off|vol|test]",
+        .func = &cli_alarm,
+    };
+    esp_console_cmd_register(&alarm);
 
     const esp_console_cmd_t lens = {
         .command = "lens",

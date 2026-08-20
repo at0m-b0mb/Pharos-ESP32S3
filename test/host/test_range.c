@@ -84,6 +84,53 @@ void test_range_flood(void)
     CHECK(v.score > vh.score, "camping earns more than hopping on the same stream");
 }
 
+/* The companion to test_range_flood, and the point of the pair.
+ *
+ * Same kind of attack, but against a network that REQUIRES protected
+ * management frames. The unprotected disconnects are then a contradiction
+ * rather than a measurement, and a contradiction does not get weaker because
+ * the receiver only visited for 200 ms. This is the scenario where a hopping
+ * receiver is entitled to alarm - and the flood scenario, whose attacker rode
+ * the access point's own sequence counter and gave away only its position, is
+ * the one where it is not. */
+void test_range_proven(void)
+{
+    banner("range: a contradiction may alarm even while hopping");
+
+    pr_range_t r;
+    pr_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.scenario = PR_SCENARIO_DEAUTH_PROVEN;
+    cfg.seed = 0xBEEF;
+    cfg.intensity = 800;
+    pr_range_init(&r, &cfg);
+
+    pw_engine_t eng;
+    pw_reset(&eng);
+    pharos_event_t ev;
+    uint64_t last = 0;
+    while (pr_range_next(&r, &ev)) {
+        pw_observe(&eng, &ev.u.dot11, ev.t_us);
+        last = ev.t_us;
+    }
+
+    pw_context_t hopping = { .dwell_permil = 77, .bus_yield_permil = 1000,
+                             .window_ms = 12000 };
+    pw_verdict_t vh;
+    pw_evaluate(&eng, last, &hopping, &vh);
+
+    CHECK(vh.forgery & PW_FORGE_MFP_PROOF,
+          "the 802.11w contradiction is found (forgery=0x%02x)", vh.forgery);
+    CHECK(vh.notes & PW_NOTE_HARD, "and it counts as hard evidence");
+    CHECK_EQ(vh.ceiling, PW_CEILING_HARD_EVIDENCE);
+    CHECK(vh.ceiling > pw_ceiling(&hopping),
+          "the ceiling rose above what dwell alone would allow (%u vs %u)",
+          vh.ceiling, pw_ceiling(&hopping));
+    CHECK(vh.rejoins_after > 0, "the clients came back (%u of %u)",
+          vh.rejoins_after, vh.rejoins);
+    CHECK(vh.score <= vh.ceiling, "and it still respects its own ceiling");
+}
+
 void test_range_calm_and_roaming(void)
 {
     banner("range: calm stays calm, roaming is not a twin");

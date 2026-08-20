@@ -71,6 +71,9 @@ typedef enum {
     PV_KIND_FINDMY_LOST,  /* Apple Find My, SEPARATED from its owner */
     PV_KIND_TILE,
     PV_KIND_SMARTTAG,     /* Samsung Galaxy SmartTag                */
+    PV_KIND_CHIPOLO,      /* Chipolo, its own service UUID          */
+    PV_KIND_FLIPPER,      /* a Flipper Zero advertising its presence */
+    PV_KIND_SERIAL,       /* a bare BLE serial bridge - see below    */
     PV_KIND_GENERIC,      /* a persistent advertiser we cannot name  */
     PV_KIND_COUNT,
 } pv_kind_t;
@@ -87,6 +90,27 @@ typedef enum {
 #define PV_NOTE_ONE_PLACE (1u << 1) /* you have not moved yet           */
 #define PV_NOTE_FULL      (1u << 2) /* more advertisers than we track   */
 #define PV_NOTE_KNOWN     (1u << 3) /* something matched your own list  */
+#define PV_NOTE_FLIPPER   (1u << 4) /* a Flipper Zero is in the room    */
+#define PV_NOTE_SERIAL    (1u << 5) /* a bare serial bridge is present  */
+
+/* WHAT THIS RADIO CANNOT SEE, STATED IN THE HEADER SO NOBODY HAS TO GUESS.
+ *
+ * The ESP32-S3 has Bluetooth LOW ENERGY only - no BR/EDR, no Classic. That is
+ * a property of the silicon, not of this firmware, and it has one consequence
+ * worth being loud about:
+ *
+ *   The card skimmers people most want to find - the HC-05 and HC-06 modules
+ *   documented in fuel-pump skimmers for a decade - are CLASSIC Bluetooth
+ *   devices. This radio is deaf to them. A quiet Vigil screen is not evidence
+ *   that a pump is clean, and anyone told otherwise has been misled.
+ *
+ * What it CAN see is the newer generation of BLE serial bridges (the JDY, AT-09
+ * and MLT-BT05 family), which turn up in the same role. PV_KIND_SERIAL reports
+ * those - as a bridge, never as a "skimmer", because the identical module sits
+ * inside hobby electronics, scoreboards and cheap door locks. Naming a Bluetooth
+ * speaker as a card skimmer would be the single most damaging false positive
+ * this project could produce. */
+#define PV_BREDR_BLIND 1
 #define PV_NOTE_SHORT     (1u << 4) /* too little time to judge         */
 
 typedef struct {
@@ -158,6 +182,16 @@ void pv_evaluate(const pv_state_t *s, uint64_t now_us, pv_verdict_t *out);
 
 /* Classify an advertisement payload. Exposed for testing. */
 pv_kind_t pv_classify(const uint8_t *data, uint8_t len);
+
+/* One tag from the table, ranked so index 0 is the one that matters most:
+ * anything present across several places first, then the longest-present, then
+ * the rest. Returns false past the end.
+ *
+ * A score saying "something is following you" that cannot say WHICH device is
+ * a fright with no remedy - the address and the kind are what let somebody
+ * actually search a bag. */
+bool pv_tag_at(const pv_state_t *s, unsigned index, uint64_t now_us,
+               pv_tag_t *out, uint32_t *minutes);
 
 const char *pv_kind_name(pv_kind_t k);
 const char *pv_band_name(pv_band_t b);

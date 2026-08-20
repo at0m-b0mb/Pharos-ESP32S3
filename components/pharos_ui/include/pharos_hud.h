@@ -8,8 +8,44 @@
  *            the answer to "I don't know what this device is doing": you read
  *            what a tool does before you start it, not after.
  *
- *   LIVE   - that lens running: the gauge, the headline number, the band word
- *            and a detail line.
+ *   LIVE   - that lens running: the activity ribbon, the score arc with its
+ *            ceiling, the headline number, the band word, the evidence pips
+ *            and one line of what to do.
+ *
+ * ---------------------------------------------------------------------------
+ * THE FLICKER, AND WHY THE API CHANGED
+ *
+ * The previous HUD was one flat pile of widgets on the screen object, and the
+ * repaint pushed every value into every widget five times a second whether or
+ * not anything had changed. Four things followed from that, and together they
+ * are the "it flickers and breaks" the device was reported with:
+ *
+ *   1. Neither the screen nor the touch zones ever had LV_OBJ_FLAG_SCROLLABLE
+ *      removed, and lv_obj_create() sets it. The content is laid out well
+ *      past the screen's own bounds (labels at -122, zones 466 px tall), so a
+ *      drag - or a slightly smeared tap, which on a round glass is most of
+ *      them - SCROLLED THE WHOLE FACE and it never came back. That is the
+ *      "breaks" half, and it is one flag.
+ *
+ *   2. pharos_hud_live() hid the summary label and pharos_hud_advice(), called
+ *      immediately after it in the same repaint, showed it again. Every frame.
+ *      Two full invalidations of a wide text block, forever.
+ *
+ *   3. lv_label_set_text() marks the label dirty even when the string is
+ *      identical, so five labels and three arcs were redrawn 5 times a second
+ *      with the same content, under a 210 px opaque disc that then had to be
+ *      recomposited along with everything above it.
+ *
+ *   4. The advice label was LV_LABEL_LONG_WRAP with a size that changed as the
+ *      text did, so its height changed, so it re-laid-out, so the invalidated
+ *      region moved around underneath the arc.
+ *
+ * So this version: two page containers, shown and hidden only when the view
+ * actually changes; every widget written through a dirty check that compares
+ * against what is already there; no wrapping text anywhere; and scrolling
+ * removed from the screen and from every object that is created. In the steady
+ * state - a score that has not moved - a repaint now invalidates nothing at
+ * all.
  *
  * Touch moves between them; see pharos_nav_t. The whole surface is LVGL, so it
  * follows the panel rotation without any geometry of ours.
@@ -20,11 +56,19 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "pharos_lens.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 bool pharos_hud_create(void);
+
+/* Build the face again from scratch, which is how a theme change is applied.
+ * Caller holds the display lock. Safe to call before create(); it does
+ * nothing. See the comment on the definition for why this is a rebuild rather
+ * than a walk over the widgets. */
+void pharos_hud_rebuild(void);
 
 /* Have the widgets actually been built? Reported by the `diag` command: a
  * panel that is up with no HUD on it is a different fault from a dark one. */
@@ -40,6 +84,7 @@ typedef enum {
     PHAROS_NAV_NEXT,
     PHAROS_NAV_SELECT,
     PHAROS_NAV_HOME,
+    PHAROS_NAV_DETAIL, /* the bottom strip: "show me what you actually found" */
 } pharos_nav_t;
 
 /* The callback is invoked from LVGL's task, so implementations MUST only
@@ -49,17 +94,63 @@ typedef enum {
 typedef void (*pharos_hud_nav_cb_t)(pharos_nav_t what);
 void pharos_hud_set_nav_cb(pharos_hud_nav_cb_t cb);
 
+/* A row on the detail page was touched directly.
+ *
+ * Stepping a cursor with the side zones and then pressing the centre is three
+ * or four presses to reach one setting, on a device somebody is holding up
+ * one-handed. Touching the row itself is one. `row_on_page` is 0..ROWS-1; the
+ * caller adds its own page offset, because the HUD does not know what it is
+ * showing.
+ *
+ * Same rule as the nav callback: this runs on LVGL's task, so record the
+ * intent and return. */
+typedef void (*pharos_hud_row_cb_t)(unsigned row_on_page);
+void pharos_hud_set_row_cb(pharos_hud_row_cb_t cb);
+
 /* BROWSE: show one lens and what it is for. */
 void pharos_hud_browse(const char *name, const char *summary, const char *team,
                        unsigned index, unsigned total, uint32_t rgb);
 
-/* LIVE: show a running lens. `summary` may be NULL. */
-void pharos_hud_live(const char *lens, const char *big, const char *band,
-                     const char *detail, int score, uint32_t rgb);
+/* LIVE: show a running lens.
+ *
+ * ONE call per repaint, taking the whole picture. The old API was three calls
+ * - live(), then ceiling(), then advice() - which is how the summary label
+ * ended up being hidden by one and shown by the next on every single frame.
+ * A single entry point cannot disagree with itself.
+ *
+ * `d` may be NULL, which draws the "running, nothing to report yet" face. */
+void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
+                     uint32_t rgb_override);
 
-/* Kept for the boot splash and the `screen test` command. */
-void pharos_hud_update(const char *lens, const char *big, const char *band,
-                       const char *detail, int score, uint32_t rgb);
+/* DETAIL: the active lens' own evidence, a page of rows at a time.
+ *
+ * `rows` points at `n` filled rows - already the page's worth, the caller does
+ * the slicing - and page/pages drive the indicator. n = 0 draws the empty
+ * state rather than a blank page, because a list with nothing in it is a
+ * finding too. */
+/* FOUR ROWS, NOT SIX, AND WHY THE NUMBER WENT DOWN.
+ *
+ * Six rows fitted the glass at a 36 px pitch. This panel is 466 px across a
+ * 1.75 inch circle - 266 ppi - so 36 px is 3.4 mm, and a fingertip contact
+ * patch is around 9 mm. The rows were legible and untappable, which is how
+ * "sometimes I am not able to click them correctly" happens: not a calibration
+ * fault, a target a finger physically cannot resolve.
+ *
+ * Four rows at 58 px is 5.5 mm, and each row's touch target spans the full
+ * width of the glass, so only the vertical dimension has to be got right. The
+ * cost is more paging, which is why the page controls are the two largest
+ * targets on the screen. */
+#define PHAROS_HUD_ROWS 4
+#define PHAROS_HUD_ROW_PITCH 58
+void pharos_hud_detail(const char *lens, const char *head_left,
+                       const char *head_right,
+                       const struct pharos_lens_row *rows, unsigned n,
+                       unsigned page, unsigned pages, int focus, bool openable);
+
+/* The boot splash and the `screen test` command. */
+void pharos_hud_splash(const char *version, bool fence_clean);
+void pharos_hud_toast(const char *msg);
+
 /* Paint six full-screen colour patches with their names.
  *
  * A panel driven with the wrong channel order still shows black as black and
@@ -68,17 +159,6 @@ void pharos_hud_update(const char *lens, const char *big, const char *band,
  * RED is blue, the red and blue channels are swapped; if everything is shifted,
  * the byte order is. It turns a guess into a reading. */
 void pharos_hud_colourbars(void);
-
-void pharos_hud_splash(const char *version, bool fence_clean);
-void pharos_hud_toast(const char *msg);
-
-/* The confidence ceiling, drawn as a dimmed arc behind the score: the part a
- * thin sweep EARNED and then had taken away. Showing it is the whole argument
- * of the project, so it is on the glass rather than only in a report. */
-void pharos_hud_ceiling(int ceiling);
-
-/* One line of what to DO about the reading, under the gauge. */
-void pharos_hud_advice(const char *advice);
 
 #ifdef __cplusplus
 }

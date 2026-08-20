@@ -17,6 +17,24 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 
+# The ELF path is captured HERE, before anything else runs, and every later
+# reference uses this variable rather than "$1".
+#
+# It used to read "$1" at the point of use - roughly fifty lines after
+#     set -- $BLE_VALS
+# quietly reassigned the positional parameters to walk a list of expected
+# Kconfig values. By the time the ELF stage was reached, "$1" was the string
+# "y", `[ -f y ]` was false, and the entire linked-image audit was skipped.
+# Silently: the guard has no else branch, so there was not even a "skipped"
+# line to notice.
+#
+# That stage is the one that proves the --wrap traps actually made it into the
+# firmware, and it is cited in the README and run by CI on every build. It has
+# never once executed. The fence itself was intact the whole time - the wrap
+# traps are present, as the stage now confirms - but the check that was
+# supposed to prove it was answering a question about the letter "y".
+ELF_PATH="${1:-}"
+
 RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; RST=$'\033[0m'
 fail=0
 note() { printf '  %s\n' "$*"; }
@@ -143,20 +161,75 @@ fi
 # `esp_wifi_80211_tx` in the ELF is expected and not a breach. The meaningful
 # ELF-level check is the inverse: that our __wrap_ traps are actually linked
 # in, which proves the fence took effect at link time.
-if [ "${1:-}" != "" ] && [ -f "${1:-}" ]; then
+if [ -n "$ELF_PATH" ] && [ -f "$ELF_PATH" ]; then
   echo
-  echo "[6] linked ELF has the wrap traps linked in: $1"
+  echo "[7] linked ELF has the wrap traps linked in: $ELF_PATH"
   if command -v nm >/dev/null 2>&1; then
+    # Read the symbol table ONCE - see the long note in check_lenses.sh. Under
+    # `set -o pipefail`, `nm "$ELF" | grep -q ...` reports a MISSING wrap trap
+    # whenever grep matches early enough to SIGPIPE nm, which is a fence audit
+    # failing on a fence that is intact.
+    ELF_SYMS=$(nm "$ELF_PATH" 2>/dev/null)
+
+    # WHAT A CLEAN IMAGE ACTUALLY LOOKS LIKE.
+    #
+    # The first version of this stage demanded a __wrap_<sym> trap for every
+    # transmit primitive, and on a correct build four of the five are absent.
+    # That is not a breach - it is a stronger result than the one being asked
+    # for, and reading it as a failure had the audit condemning the very thing
+    # it was written to protect.
+    #
+    # --wrap only rewrites references. If nothing in the firmware calls
+    # esp_wifi_80211_tx, the linker never pulls in the archive member that
+    # defines it, --gc-sections drops the unreferenced trap, and NEITHER symbol
+    # appears. So an absent trap means "nothing can call this", which is better
+    # than "calls to this are redirected".
+    #
+    # The breach to look for is therefore the specific combination: the
+    # primitive is in the image AND its trap is not - a call that was not
+    # redirected. Everything else is fine, and the two fine cases are reported
+    # differently so the operator can see which one they got.
+    wraps_seen=0
     for sym in "${TX_SYMBOLS[@]}"; do
-      if nm "$1" 2>/dev/null | grep -qE "\b[Tt] __wrap_${sym}$"; then
-        ok "__wrap_${sym} present in the image"
+      have_wrap=0; have_sym=0
+      grep -qE "\b[Tt] __wrap_${sym}$" <<< "$ELF_SYMS" && have_wrap=1
+      grep -qE "[[:space:]]${sym}$" <<< "$ELF_SYMS" && have_sym=1
+      if [ "$have_wrap" -eq 1 ]; then
+        wraps_seen=$((wraps_seen + 1))
+        ok "${sym}: calls redirected to the trap"
+      elif [ "$have_sym" -eq 0 ]; then
+        ok "${sym}: not linked into the image at all"
       else
-        bad "__wrap_${sym} MISSING from the image - the fence did not link"
+        bad "${sym} is in the image with NO trap - a call escaped the fence"
       fi
     done
+
+    # THE POSITIVE CONTROL, and it is the load-bearing half of this stage.
+    #
+    # Every primitive above legitimately reports "not linked" on a clean build.
+    # But so would every primitive if somebody deleted the --wrap flags from
+    # the link line entirely - the traps would vanish and this stage would sail
+    # through having proved nothing at all. An audit that cannot fail is not an
+    # audit.
+    #
+    # So: at least one of the fence's own traps must be present in the image,
+    # which can only happen if --wrap is genuinely being applied. tx_fence.c
+    # also wraps esp_wifi_set_mode, and the radio HAL really does call it (to
+    # ask for WIFI_MODE_NULL), so that trap IS linked on every honest build and
+    # serves as the control. It is not in TX_SYMBOLS because stage [2] judges
+    # AP-mode requests on its own terms.
+    if ! grep -qE "\b[Tt] __wrap_esp_wifi_set_mode$" <<< "$ELF_SYMS"; then
+      bad "__wrap_esp_wifi_set_mode is absent - the --wrap flags are not being applied, so the whole stage above proves nothing"
+    else
+      ok "wrap machinery is armed (the esp_wifi_set_mode trap is linked)"
+    fi
   else
     note "nm not available; skipping ELF audit"
   fi
+else
+  # Say so out loud. A silent skip is what let this stage go missing.
+  echo
+  echo "[7] skipped (no ELF given; CI passes build/pharos.elf)"
 fi
 
 echo

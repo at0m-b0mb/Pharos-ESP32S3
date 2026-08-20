@@ -17,7 +17,6 @@
 #include "pharos_dot11.h"
 #include "pharos_lens.h"
 #include "pharos_round.h"
-#include "pharos_watch.h"
 #include "test_support.h"
 
 unsigned g_checks, g_fails;
@@ -268,251 +267,10 @@ static void test_round(void)
     CHECK_NEAR(pr_dial_angle(8, 8, 0.0f), 0.0, 0.01);
 }
 
-/* ---------------------------------------------------------------- watch */
+/* The watch engine has its own suite - see test_watch.c. This address is all
+ * that is still needed here, by the frame-parser tests below. */
 
-static const uint8_t AP_KNOWN[6] = { 0x02, 0xAA, 0xBB, 0x00, 0x00, 0x01 };
 static const uint8_t AP_SPOOF[6] = { 0x02, 0xDE, 0xAD, 0x00, 0x00, 0x02 };
-static const uint8_t CLIENT1[6]  = { 0x02, 0xC1, 0x00, 0x00, 0x00, 0x11 };
-static const uint8_t BCAST[6]    = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-
-#define T0 100000000ull /* 100 s, well clear of the bucket epoch */
-
-static pharos_ev_dot11_t mk(uint8_t subtype, const uint8_t *a1, const uint8_t *a2,
-                            int8_t rssi, uint16_t reason, uint8_t flags)
-{
-    pharos_ev_dot11_t f;
-    memset(&f, 0, sizeof(f));
-    f.type = PHAROS_FT_MGMT;
-    f.subtype = subtype;
-    memcpy(f.a1, a1, 6);
-    memcpy(f.a2, a2, 6);
-    memcpy(f.a3, a2, 6);
-    f.rssi = rssi;
-    f.channel = 6;
-    f.reason_or_status = reason;
-    f.flags = flags;
-    return f;
-}
-
-static void feed_beacons(pw_engine_t *e, const uint8_t *bssid, int n, int8_t rssi,
-                         uint8_t flags)
-{
-    pharos_ev_dot11_t b = mk(PHAROS_ST_BEACON, BCAST, bssid, rssi, 0, flags);
-    for (int i = 0; i < n; i++) {
-        pw_observe(e, &b, T0 + (uint64_t)i * 100000ull);
-    }
-}
-
-/* n deauths spread evenly across span_us starting at T0. */
-static void feed_deauth(pw_engine_t *e, const uint8_t *src, const uint8_t *dst, int n,
-                        int8_t rssi, uint16_t reason, uint64_t span_us)
-{
-    pharos_ev_dot11_t d = mk(PHAROS_ST_DEAUTH, dst, src, rssi, reason, 0);
-    for (int i = 0; i < n; i++) {
-        pw_observe(e, &d, T0 + ((uint64_t)i * span_us) / (uint64_t)n);
-    }
-}
-
-static pw_context_t ctx_of(uint16_t dwell, uint16_t yield)
-{
-    pw_context_t c;
-    c.dwell_permil = dwell;
-    c.bus_yield_permil = yield;
-    c.window_ms = 10000;
-    return c;
-}
-
-static void test_watch_ceiling(void)
-{
-    banner("watch: confidence ceiling");
-
-    pw_context_t camped = ctx_of(1000, 1000);
-    pw_context_t hopping = ctx_of(71, 1000); /* 200 ms across 14 channels */
-    pw_context_t lossy = ctx_of(1000, 300);
-
-    CHECK_EQ(pw_ceiling(&camped), 96);
-    CHECK(pw_ceiling(&hopping) < 75,
-          "hopping must not be able to reach the alarm band (got %u)",
-          pw_ceiling(&hopping));
-    CHECK_EQ(pw_ceiling(&hopping), 60);
-    CHECK(pw_ceiling(&lossy) < pw_ceiling(&camped), "frame loss lowers confidence");
-    CHECK(pw_ceiling(&camped) < 100, "nothing this device sees is certain");
-
-    /* Monotonic in dwell: standing still always buys confidence. */
-    uint8_t prev = 0;
-    for (uint16_t d = 1; d <= 1000; d += 37) {
-        pw_context_t c = ctx_of(d, 1000);
-        uint8_t got = pw_ceiling(&c);
-        CHECK(got >= prev, "ceiling monotonic in dwell at %u", d);
-        prev = got;
-    }
-    pw_context_t floorish = ctx_of(1, 1);
-    CHECK_EQ(pw_ceiling(&floorish), 45);
-}
-
-static void test_watch_quiet_and_background(void)
-{
-    banner("watch: quiet and ordinary networks");
-    pw_engine_t e;
-    pw_verdict_t v;
-    pw_context_t c = ctx_of(1000, 1000);
-
-    pw_reset(&e);
-    pw_evaluate(&e, T0 + 10000000ull, &c, &v);
-    CHECK_EQ(v.band, PW_BAND_QUIET);
-    CHECK_EQ(v.score, 0);
-    CHECK_EQ(v.observed, 0);
-
-    /* A healthy network: beacons plus a handful of unicast disconnects. */
-    pw_reset(&e);
-    feed_beacons(&e, AP_KNOWN, 60, -45, 0);
-    feed_deauth(&e, AP_KNOWN, CLIENT1, 3, -45, 8, 9000000ull);
-    pw_evaluate(&e, T0 + 9500000ull, &c, &v);
-    CHECK(v.band <= PW_BAND_BACKGROUND,
-          "roaming traffic must not alarm (band %s score %u)",
-          pw_band_name(v.band), v.score);
-}
-
-static void test_watch_flood_camped(void)
-{
-    banner("watch: broadcast flood, camped receiver");
-    pw_engine_t e;
-    pw_verdict_t v;
-    pw_context_t c = ctx_of(1000, 1000);
-
-    pw_reset(&e);
-    feed_beacons(&e, AP_KNOWN, 60, -45, 0);
-    feed_deauth(&e, AP_SPOOF, BCAST, 1000, -60, 7, 9990000ull);
-    pw_evaluate(&e, T0 + 9990000ull, &c, &v);
-
-    CHECK_EQ(v.observed, 1000);
-    CHECK(v.shape_sample <= PW_MAX_EVENTS, "shape comes from a bounded sample");
-    CHECK(v.notes & PW_NOTE_SAMPLED, "engine admits the shape was sampled");
-    CHECK_NEAR(v.est_per_s_x100, 10000, 200); /* ~100 deauth/s */
-    CHECK_EQ(v.broadcast_permil, 1000);
-    CHECK(v.families & PW_FAM_RATE, "rate family");
-    CHECK(v.families & PW_FAM_TARGET, "targeting family");
-    CHECK(v.families & PW_FAM_IDENTITY, "identity family: source never beaconed");
-    CHECK_EQ(v.band, PW_BAND_LIKELY);
-    CHECK(v.score >= 75 && v.score <= v.ceiling, "score %u within ceiling %u",
-          v.score, v.ceiling);
-    CHECK(memcmp(v.src, AP_SPOOF, 6) == 0, "dominant source identified");
-}
-
-static void test_watch_flood_hopping(void)
-{
-    banner("watch: same flood, hopping receiver");
-    pw_engine_t e;
-    pw_verdict_t v;
-    pw_context_t c = ctx_of(71, 1000);
-
-    /* A hopping receiver hears about 7% of it: 71 frames, not 1000. */
-    pw_reset(&e);
-    feed_beacons(&e, AP_KNOWN, 6, -45, 0);
-    feed_deauth(&e, AP_SPOOF, BCAST, 71, -60, 7, 9990000ull);
-    pw_evaluate(&e, T0 + 9990000ull, &c, &v);
-
-    /* Duty correction recovers the true rate from the thin sample ... */
-    CHECK_NEAR(v.est_per_s_x100, 10000, 1200);
-    /* ... but the ceiling refuses to let an extrapolation raise an alarm. */
-    CHECK(v.band == PW_BAND_SUSPICIOUS, "hopping tops out at SUSPICIOUS, got %s",
-          pw_band_name(v.band));
-    CHECK_EQ(v.score, 60);
-    CHECK(v.notes & PW_NOTE_THIN_DWELL, "thin dwell disclosed");
-    CHECK(!(v.families & PW_FAM_IDENTITY),
-          "an unheard beacon is not evidence of forgery while hopping");
-    CHECK(v.raw_score > v.score, "the operator can see what camping would buy");
-}
-
-static void test_watch_single_family_cap(void)
-{
-    banner("watch: one family cannot leave ELEVATED");
-    pw_engine_t e;
-    pw_verdict_t v;
-    pw_context_t c = ctx_of(1000, 1000);
-
-    /* Heavy but ordinary-shaped: one victim, a real AP, matching signal. */
-    pw_reset(&e);
-    feed_beacons(&e, AP_KNOWN, 60, -45, 0);
-    feed_deauth(&e, AP_KNOWN, CLIENT1, 1000, -45, 7, 9990000ull);
-    pw_evaluate(&e, T0 + 9990000ull, &c, &v);
-
-    CHECK_EQ(v.families, PW_FAM_RATE);
-    CHECK_EQ(v.score, 49);
-    CHECK_EQ(v.band, PW_BAND_ELEVATED);
-    CHECK(v.raw_score > v.score, "the cap is visible, not hidden");
-}
-
-static void test_watch_two_families_cannot_alarm(void)
-{
-    banner("watch: two families top out below the alarm band");
-    /* Arithmetic property, asserted directly: rate 40 + the larger of the
-     * other two families 22 + the 12 point reason modifier = 74. */
-    CHECK(40 + 22 + 12 < 75, "any two families stay under the alarm threshold");
-}
-
-static void test_watch_identity_rssi(void)
-{
-    banner("watch: same address, different transmitter");
-    pw_engine_t e;
-    pw_verdict_t v;
-    pw_context_t c = ctx_of(1000, 1000);
-
-    pw_reset(&e);
-    feed_beacons(&e, AP_KNOWN, 60, -40, 0);
-    /* Frames claim the AP we can hear, but arrive 30 dB weaker. */
-    feed_deauth(&e, AP_KNOWN, BCAST, 300, -70, 7, 9990000ull);
-    pw_evaluate(&e, T0 + 9990000ull, &c, &v);
-
-    CHECK_EQ(v.rssi_delta, 30);
-    CHECK_EQ(v.c_identity, 22);
-    CHECK(v.families & PW_FAM_IDENTITY, "signal mismatch is identity evidence");
-    CHECK_EQ(v.band, PW_BAND_LIKELY);
-}
-
-static void test_watch_mfp_note(void)
-{
-    banner("watch: 802.11w target is annotated, not scored");
-    pw_engine_t e;
-    pw_verdict_t v;
-    pw_context_t c = ctx_of(1000, 1000);
-
-    pw_reset(&e);
-    feed_beacons(&e, AP_KNOWN, 60, -40, PHAROS_DOT11_F_MFP_SEEN);
-    feed_deauth(&e, AP_KNOWN, BCAST, 300, -70, 7, 9990000ull);
-    pw_evaluate(&e, T0 + 9990000ull, &c, &v);
-    CHECK(v.notes & PW_NOTE_MFP_TARGET, "protected-management-frame note raised");
-}
-
-static void test_watch_short_window(void)
-{
-    banner("watch: a blink is not a rate");
-    pw_engine_t e;
-    pw_verdict_t v;
-    pw_context_t c = ctx_of(1000, 1000);
-
-    pw_reset(&e);
-    feed_deauth(&e, AP_SPOOF, BCAST, 100, -60, 7, 500000ull);
-    pw_evaluate(&e, T0 + 500000ull, &c, &v);
-
-    CHECK(v.notes & PW_NOTE_SHORT_WINDOW, "short window disclosed");
-    CHECK(v.score <= 49, "cannot alarm on half a second (got %u)", v.score);
-}
-
-static void test_watch_vocabulary(void)
-{
-    banner("watch: vocabulary contains no all-clear");
-    for (int b = PW_BAND_QUIET; b <= PW_BAND_LIKELY; b++) {
-        const char *name = pw_band_name((pw_band_t)b);
-        const char *advice = pw_band_advice((pw_band_t)b);
-        CHECK(name && *name, "band %d named", b);
-        CHECK(advice && *advice, "band %d advised", b);
-        CHECK(strstr(name, "SAFE") == NULL, "no band claims safety: %s", name);
-        CHECK(strstr(name, "CLEAR") == NULL, "no band claims all-clear: %s", name);
-        CHECK(strstr(advice, " is safe") == NULL, "advice never says safe");
-        CHECK(strstr(advice, "no attack") == NULL, "advice never rules out attack");
-    }
-}
 
 /* --------------------------------------------------------------- dot11 */
 
@@ -626,16 +384,10 @@ int main(void)
     test_round();
     test_dot11_header();
     test_dot11_ies();
-    test_watch_ceiling();
-    test_watch_quiet_and_background();
-    test_watch_flood_camped();
-    test_watch_flood_hopping();
-    test_watch_single_family_cap();
-    test_watch_two_families_cannot_alarm();
-    test_watch_identity_rssi();
-    test_watch_mfp_note();
-    test_watch_short_window();
-    test_watch_vocabulary();
+    test_watch();
+    test_rival();
+    test_acoustic();
+    test_theme();
     test_census();
     test_twin();
     test_report();
@@ -646,6 +398,7 @@ int main(void)
     test_region();
     test_range_determinism();
     test_range_flood();
+    test_range_proven();
     test_range_calm_and_roaming();
     test_range_probe_leak();
     test_range_vocabulary();

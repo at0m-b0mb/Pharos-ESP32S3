@@ -180,6 +180,37 @@ static bool k_karma_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* A KARMA responder answers to names nobody advertised. These rows are that
+ * sentence as numbers: how many names it answered for, and how many of those
+ * it never announced itself - the gap IS the attack. */
+static bool k_karma_row(unsigned index, struct pharos_lens_row *out)
+{
+    pk_verdict_t v;
+    if (!pharos_lens_karma_snapshot(&v)) return false;
+    switch (index) {
+    case 0:
+        snprintf(out->left, sizeof(out->left), "names answered");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.answered_ssids);
+        out->tone = PHAROS_TONE_NEUTRAL; return true;
+    case 1:
+        snprintf(out->left, sizeof(out->left), "never announced");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.unannounced);
+        /* The gap is the finding: a legitimate multi-SSID access point
+         * beacons every name it answers for. */
+        out->tone = v.unannounced ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD; return true;
+    case 2:
+        snprintf(out->left, sizeof(out->left), "answered promptly");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.echoed);
+        out->tone = v.echoed ? PHAROS_TONE_WARN : PHAROS_TONE_DIM; return true;
+    case 3:
+        snprintf(out->left, sizeof(out->left), "responder");
+        snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                 v.suspect[3], v.suspect[4], v.suspect[5]);
+        out->tone = v.unannounced ? PHAROS_TONE_BAD : PHAROS_TONE_DIM; return true;
+    default: return false;
+    }
+}
+
 static const pharos_lens_t k_karma = {
     .id = "wifi.karma",
     .name = "Karma",
@@ -196,6 +227,9 @@ static const pharos_lens_t k_karma = {
     .ingest = karma_ingest,
     .stage_report = k_karma_stage,
     .display = k_karma_display,
+    .row = k_karma_row,
+    .row_head_left = "RESPONDER",
+    .row_head_right = "COUNT",
 };
 
 PHAROS_LENS_REGISTER(&k_karma);

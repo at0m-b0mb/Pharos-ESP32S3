@@ -44,9 +44,9 @@
  * palette (pharos_ui/pharos_hud.c) is what makes the gallery images and the
  * panel the same product rather than two approximations of one. */
 #define C_VOID    "#000000"
-#define C_FIELD   "#081C29"
-#define C_FIELD2  "#102839"
-#define C_RIM     "#215163"
+#define C_FIELD   "#000000"  /* true black: see the note in pharos_hud.c */
+#define C_FIELD2  "#18384A"
+#define C_RIM     "#2A6B80"
 #define C_CYAN    "#21B6C6"
 #define C_CYAN_HI "#7BEBF7"
 #define C_AMBER   "#FFC34A"
@@ -54,9 +54,9 @@
 #define C_RED     "#E75142"
 #define C_GREEN   "#39DB84"
 #define C_TEXT    "#E7F7F7"
-#define C_DIM     "#7BA6B5"
-#define C_DIMMER  "#4A798C"
-#define C_DENIED  "#213C4A"
+#define C_DIM     "#94BECC"
+#define C_DIMMER  "#6693A6"
+#define C_DENIED  "#3A5A6B"
 
 /* ---- display list ---------------------------------------------------- */
 
@@ -275,9 +275,12 @@ static int wrap(int dy, int size, const char *col, const char *s, int max_lines)
 
 static void panel_base(void)
 {
+    /* Black disc, lit rim. On the AMOLED the disc emits nothing at all - see
+     * the long note on HUD_FIELD in pharos_ui/pharos_hud.c for why a "lifted"
+     * instrument face is the wrong instinct on this panel. */
     disc(PR_CX, PR_CY, PR_R, C_VOID);
     disc(PR_CX, PR_CY, PR_R - 2, C_FIELD);
-    ring(PR_CX, PR_CY, PR_RIM_R - 4, 1, C_RIM);
+    ring(PR_CX, PR_CY, PR_RIM_R - 4, 2, C_RIM);
 }
 
 /* 24 rim ticks, the instrument's bezel. */
@@ -378,28 +381,105 @@ static void screen_lamp_room(void)
     rim_status(78, C_CYAN);
 }
 
-/* ---- screen: the Watch gauge ----------------------------------------- */
+/* ---- screen: the Watch gauge -----------------------------------------
+ *
+ * The redesign, and the reasoning behind each decision:
+ *
+ *   The old screen showed a big number, a band word, two dense monospace stat
+ *   lines and three anonymous dots. The number was fine. Everything else asked
+ *   the operator to do work: the dots said "three families" without saying
+ *   WHICH, the stat lines packed four unrelated quantities into one string,
+ *   and the advice sentence was word-wrapped into the gauge ring, where it
+ *   collided with the arc at exactly the moment it mattered most.
+ *
+ *   So: one ring answers "how bad", one ribbon answers "what shape, over
+ *   time", four labelled pips answer "on what evidence", and one unwrapped
+ *   line answers "what do I do". Nothing wraps. Nothing overlaps. Every
+ *   element has one job.
+ */
 
-/* The gauge's one-line summary. Deliberately consistent with, and shorter
- * than, pw_band_advice() - the full sentence is shown on the lens info card
- * where there is room for it. */
-static const char *hud_summary(pw_band_t band)
+/* The one-line fallback now comes from the ENGINE (pw_band_hint), not from a
+ * copy kept here. The renderer used to carry its own shorter phrasing, which
+ * meant the documentation screenshots and the device could drift apart - and
+ * the device's own strings were the ones being clipped on the glass. One
+ * source, one wording, one length budget, asserted by the host tests. */
+
+/* Sixteen radial bars around the top of the dial: one per second of the
+ * engine's own window, height proportional to that second's disconnect count.
+ *
+ * This is the single most useful thing a round screen can carry here. A steady
+ * trickle and one violent burst produce the same ten-second average and are
+ * not the same event; the mean cannot tell them apart and this shows it at a
+ * glance. The scale is per-screen (tallest bar is full height) with the peak
+ * printed, because the shape is the point and the absolute number is already
+ * in the stats line. */
+static void watch_history(const uint16_t *hist, unsigned n, const char *col)
 {
-    switch (band) {
-    case PW_BAND_QUIET:      return "Nothing in view. One channel at a time.";
-    case PW_BAND_BACKGROUND: return "Normal roaming and idle timeouts.";
-    case PW_BAND_ELEVATED:   return "More than housekeeping. Camp to sharpen.";
-    case PW_BAND_SUSPICIOUS: return "Evidence thin. Camp here to confirm.";
-    case PW_BAND_LIKELY:     return "Broad, spoofed deauth. Preserve the log.";
-    default:                 return "";
+    uint16_t peak = 0;
+    for (unsigned i = 0; i < n; i++) {
+        if (hist[i] > peak) peak = hist[i];
+    }
+
+    /* r_base + r_max must stay inside PR_SAFE_R (224) - the bounds check in
+     * this file is what caught the first attempt at 196+30 poking through the
+     * glass, which is exactly what it is for. */
+    const int r_base = 184;   /* inner end of every bar   */
+    const int r_max  = 34;    /* tallest a bar may grow   */
+    const float span = 140.0f; /* degrees of arc the ribbon occupies */
+    const float a0 = -span / 2.0f;
+
+    /* A baseline under the bars, so the ribbon reads as a timeline with quiet
+     * stretches rather than as a handful of stray marks. Without it, sixteen
+     * seconds of silence followed by a burst looks like a rendering fault
+     * instead of like the most informative thing on the screen. */
+    arc(PR_CX, PR_CY, r_base - 4, 2, a0, span, "#16303F");
+
+    for (unsigned i = 0; i < n; i++) {
+        const float a = a0 + span * ((float)i + 0.5f) / (float)n;
+        const int h = peak ? (int)(((long)hist[i] * r_max) / peak) : 0;
+        pr_point_t p0 = pr_polar((int16_t)r_base, a);
+        /* An empty second still draws a 2 px stub, so the ribbon reads as a
+         * timeline with gaps rather than as a shorter timeline. */
+        pr_point_t p1 = pr_polar((int16_t)(r_base + (h > 5 ? h : 5)), a);
+        if (h > 0) {
+            glowline(p0.x, p0.y, p1.x, p1.y, 7, col);
+        } else {
+            line(p0.x, p0.y, p1.x, p1.y, 7, "#16303F");
+        }
+    }
+}
+
+/* The four evidence families, named. A lit pip means that family met its own
+ * threshold and is contributing; a dark one means it is not. Naming them is
+ * the entire improvement over three unlabelled dots: "why does it think so"
+ * is answerable from the glass instead of from the manual. */
+static void watch_families(const pw_verdict_t *v, const char *col)
+{
+    static const struct { uint8_t bit; const char *label; } fam[4] = {
+        { PW_FAM_RATE,      "RATE"  },
+        { PW_FAM_SHAPE,     "SHAPE" },
+        { PW_FAM_FORGERY,   "FORGE" },
+        { PW_FAM_AFTERMATH, "AFTER" },
+    };
+    const int w = 80, gap = 6, h = 30;
+    const int total = 4 * w + 3 * gap;
+    const int top = PR_CY + 103;
+
+    for (unsigned i = 0; i < 4; i++) {
+        const int x = PR_CX - total / 2 + (int)i * (w + gap);
+        const bool lit = (v->families & fam[i].bit) != 0;
+        roundrect(x, top, w, h, 8, lit ? "#1B4257" : "#0A1620");
+        text(x + w / 2, top + h / 2 + 6, 16, 'c', lit ? col : C_DENIED,
+             fam[i].label);
     }
 }
 
 /* Renders one Watch verdict. The camped/hopping pair is generated from the
  * *identical* event stream, which is the whole argument of the project made
  * visible: same evidence, different entitlement to claim it. */
-static void screen_watch(const char *name, const pw_verdict_t *v, const char *mode,
-                         int dwell_pct)
+static void screen_watch(const char *name, const pw_verdict_t *v,
+                         const uint16_t *hist, unsigned nhist,
+                         const char *mode_short, int dwell_pct)
 {
     screen(name);
     panel_base();
@@ -407,86 +487,106 @@ static void screen_watch(const char *name, const pw_verdict_t *v, const char *mo
 
     const char *col = band_colour(v->score);
 
-    /* The evidence gauge: 270 degrees starting at 7 o'clock. */
+    /* --- the activity ribbon, on the rim where it does not crowd anything -- */
+    watch_history(hist, nhist, col);
+
+    /* --- the score arc: 270 degrees starting at 7 o'clock ---------------- */
     const float A0 = 225.0f, SWEEP = 270.0f;
-    const uint8_t comps[4] = { v->c_rate, v->c_target, v->c_identity, v->c_reason };
-    pd_gauge_t g;
-    pd_gauge_layout(comps, 4, v->score, v->ceiling, A0, SWEEP, &g);
+    const int R = PR_RING_R - 14;
 
-    /* Recessed track: two tones give the groove a little depth. */
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, A0, SWEEP, "#08131C");
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 12, A0, SWEEP, "#12283A");
+    arc(PR_CX, PR_CY, R, 22, A0, SWEEP, "#0A1C26");
+    arc(PR_CX, PR_CY, R, 18, A0, SWEEP, "#18384A");
+    /* One colour, fading up out of the track. The old cyan-to-band gradient
+     * read as if the first half of the score were somehow benign; it is one
+     * number and it should look like one. */
+    garc(PR_CX, PR_CY, R, 18, A0, SWEEP * (float)v->score / 100.0f, "#1B3A4E", col);
 
-    /* Component arcs. Earned families glow (gradient toward the band colour);
-     * denied ones stay dim, so the operator sees what observation quality cost
-     * them without it competing for attention. */
-    static const char *fam_col[4] = { C_CYAN, C_CYAN_HI, C_AMBER, C_ORANGE };
-    unsigned fam = 0;
-    for (unsigned i = 0; i < g.n_arcs; i++) {
-        const pd_arc_t *a = &g.arcs[i];
-        if (a->denied) {
-            arc(PR_CX, PR_CY, PR_RING_R - 8, 14, a->start_deg, a->sweep_deg, C_DENIED);
-        } else {
-            garc(PR_CX, PR_CY, PR_RING_R - 8, 14, a->start_deg, a->sweep_deg,
-                 fam_col[fam % 4], col);
-            fam++;
-        }
+    /* What the caps took away, as a thin inner trace. The old screen drew
+     * this as a second fat arc behind the score, where it read as a bug -
+     * two bars of the same weight saying different numbers. Thin, inset and
+     * dim, it reads as what it is: the score this evidence would have earned
+     * if the receiver had been entitled to claim it. */
+    if (v->raw_score > v->score) {
+        arc(PR_CX, PR_CY, R - 22, 4, A0, SWEEP * (float)v->raw_score / 100.0f,
+            "#2A4257");
     }
 
-    /* The ceiling tick: a hard stop the score may not pass. Its label goes
-     * *inside* the gauge ring - outside, it would sit among the rim ticks and
-     * fight the bezel for attention at exactly the angles it matters most. */
+    /* The ceiling: a hard stop the score may not pass, drawn as a tick across
+     * the arc rather than as a competing band of colour. */
     {
-        /* The ceiling is a glowing red tick on the arc; its number goes in the
-         * stats line below rather than floating free, where it used to collide
-         * with the dwell readout at high ceilings. */
-        pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 3), g.ceiling_deg);
-        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 22), g.ceiling_deg);
+        const float a = A0 + SWEEP * (float)v->ceiling / 100.0f;
+        pr_point_t t0 = pr_polar((int16_t)(R + 14), a);
+        pr_point_t t1 = pr_polar((int16_t)(R - 14), a);
         glowline(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
     }
 
-    /* Core: score and band. The big number blooms - it is the one thing the
-     * eye should land on first. */
-    disc(PR_CX, PR_CY, PR_CORE_R + 4, C_VOID);
+    /* --- the core: the reading ------------------------------------------- */
+    disc(PR_CX, PR_CY, PR_CORE_R + 6, C_VOID);
+    ring(PR_CX, PR_CY, PR_CORE_R + 6, 1, "#12283A");
+
+    /* Context first, in small type: what is under pressure, where, and how
+     * hard this receiver is actually looking. The posture used to live on the
+     * top rim, which is where the activity ribbon now is - and a text run and
+     * a bar chart sharing an arc is how you get a screen that looks broken. */
+    {
+        char buf[48];
+        if (v->ssid[0]) {
+            snprintf(buf, sizeof(buf), "%.14s", v->ssid);
+        } else if (v->channel) {
+            snprintf(buf, sizeof(buf), "CH %u  %s", v->channel, mode_short);
+        } else {
+            snprintf(buf, sizeof(buf), "%s", mode_short);
+        }
+        text(PR_CX, PR_CY - 54, 16, 'c', C_DIMMER, buf);
+    }
     {
         char buf[16];
         snprintf(buf, sizeof(buf), "%u", v->score);
-        glowtext(PR_CX, PR_CY - 12, 64, 'c', col, buf);
+        glowtext(PR_CX, PR_CY - 4, 60, 'c', col, buf);
     }
-    glowtext(PR_CX, PR_CY + 30, 20, 'c', col, pw_band_name(v->band));
-    text(PR_CX, PR_CY - 54, 14, 'c', C_DIMMER, "DEAUTH WATCH");
-
-    /* Below the core: the mode that produced this reading. */
+    /* The band word is what a person actually reads, so it gets the widest
+     * type the core can hold without touching the ring. */
     {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "%s  dwell %d%%", mode, dwell_pct);
-        text(PR_CX, PR_CY + 82, 14, 'c', C_DIM, buf);
+        const char *word = pw_band_name(v->band);
+        const int size = fit_text_at(PR_CX, PR_CY + 46, (unsigned)strlen(word),
+                                     PR_CORE_R + 2, 22);
+        text(PR_CX, PR_CY + 46, size ? size : 16, 'c', col, word);
     }
+
+    /* --- the supporting numbers, one line, no packing -------------------- */
+    /* Three quantities, three separators, no packing. Sized and placed to
+     * clear the score arc's inner edge: at this height the arc occupies
+     * |x| >= 131, so the run may not be wider than 262. */
     {
         char buf[64];
-        snprintf(buf, sizeof(buf), "%u.%u/s  %u obs  ceil %u", v->est_per_s_x100 / 100,
-                 (v->est_per_s_x100 / 10) % 10, v->observed, v->ceiling);
-        text(PR_CX, PR_CY + 102, 14, 'c', C_DIMMER, buf);
+        snprintf(buf, sizeof(buf), "%u seen  -  %u/s  -  ceil %u", v->observed,
+                 v->est_per_s_x100 / 100, v->ceiling);
+        text(PR_CX, PR_CY + 90, 16, 'c', C_DIM, buf);
     }
 
-    /* Families as three pips: a fired family glows, an unlit one is a hole. */
-    for (unsigned i = 0; i < 3; i++) {
-        const int x = PR_CX - 26 + (int)i * 26;
-        if (v->families & (1u << i)) {
-            glowdot(x, PR_CY + 124, 6, col);
-        } else {
-            dot(x, PR_CY + 124, 6, C_DENIED);
-        }
+    /* --- the evidence ---------------------------------------------------- */
+    watch_families(v, col);
+
+    /* --- one line of what to do, never wrapped --------------------------- */
+    {
+        /* Prefer the specific finding over the generic advice: "sequence
+         * counter went backwards" tells an operator something that
+         * "the shape looks wrong" does not. */
+        const char *why = pw_forgery_name(v->forgery);
+        const char *line_s = why ? why : pw_band_hint(v->band);
+        const unsigned cap = pd_label_capacity(16, 152, PR_SAFE_R - 8);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.*s", (int)(cap < sizeof(buf) - 1 ? cap
+                                                                       : sizeof(buf) - 1),
+                 line_s);
+        text(PR_CX, PR_CY + 152, 16, 'c', why ? col : C_DIM, buf);
     }
 
-    /* The HUD carries a one-line summary; the engine's full advice text lives
-     * on the info card, because 466 round pixels cannot hold 120 characters
-     * and truncating a sentence mid-clause is exactly the sort of quiet
-     * dishonesty this project is trying not to commit. */
-    wrap(146, 14, C_DIM, hud_summary(v->band), 2);
-
+    /* The ribbon's own scale, printed once where it cannot be mistaken for a
+     * reading: this is what the tallest bar means. */
     rim_status(74, col);
 }
+
 
 /* ---- screen: Census list --------------------------------------------- */
 
@@ -667,12 +767,45 @@ static void watch_pair(void)
     pw_evaluate(&eng, last, &camped, &vc);
     pw_evaluate(&eng, last, &hopping, &vh);
 
-    screen_watch("watch_camped", &vc, "CAMPED ch6", 100);
-    screen_watch("watch_hopping", &vh, "HOPPING 1-13", 7);
+    uint16_t hist[PW_WINDOW_SLOTS];
+    pw_history(&eng, last, hist);
+
+    screen_watch("watch_camped", &vc, hist, PW_WINDOW_SLOTS, "CAMPED", 100);
+    screen_watch("watch_hopping", &vh, hist, PW_WINDOW_SLOTS, "HOPPING", 8);
 
     fprintf(stderr, "  watch: camped=%u/%u %s   hopping=%u/%u %s\n",
             vc.score, vc.ceiling, pw_band_name(vc.band),
             vh.score, vh.ceiling, pw_band_name(vh.band));
+
+    /* The companion: the same kind of attack against a network that requires
+     * protected management frames, graded from a HOPPING receiver. The
+     * contradiction is not weakened by the short visit, so this one is
+     * entitled to alarm where the flood above is not. */
+    {
+        pr_range_t r2;
+        pr_config_t c2;
+        memset(&c2, 0, sizeof(c2));
+        c2.scenario = PR_SCENARIO_DEAUTH_PROVEN;
+        c2.seed = 0xBEEF;
+        c2.intensity = 800;
+        pr_range_init(&r2, &c2);
+
+        pw_engine_t e2;
+        pw_reset(&e2);
+        pharos_event_t ev2;
+        uint64_t last2 = 0;
+        while (pr_range_next(&r2, &ev2)) {
+            pw_observe(&e2, &ev2.u.dot11, ev2.t_us);
+            last2 = ev2.t_us;
+        }
+        pw_verdict_t vp;
+        pw_evaluate(&e2, last2, &hopping, &vp);
+        uint16_t h2[PW_WINDOW_SLOTS];
+        pw_history(&e2, last2, h2);
+        screen_watch("watch_proven", &vp, h2, PW_WINDOW_SLOTS, "HOPPING", 8);
+        fprintf(stderr, "  watch: proven(hopping)=%u/%u %s  forgery=0x%02x\n",
+                vp.score, vp.ceiling, pw_band_name(vp.band), vp.forgery);
+    }
 }
 
 static void karma_screen(void)

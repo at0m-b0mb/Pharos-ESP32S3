@@ -23,7 +23,23 @@
 extern "C" {
 #endif
 
+/* Where the screen is, for the console.
+ *
+ * `rows` printed the list but not which row the centre tap would act on, so
+ * the one thing that had to be verified by hand - does the cursor move, does
+ * it open the right thing - was the one thing a log could not show. Returns
+ * the cursor's absolute row index, or -1 when the detail page is not up.
+ * `opened` receives the row currently expanded, or -1. */
+int pharos_ui_detail_cursor(int *opened);
+
+/* Test seam: touch row `row_on_page` (0..PHAROS_HUD_ROWS-1) of the detail
+ * page, exactly as a finger landing on it would. Used by the `tap` console
+ * command, which is how the detail interaction is verified over USB. */
+void pharos_ui_tap_row(unsigned row_on_page);
+
 #include "pharos_aegis.h"
+/* pharos_nav_t lives here; the nav request below speaks in it. */
+#include "pharos_hud.h"
 
 /* The Aegis latch. The UI loop feeds it from whichever lens is active (see
  * pharos_lens_t::stage_report), so it accumulates findings across lens
@@ -36,6 +52,13 @@ extern "C" {
  * true means the request was filed, and it is applied within a tick. */
 bool pharos_ui_request_lens(const char *id);
 void pharos_ui_request_stop(void);
+
+/* File a navigation intent from another task - the console, a test harness,
+ * anything that is not a finger. The UI task applies it on its next tick, on
+ * exactly the same path touch and the BOOT button use, so what is exercised
+ * here is what an operator would get. Added because the touch-only paths
+ * could not otherwise be tested without a hand on the glass. */
+void pharos_ui_request_nav(pharos_nav_t what);
 
 bool pharos_ui_aegis_snapshot(pa_verdict_t *out);
 void pharos_ui_aegis_ack(void);

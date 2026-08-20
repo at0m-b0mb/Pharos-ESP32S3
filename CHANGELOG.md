@@ -1,5 +1,243 @@
 # Changelog
 
+## v2.0.0 — 2026-08-19
+
+Everything below the v2.0.0-watch heading, plus the work that came out of
+using it: a screen you can actually operate with a finger, settings you can
+change on the device, and three detectors that were quietly missing things.
+
+### Fixed: the detail rows were too small to press
+
+Reported as "sometimes I am not able to click them correctly". Every press is
+now logged with its coordinates, and thirty seconds of an idle device produced
+zero phantom touches — so it was not the controller, it was the geometry.
+
+The rows were on a 36 px pitch. The panel is 466 px across a 1.75 inch circle
+(266 ppi), so that is **3.4 mm**, against a fingertip contact patch of about
+9 mm. Legible, and physically unresolvable.
+
+- **Four rows on a 58 px pitch** (5.5 mm), each target spanning the full width
+  of the glass so only the vertical dimension has to be got right.
+- **The row is the control.** Touching it edits or opens it. Reaching the
+  volume was previously four presses — step a cursor with the side zones, then
+  press the centre; it is now one, and it lands under the finger rather than
+  wherever a counter had reached.
+- **The page controls are the two largest targets on the device** — the whole
+  band above and below the list, ~117 px each, each marked with a chevron.
+- **The zones partition the glass.** The old layout left a 13 px dead lane
+  either side of the centre column, and a press that lands in a gap does
+  nothing, which reads from the outside as an unreliable touchscreen.
+- Focus is a filled pill rather than a brightened hairline — the same shape as
+  the target, so the thing you see and the thing you press are one object.
+
+### New: settings you can change, and a face you can choose
+
+The System page listed the alarm, the region and the rotation and let you
+change exactly one of them, by cycling blind through four volumes. Everything
+else was a console command over USB, which is not a thing anybody does while
+holding a round screen in a corridor.
+
+Theme, brightness, alarm, speaker volume and region are now editable in place,
+each remembered across boots. Opening a setting lists every value it can take
+and marks the one in force, so a cycling control stops being blind.
+
+Five themes, each with a reason to exist rather than another hue: **Beacon**
+(cyan), **Abyss** (blue), **Violet**, **Mono** (no hue at all, so a verdict is
+the only colour on the glass) and **Nightwatch** (dim enough to read without
+lighting your face). A theme changes the *chrome* and never the verdict
+colours — green, amber, orange and red are fixed in every theme, because a
+palette that could restyle danger is a way to make the device lie quietly. A
+host test fails the build if a new accent lands near a warning hue.
+
+### New: rows that open
+
+A grade nobody can interrogate is a claim, not a finding. Touching a network in
+Census opens its own evidence — BSSID, channel, signal, authentication, 802.11w
+posture, cipher, WPS, whether the name is hidden, beacons heard, and the single
+ceiling that stopped the grade going higher stated as **fix first**.
+
+### Fixed: BLE spam the diversity test could not see
+
+The pairing-popup test measured payload **diversity**, which is right for the
+tools that cycle popups and blind to the ones that do not. Several pick the one
+dialog that is most annoying on the target and repeat it as fast as the radio
+allows: one model code, hundreds of advertisements. Diversity counted one, the
+raw-rate note only fires above 60/s, and a steady 20/s single-payload flood fell
+between them with **no finding at all**.
+
+The signal that catches it is identity, not payload: real accessories keep a BLE
+address for minutes, while these tools draw a fresh random one per advertisement
+so a phone cannot dismiss them permanently. Eight distinct addresses carrying
+pairing payloads in four seconds is not a room with accessories in it.
+
+**Samsung EasySetup** (company `0x0075`) was not parsed at all — the family the
+Android-facing tools reach for. **Microsoft** was the opposite problem: company
+`0x0006` alone is every Microsoft-adjacent device announcing something
+unrelated, so it is narrowed to the Swift Pair beacon ID. Apple's Nearby Info
+and offline-finding types stay out deliberately: every iPhone and every AirTag
+broadcasts those continuously, and a detector that cries wolf in a foyer is one
+nobody reads in a corridor.
+
+### Fixed: a renamed Pineapple was invisible
+
+Detection was a match on the word "pineapple" in the network name, which
+survives about as long as it takes somebody to change it — and changing it is
+step one of using one. Hak5's registered OUI (`00:13:37`) is checked before the
+name. Presence stays capped: a Pineapple on a shelf is a Pineapple on a shelf.
+
+### Fixed: hardware that was switched off stayed on the screen
+
+Reported as "I turned off my Flipper Zero but it still shows one detected". The
+list had been made stale-aware; the count above it had not, so the screen read
+`hardware identified: 1` over an empty list. A screen that contradicts itself is
+worse than either half alone — the operator has to pick which line to believe
+and has nothing to pick with. The test asserts the invariant that matters: not
+that the count expires, but that the count and the list agree at every instant.
+
+### Fixed: a rate built out of division
+
+Mirage reported "261.5 new names a minute" on a quiet street. Three names
+arriving 800 ms apart narrowed the time base to 800 ms, and the duty correction
+multiplied by the reciprocal of a barely-measured dwell. Three floors now guard
+the denominator, and each sets `PF_NOTE_SHORT` so a held-back reading says so.
+
+### Fixed: a drill could be mistaken for an incident
+
+Range showed `FLOOD LIKELY 77` and Footprint `BLARING 77` while playing
+synthesised scenarios through the real engines — the same words the field uses,
+in a quiet building. Training lenses now mark every frame as a simulation, and
+both faces label whose number each figure is (`to a defender who camps`,
+`if real: deauth flood`) instead of presenting bare numbers.
+
+### Fixed: the microphone was never deaf
+
+`esp_codec_dev_read` returns a status, not a byte count. Treating `0` as "no
+samples" discarded every successful read, so Whisper reported `MIC SILENT` on a
+working microphone.
+
+### Fixed: the no-panel build had not compiled for a long time
+
+`pharos_hud.c`'s stub branch had acquired a verbatim copy of the LVGL
+implementation of `pharos_hud_detail` — defined twice, referencing widgets that
+do not exist there. Nobody builds that branch, which is how it survived.
+`tools/check_sources.sh` now counts the definitions of every HUD entry point.
+
+### Fixed: Census could attribute one network's failings to another
+
+The expansion was keyed on a list index, and that list re-sorts as the air
+changes. A page could begin describing one network and finish describing
+another with nothing on the glass to say so. It now latches the record on its
+first line.
+
+---
+
+## v2.0.0-watch — 2026-08-18
+
+The deauthentication detector rewritten end to end: the engine, its screen, and
+the checks that were supposed to be guarding both.
+
+### Fixed: the detector could not alarm in the posture it ships in
+
+v1's arithmetic was sound and its tests passed, and in the field it was useless.
+Hopping 13 channels put the confidence ceiling at ~60; the identity family
+needed beacons the receiver was rarely on-channel to hear; so at most two
+families could fire, two families capped at 74, and 74 was above the ceiling
+anyway. `FLOOD LIKELY` was arithmetically unreachable, and nothing on the glass
+let the operator change posture.
+
+The fix is not a lower bar. The ceiling was punishing the wrong thing. Hopping
+weakens an **extrapolated rate** — you heard 7% of a second and multiplied by
+fourteen. It does not weaken a **contradiction**. An unprotected deauth claiming
+to come from a network that *requires* protected management frames is forged,
+and hearing it during a 200 ms visit makes it no less forged. Such a verdict now
+raises its own ceiling to 88 and may alarm while hopping. Nothing reaches 100.
+
+### New: four evidence families instead of three
+
+| Family | Max | What it reads |
+|---|---|---|
+| `RATE` | 34 | Duty-corrected rate plus the peak second, anchored on Kismet's DEAUTHFLOOD thresholds (5/min, 2/sec burst) |
+| `SHAPE` | 22 | Broadcast share, victim spread, and per-victim burst runs — no AP sends sixteen frames to one client in half a second |
+| `FORGERY` | 30 | 802.11w contradiction, sequence-**order** violation, signal level against the beacon's own spread, ghost BSSID |
+| `AFTERMATH` | 18 | The reassociation stampede that follows a disconnect burst — the one test that still works on the low-volume targeted attacks volume thresholds miss |
+
+The sequence test checks **order, not gap size**, and that is the point: frames
+the receiver never heard widen gaps but can never reverse them, so it does not
+inherit the false-positive rate the literature reports for gap thresholds. It is
+bounded by the access point's own measured counter rate, so a busy AP is never
+accused. Both negatives are asserted in the tests.
+
+Reaching the alarm band needs three families, which — with only two of the four
+being volume-shaped — necessarily includes forgery or aftermath. **A busy network
+is not an attack**, asserted as an invariant rather than as arithmetic.
+
+### New: the operator can finally stand still
+
+The way to raise the ceiling is to stop hopping, and no control on the glass did
+it — the centre tap was inert while a lens was running, and camping needed a
+console command over USB. Lenses may now claim the centre tap; Watch camps on
+the channel carrying the traffic. It also locks on by itself for twenty seconds
+when the rate family fires, then releases. The operator's tap always wins.
+
+### Fixed: the screen flickered and broke
+
+Four distinct causes, all in `pharos_hud.c`:
+
+1. Neither the screen nor the touch zones ever had `LV_OBJ_FLAG_SCROLLABLE`
+   removed, and `lv_obj_create()` sets it. Content is laid out past the screen's
+   bounds, so a drag — or a smeared tap, which on round glass is most of them —
+   **scrolled the whole face away with no way back**. That is the "breaks" half.
+2. `pharos_hud_live()` hid the summary label and `pharos_hud_advice()`, called
+   immediately after it in the same repaint, showed it again. Every frame.
+3. `lv_label_set_text()` marks a label dirty whether or not the string differs,
+   so eight labels and three arcs were rewritten 5×/second with identical
+   content, under a 210 px opaque disc that then had to be recomposited.
+4. The advice label wrapped, so its height changed with its text and the
+   invalidated region moved around under the arc.
+
+Now: two page containers switched only on an actual view change, every widget
+written through a dirty check, no wrapping text on the live face, and scrolling
+removed everywhere. **A steady reading invalidates nothing at all.** The
+three-call API is one call, because that is what let the calls disagree.
+
+### New: the face answers four questions instead of one
+
+One ring for how bad, a sixteen-second ribbon for what shape over time (a steady
+trickle and one violent burst have the same ten-second mean and are not the same
+event), four **labelled** pips — `RATE` `SHAPE` `FORGE` `AFTER` — for what the
+evidence is, and one unwrapped line for what to do. The ceiling is a tick across
+the arc rather than a second band of colour competing with the score.
+
+### Fixed: three faults in the audits themselves
+
+- **The fence's ELF stage has never run.** `check_tx_fence.sh` read the ELF path
+  from `$1`, fifty lines after `set -- $BLE_VALS` reassigned the positional
+  parameters. `$1` was the string `y`, `[ -f y ]` was false, and the linked-image
+  audit skipped silently. That stage is cited in the README and CI runs it on
+  every build.
+- **And when it ran, it condemned a clean image**, demanding a `__wrap_` trap for
+  every transmit primitive when their *absence* is the stronger result: `--wrap`
+  only rewrites references, so an uncalled primitive is never linked at all. It
+  now looks for the real breach — primitive present, trap absent — with a
+  positive control so it cannot pass by proving nothing.
+- **`pipefail` + `strings | grep -q` reported present lenses as discarded.**
+  `grep -q` exits on first match, the producer dies of SIGPIPE (141), `pipefail`
+  promotes it. Timing-dependent: it passed in CI and failed locally on the same
+  commit. Both sites now match from a here-string.
+
+None of this could produce a false *pass* — `pipefail` only makes a status more
+non-zero, and the fence was intact throughout. But an audit that skips itself,
+and one that fails on correct output, are worth less than no audit, because they
+are believed.
+
+### Verification
+
+5,602 host checks · 0 render bounds violations · all four audits green against
+the linked ELF · ESP-IDF v5.5 build clean with zero warnings · 49% of the app
+partition free.
+
+*Never tested against a live deauthentication attack on real hardware.*
+
 ## v1.9.0 — 2026-08-14
 
 ### Fixed: changing lens rebooted the device
