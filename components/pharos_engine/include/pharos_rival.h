@@ -131,6 +131,29 @@ typedef enum {
  * is visible as one rather than presented as current. */
 #define PRV_STALE_US 30000000ull
 
+/* ...EXCEPT THAT THIRTY SECONDS IS THE ANSWER TO THE WRONG QUESTION.
+ *
+ * The window above is sized for the quietest thing this engine can see - a
+ * beacon that advertises once every ten seconds needs that much patience or it
+ * would flicker in and out of the list. But it was being applied to everything,
+ * including a Flipper that had been advertising several times a second, and
+ * switching one off then watching the screen keep claiming it for half a minute
+ * is a tool that looks broken. It was reported exactly that way: "it took some
+ * time to remove the Flipper Zero after I closed it".
+ *
+ * How long silence has to last before it means something is not a constant. It
+ * is a property of the device: silence is only evidence in proportion to how
+ * talkative the thing was. So the window is derived from the cadence actually
+ * observed - eight missed advertisements' worth - and the constant above
+ * becomes what it should always have been, the CEILING for something heard so
+ * rarely that no cadence can be measured.
+ *
+ * A Flipper heard twice a second is dropped about five seconds after it stops.
+ * A beacon heard every ten seconds still gets the full thirty. Neither number
+ * had to be chosen for the other. */
+#define PRV_SILENCE_MULTIPLE 8ull
+#define PRV_STALE_MIN_US 5000000ull /* never twitchier than five seconds */
+
 /* Presence is capped here. Owning a tool is not an offence, and a lens that
  * alarms on the mere sight of one teaches its operator to ignore it. */
 #define PRV_CAP_PRESENCE_ONLY 55
@@ -276,6 +299,14 @@ bool prv_is_pwnagotchi_addr(const uint8_t addr[6]);
  * name can be changed in a minute; the OUI is what the vendor shipped, so this
  * sees a renamed Pineapple that a name match never could. */
 bool prv_is_hak5_oui(const uint8_t addr[6]);
+
+/* How long THIS device may be silent before it is treated as gone, from the
+ * cadence it was actually heard at. Between PRV_STALE_MIN_US and
+ * PRV_STALE_US. One rule, so the count and the list cannot disagree. */
+uint64_t prv_expiry_us(const prv_device_t *d);
+
+/* True when `d` has been silent past its own window at `now_us`. */
+bool prv_is_stale(const prv_device_t *d, uint64_t now_us);
 
 void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out);
 

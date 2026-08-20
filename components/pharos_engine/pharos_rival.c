@@ -541,6 +541,34 @@ bool prv_is_hak5_oui(const uint8_t addr[6])
     return addr && addr[0] == 0x00 && addr[1] == 0x13 && addr[2] == 0x37;
 }
 
+uint64_t prv_expiry_us(const prv_device_t *d)
+{
+    /* Under three sightings there is no cadence to measure - one interval
+     * between two adverts is a sample of one - so the patient ceiling applies.
+     * That is the right way round: the less this engine knows about how
+     * talkative something is, the longer it waits before calling it gone. */
+    if (!d || d->sightings < 3u || d->last_us <= d->first_us) {
+        return PRV_STALE_US;
+    }
+    const uint64_t mean = (d->last_us - d->first_us) / (uint64_t)(d->sightings - 1u);
+    uint64_t win = mean * PRV_SILENCE_MULTIPLE;
+    if (win < PRV_STALE_MIN_US) {
+        win = PRV_STALE_MIN_US;
+    }
+    if (win > PRV_STALE_US) {
+        win = PRV_STALE_US;
+    }
+    return win;
+}
+
+bool prv_is_stale(const prv_device_t *d, uint64_t now_us)
+{
+    if (!d || !now_us || now_us <= d->last_us) {
+        return false;
+    }
+    return (now_us - d->last_us) > prv_expiry_us(d);
+}
+
 bool prv_is_pwnagotchi_addr(const uint8_t addr[6])
 {
     static const uint8_t k_pwn[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD };
@@ -655,7 +683,7 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
          * that contradicts itself is worse than either half alone - the
          * operator has to decide which line to believe, and there is no way
          * for them to tell. One staleness rule, applied in both places. */
-        if (now_us >= d->last_us && now_us - d->last_us > PRV_STALE_US) {
+        if (prv_is_stale(d, now_us)) {
             continue;
         }
         if (d->kind < PRV_KIND_COUNT && !kind_seen[d->kind]) {
@@ -845,8 +873,7 @@ bool prv_device_at_now(const prv_state_t *s, unsigned index, uint64_t now_us,
             }
             /* The list must agree with the count above it: a device the
              * verdict has dropped as stale cannot still have a row. */
-            if (now_us && now_us > d->last_us &&
-                now_us - d->last_us > PRV_STALE_US) {
+            if (prv_is_stale(d, now_us)) {
                 continue;
             }
             present = true;

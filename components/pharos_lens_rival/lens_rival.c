@@ -257,7 +257,15 @@ static bool k_rival_display(struct pharos_lens_display *o)
     snprintf(o->big, sizeof(o->big), "%u", v.n_devices);
     (void)v.n_pwnagotchi;
     snprintf(o->band, sizeof(o->band), "%s", prv_band_name(v.band));
-    if (v.worst_kind != PRV_KIND_NONE) {
+    if (v.worst_kind != PRV_KIND_NONE && v.worst_age_s >= 2u) {
+        /* GOING QUIET IS THE INTERESTING STATE. It is what switching
+         * something off looks like from out here, and the face used to show
+         * a signal level right up until the row vanished - so the seconds
+         * between "it is here" and "it is gone" said nothing at all. Counting
+         * them out loud turns a wait into a reading. */
+        snprintf(o->detail, sizeof(o->detail), "%.16s quiet %us",
+                 prv_kind_name(v.worst_kind), (unsigned)v.worst_age_s);
+    } else if (v.worst_kind != PRV_KIND_NONE) {
         snprintf(o->detail, sizeof(o->detail), "%.20s %ddBm",
                  prv_kind_name(v.worst_kind), (int)v.worst_rssi);
     } else {
@@ -404,17 +412,33 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->left, sizeof(out->left), "%.15s %02x:%02x",
                  prv_kind_name(d.kind), d.addr[4], d.addr[5]);
     }
-    /* Address rotation is reported in place of the signal once it starts,
-     * because at that point it is the more interesting fact: hardware using
-     * dozens of addresses a minute is hardware doing something. */
-    if (d.addresses > 3u) {
+    /* A ROW THAT IS ON ITS WAY OUT SHOULD LOOK LIKE ONE.
+     *
+     * Silence is the interesting state here - it is how switching something
+     * off looks from the outside - and the list showed nothing at all until
+     * the entry vanished. So an entry that has missed its usual cadence says
+     * how long since it was last heard, and goes dim while it says it. The
+     * wait then reads as a countdown rather than as the screen being wrong,
+     * which is the whole difference between "it took some time to remove the
+     * Flipper" and "I watched it let go". */
+    const uint64_t now = (uint64_t)esp_timer_get_time();
+    const uint64_t quiet_us = (now > d.last_us) ? (now - d.last_us) : 0ull;
+    const bool fading = quiet_us > (prv_expiry_us(&d) / 3ull);
+
+    if (fading) {
+        snprintf(out->right, sizeof(out->right), "%us ago",
+                 (unsigned)(quiet_us / 1000000ull));
+    } else if (d.addresses > 3u) {
+        /* Address rotation displaces the signal once it starts: hardware
+         * using dozens of addresses a minute is hardware doing something. */
         snprintf(out->right, sizeof(out->right), "%u addr",
                  (unsigned)d.addresses);
     } else {
         snprintf(out->right, sizeof(out->right), "%d dBm", (int)d.best_rssi);
     }
-    out->tone = (d.kind >= PRV_KIND_DEAUTHER) ? PHAROS_TONE_BAD
-                                              : PHAROS_TONE_NEUTRAL;
+    out->tone = fading                          ? PHAROS_TONE_DIM
+              : (d.kind >= PRV_KIND_DEAUTHER)   ? PHAROS_TONE_BAD
+                                                : PHAROS_TONE_NEUTRAL;
     return true;
 }
 

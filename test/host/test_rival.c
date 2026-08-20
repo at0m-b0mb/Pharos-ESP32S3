@@ -440,8 +440,11 @@ static void test_rival_switched_off_everywhere(void)
         CHECK_EQ(d.kind, PRV_KIND_FLIPPER);
     }
 
-    /* Just inside the staleness window: still both. */
-    const uint64_t warm = last + PRV_STALE_US - 1000000ull;
+    /* Just inside this device's own window: still both. The window is no
+     * longer a constant - it follows the cadence the device was heard at - so
+     * the test asks for it rather than assuming thirty seconds. */
+    const uint64_t win = prv_expiry_us(&s.dev[0]);
+    const uint64_t warm = last + win - 1000000ull;
     prv_evaluate(&s, warm, &v);
     CHECK_EQ(v.n_devices, 1);
     {
@@ -451,7 +454,7 @@ static void test_rival_switched_off_everywhere(void)
 
     /* Switched off. Past the window, BOTH must let go - and the score must
      * come back down, because the score is what raises the alarm. */
-    const uint64_t cold = last + PRV_STALE_US + 1000000ull;
+    const uint64_t cold = last + win + 1000000ull;
     prv_evaluate(&s, cold, &v);
     CHECK_EQ(v.n_devices, 0);
     CHECK_EQ(v.n_flipper, 0);
@@ -464,7 +467,7 @@ static void test_rival_switched_off_everywhere(void)
 
     /* The general form, swept across the whole life of the sighting: at no
      * instant may the count claim hardware the list cannot show. */
-    for (uint64_t t = last; t <= last + PRV_STALE_US * 2ull; t += 1000000ull) {
+    for (uint64_t t = last; t <= last + PRV_STALE_US * 2ull; t += 500000ull) {
         prv_evaluate(&s, t, &v);
         unsigned rows = 0;
         prv_device_t d;
@@ -474,6 +477,128 @@ static void test_rival_switched_off_everywhere(void)
         CHECK(rows == v.n_devices,
               "count %u == list %u at t+%llus", v.n_devices, rows,
               (unsigned long long)((t - last) / 1000000ull));
+    }
+}
+
+/* HOW LONG SILENCE HAS TO LAST BEFORE IT MEANS SOMETHING.
+ *
+ * A flat thirty seconds was the answer to the wrong question. It is the right
+ * patience for the quietest thing this engine can see, and it was being spent
+ * on a Flipper that had been advertising twice a second - so switching one off
+ * left the screen claiming it for half a minute. Reported as "it took some time
+ * to remove the Flipper Zero after I closed it".
+ *
+ * Silence is only evidence in proportion to how talkative the thing was. */
+static void test_rival_expiry_follows_cadence(void)
+{
+    banner("rival: a chatty device is dropped sooner than a quiet one");
+
+    static const uint8_t fz[] = {
+        0x02, 0x01, 0x06,
+        0x03, 0x02, 0x82, 0x30, /* Flipper, UUID 0x3082 */
+    };
+    const uint8_t addr[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+
+    /* THE CHATTY ONE: heard twice a second for a minute. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 120; i++) {
+            prv_observe_ble_adv(&s, addr, "R3ghon", fz, (uint8_t)sizeof(fz), -57,
+                                T0 + (uint64_t)i * 500000ull);
+        }
+        const uint64_t last = T0 + 119ull * 500000ull;
+
+        prv_evaluate(&s, last, &v);
+        CHECK_EQ(v.n_devices, 1);
+
+        /* Five seconds of silence from something heard twice a second is
+         * eight missed advertisements over. It is gone. */
+        prv_evaluate(&s, last + 6000000ull, &v);
+        CHECK_EQ(v.n_devices, 0);
+        prv_device_t d;
+        CHECK(!prv_device_at_now(&s, 0, last + 6000000ull, &d),
+              "and the list agrees");
+
+        /* But not so twitchy that a single missed advert drops it. */
+        prv_evaluate(&s, last + 2000000ull, &v);
+        CHECK_EQ(v.n_devices, 1);
+    }
+
+    /* THE QUIET ONE: a beacon heard once every ten seconds. Dropping this at
+     * five seconds would make it flicker in and out of the list forever, so it
+     * keeps the full ceiling. This is the case the flat constant was for, and
+     * it must not regress. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        const uint8_t bssid[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD };
+        for (int i = 0; i < 6; i++) {
+            prv_observe_beacon(&s, bssid, NULL, 0, true, -70,
+                               T0 + (uint64_t)i * 10000000ull);
+        }
+        const uint64_t last = T0 + 50000000ull;
+
+        prv_evaluate(&s, last + 12000000ull, &v);
+        CHECK_EQ(v.n_devices, 1);
+        CHECK_EQ(v.n_pwnagotchi, 1);
+        CHECK(prv_expiry_us(&s.dev[0]) == PRV_STALE_US,
+              "a ten-second cadence keeps the full window");
+
+        /* And it does eventually go. */
+        prv_evaluate(&s, last + PRV_STALE_US + 1000000ull, &v);
+        CHECK_EQ(v.n_devices, 0);
+    }
+
+    /* Too few sightings to measure a cadence at all: the patient ceiling, not
+     * the twitchy floor. The less it knows, the longer it waits. */
+    {
+        prv_state_t s;
+        prv_reset(&s);
+        prv_observe_ble_adv(&s, addr, NULL, fz, (uint8_t)sizeof(fz), -60, T0);
+        CHECK(prv_expiry_us(&s.dev[0]) == PRV_STALE_US,
+              "one sighting is not a cadence");
+        prv_observe_ble_adv(&s, addr, NULL, fz, (uint8_t)sizeof(fz), -60,
+                            T0 + 100000ull);
+        CHECK(prv_expiry_us(&s.dev[0]) == PRV_STALE_US,
+              "and neither is two");
+    }
+
+    /* The window is bounded at both ends, whatever the cadence. */
+    {
+        prv_state_t s;
+        prv_reset(&s);
+        /* Absurdly fast: 1 ms apart. The floor must hold. */
+        for (int i = 0; i < 50; i++) {
+            prv_observe_ble_adv(&s, addr, NULL, fz, (uint8_t)sizeof(fz), -60,
+                                T0 + (uint64_t)i * 1000ull);
+        }
+        const uint64_t w = prv_expiry_us(&s.dev[0]);
+        CHECK(w >= PRV_STALE_MIN_US, "never twitchier than the floor");
+        CHECK(w <= PRV_STALE_US, "never more patient than the ceiling");
+    }
+
+    /* AND THE INVARIANT THAT MATTERS, re-asserted against the new rule: the
+     * count and the list agree at every instant, whatever window applies. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 60; i++) {
+            prv_observe_ble_adv(&s, addr, "R3ghon", fz, (uint8_t)sizeof(fz), -57,
+                                T0 + (uint64_t)i * 400000ull);
+        }
+        const uint64_t last = T0 + 59ull * 400000ull;
+        for (uint64_t t = last; t <= last + 40000000ull; t += 500000ull) {
+            prv_evaluate(&s, t, &v);
+            unsigned rows = 0;
+            prv_device_t d;
+            while (prv_device_at_now(&s, rows, t, &d)) {
+                rows++;
+            }
+            CHECK(rows == v.n_devices, "count %u == list %u at t+%llums",
+                  v.n_devices, rows,
+                  (unsigned long long)((t - last) / 1000ull));
+        }
     }
 }
 
@@ -780,6 +905,7 @@ void test_rival(void)
     test_rival_flipper_advertisement();
     test_rival_pairing_spam();
     test_rival_switched_off_everywhere();
+    test_rival_expiry_follows_cadence();
     test_rival_single_payload_spam();
     test_rival_spam_families();
     test_rival_pineapple();

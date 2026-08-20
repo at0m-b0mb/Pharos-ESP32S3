@@ -789,6 +789,19 @@ bool pharos_hud_create(void)
      * Unmarked, it is also the least discoverable: nothing suggests the empty
      * band under a list does anything. A chevron at each end costs one glyph
      * and turns a hidden gesture into a button. */
+    /* A short accent rule under the title. The header is three separate
+     * things stacked - lens name, then column headings, then the list - and
+     * without a line between them the eye reads the headings as the first
+     * row. One rule, the width of a word, fixes that. */
+    {
+        lv_obj_t *u = mk_box(s_page_detail);
+        lv_obj_set_size(u, 96, 2);
+        lv_obj_align(u, LV_ALIGN_CENTER, 0, -156);
+        lv_obj_set_style_radius(u, 1, 0);
+        lv_obj_set_style_bg_color(u, lv_color_hex(HUD_CYAN), 0);
+        lv_obj_set_style_bg_opa(u, LV_OPA_60, 0);
+    }
+
     s_d_up    = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_DIMMER, 0, -196, "");
     s_d_page  = mk_label(s_page_detail, &lv_font_montserrat_16, HUD_DIMMER, 0, 146, "");
     s_d_hint  = mk_label(s_page_detail, &lv_font_montserrat_12, HUD_DIMMER, 0, 176, "");
