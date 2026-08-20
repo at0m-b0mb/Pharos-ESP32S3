@@ -164,15 +164,56 @@ void pf_evaluate(const pf_engine_t *e, const pf_context_t *ctx, pf_verdict_t *ou
             elapsed_ms = (uint32_t)span;
         }
     }
-    if (elapsed_ms < 1500u) {
+    /* A RATE NEEDS A REAL DENOMINATOR.
+     *
+     * Narrowing the time base to the span between the first and last name
+     * heard is right for catching a burst inside a long window, and wrong the
+     * moment the sample is thin: three names that happened to arrive within
+     * 800 ms became "227.2 new names a minute" on a quiet street, which is a
+     * number built almost entirely out of division. The same shape of bug put
+     * "33600 frames a second" on the Watch face.
+     *
+     * So the span may sharpen the reading, never invent one. Below the floor
+     * the window is what gets used, and the verdict says the window was
+     * short. */
+    if (elapsed_ms < PF_MIN_WINDOW_MS) {
+        elapsed_ms = (ctx->window_ms > PF_MIN_WINDOW_MS) ? ctx->window_ms
+                                                         : PF_MIN_WINDOW_MS;
+        out->notes |= PF_NOTE_SHORT;
+    }
+
+    /* And the duty correction has the same failure. dwell_permil is clamped
+     * to 1 above, so a receiver reporting a near-zero dwell would multiply
+     * everything it saw by a thousand. This one hops thirteen channels, so
+     * roughly 77 permil is the floor an honest measurement can reach, and
+     * anything under it is a measurement fault rather than a thin sample. */
+    const uint32_t duty = (dwell < PF_MIN_DWELL_PERMIL) ? PF_MIN_DWELL_PERMIL
+                                                        : dwell;
+    if (dwell < PF_MIN_DWELL_PERMIL) {
         out->notes |= PF_NOTE_SHORT;
     }
 
     /* new names per minute, x10, duty-corrected */
     {
         const uint64_t num = (uint64_t)e->distinct_created * 600ull * 1000ull * 1000ull;
-        const uint64_t den = (uint64_t)elapsed_ms * (uint64_t)dwell * (uint64_t)yield / 1000ull;
-        out->new_per_min_x10 = (uint16_t)clamp_u32(den ? (uint32_t)(num / den) : 0, 0, 0xFFFF);
+        const uint64_t den = (uint64_t)elapsed_ms * (uint64_t)duty * (uint64_t)yield / 1000ull;
+        uint32_t rate = den ? (uint32_t)(num / den) : 0u;
+
+        /* Last guard, on the extrapolation itself. Multiplying four names by
+         * thirteen is arithmetic, not evidence; until enough distinct names
+         * have actually been created the reading is held to what a
+         * hop-corrected reading of THIS sample can support. */
+        if (e->distinct_created < PF_MIN_NAMES_TO_EXTRAPOLATE) {
+            const uint32_t plain =
+                (uint32_t)(((uint64_t)e->distinct_created * 600ull * 1000ull) /
+                           (uint64_t)elapsed_ms);
+            const uint32_t bound = plain * PF_THIN_SAMPLE_FACTOR;
+            if (rate > bound) {
+                rate = bound;
+            }
+            out->notes |= PF_NOTE_SHORT;
+        }
+        out->new_per_min_x10 = (uint16_t)clamp_u32(rate, 0, 0xFFFF);
     }
     static const uint32_t vx[] = { 30, 120, 300, 900, 3000, 12000 };
     static const uint32_t vy[] = { 0, 8, 16, 26, 34, 40 };

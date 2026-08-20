@@ -175,6 +175,19 @@ static bool k_mirage_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.distinct_ssids);
         out->tone = PHAROS_TONE_NEUTRAL; return true;
     case 1:
+        /* A RATE YOU DO NOT TRUST SHOULD NOT BE PRINTED AS A RATE.
+         *
+         * Until enough distinct names exist to extrapolate from, the engine
+         * refuses to project one - so showing "x per minute" here would dress
+         * a raw count as a measurement. It shows the count instead, which is
+         * the thing that was actually observed. */
+        if (v.notes & PF_NOTE_SHORT) {
+            snprintf(out->left, sizeof(out->left), "names so far");
+            snprintf(out->right, sizeof(out->right), "%u",
+                     (unsigned)v.distinct_ssids);
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        }
         snprintf(out->left, sizeof(out->left), "new per minute");
         snprintf(out->right, sizeof(out->right), "%u.%u",
                  (unsigned)(v.new_per_min_x10 / 10u), (unsigned)(v.new_per_min_x10 % 10u));

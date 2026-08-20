@@ -41,8 +41,82 @@ static pf_context_t fctx(uint16_t dwell)
     return c;
 }
 
+/* THE RATE'S DENOMINATOR.
+ *
+ * "227.2 new names a minute" appeared on the device on a quiet street with
+ * three networks in view. Nothing was wrong with the detector - it was the
+ * arithmetic under the headline: the time base had been narrowed to the 800 ms
+ * between the first name and the last, and the duty correction was free to
+ * multiply by a thousand. The score stayed sane, so no existing test caught
+ * it; the number a person reads was the only thing that lied.
+ *
+ * These pin the floors. Each one fails loudly if the guard is removed. */
+static void test_flood_rate_needs_a_real_denominator(void)
+{
+    banner("flood: a rate needs a real denominator");
+    pf_engine_t e;
+    pf_verdict_t v;
+
+    /* Three names, all within 800 ms, on a hopping receiver. This is the exact
+     * shape that produced 227.2 - and three networks appearing at once is an
+     * ordinary street, not a flood. */
+    pf_reset(&e);
+    pf_context_t hop = fctx(77);
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t b[6];
+        real_bssid(b, i, 1);
+        char name[16];
+        snprintf(name, sizeof(name), "Street-%u", i);
+        pf_observe(&e, b, name, (uint8_t)strlen(name), 400000ull * i);
+    }
+    pf_evaluate(&e, &hop, &v);
+    CHECK(v.new_per_min_x10 <= 200,
+          "three names in under a second is not 20 a minute (got %u.%u)",
+          v.new_per_min_x10 / 10u, v.new_per_min_x10 % 10u);
+    CHECK((v.notes & PF_NOTE_SHORT) != 0, "and it says the sample was thin");
+    CHECK(v.band <= PF_BAND_BUSY, "nor is it a flood (got %s)",
+          pf_band_name(v.band));
+
+    /* A receiver reporting a dwell it cannot physically have had. The clamp is
+     * to 1 permil, so without a floor this multiplies everything by 1000. */
+    pf_reset(&e);
+    pf_context_t broken = fctx(1);
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t b[6];
+        real_bssid(b, i, 1);
+        char name[16];
+        snprintf(name, sizeof(name), "Street-%u", i);
+        pf_observe(&e, b, name, (uint8_t)strlen(name), 3000000ull * i);
+    }
+    pf_evaluate(&e, &broken, &v);
+    CHECK(v.new_per_min_x10 <= 400,
+          "an impossible dwell does not become a thousandfold rate (got %u.%u)",
+          v.new_per_min_x10 / 10u, v.new_per_min_x10 % 10u);
+
+    /* And the guard must not silence a real flood: enough distinct names to
+     * extrapolate from, over a real window, still reads as one. */
+    pf_reset(&e);
+    pf_context_t camped = fctx(1000);
+    for (unsigned i = 0; i < 120; i++) {
+        uint8_t b[6];
+        b[0] = 0x02; b[1] = 0x11; b[2] = 0x22;
+        b[3] = (uint8_t)i; b[4] = 0x00; b[5] = (uint8_t)i;
+        char name[16];
+        snprintf(name, sizeof(name), "FreeWiFi-%u", i);
+        pf_observe(&e, b, name, (uint8_t)strlen(name), 50000ull * i);
+    }
+    pf_evaluate(&e, &camped, &v);
+    CHECK(v.new_per_min_x10 > 3000,
+          "a real flood still reads fast (got %u.%u)",
+          v.new_per_min_x10 / 10u, v.new_per_min_x10 % 10u);
+    CHECK(v.band >= PF_BAND_SUSPICIOUS, "and still alarms (got %s)",
+          pf_band_name(v.band));
+}
+
 void test_flood(void)
 {
+    test_flood_rate_needs_a_real_denominator();
+
     banner("flood: beacon / SSID spam");
     pf_engine_t e;
     pf_verdict_t v;

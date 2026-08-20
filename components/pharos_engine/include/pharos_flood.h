@@ -61,6 +61,17 @@ typedef enum {
 #define PF_NOTE_URBAN      (1u << 2) /* many names, but they persist    */
 #define PF_NOTE_SHORT      (1u << 3) /* window too short to judge rate  */
 
+/* Floors on the rate's denominator. See the comment at the arithmetic in
+ * pf_evaluate(): every one of these exists because without it a thin sample
+ * produces a large number, and a large number is what somebody acts on. */
+#define PF_MIN_WINDOW_MS 3000u        /* no rate from under three seconds  */
+#define PF_MIN_DWELL_PERMIL 60u       /* 13 channels: ~77 is honest        */
+#define PF_MIN_NAMES_TO_EXTRAPOLATE 8u
+/* A thin sample is not extrapolated at all. Multiplying three names by
+ * thirteen because the receiver was hopping is arithmetic, not evidence, and
+ * the number it produces is the one somebody acts on. */
+#define PF_THIN_SAMPLE_FACTOR 1u
+
 typedef struct {
     uint16_t dwell_permil;
     uint16_t bus_yield_permil;
