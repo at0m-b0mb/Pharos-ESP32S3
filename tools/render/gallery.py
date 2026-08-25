@@ -15,15 +15,18 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # Curated hero set: what best shows the product, in reading order.
 SCREENS = [
-    ("home", "Home — all watches armed"),
-    ("watch_camped", "Watch — FLOOD LIKELY (camped)"),
-    ("watch_hopping", "Watch — SUSPICIOUS (same data, hopping)"),
-    ("footprint", "Footprint — red-team OPSEC"),
-    ("mirage", "Mirage — beacon-flood detection"),
-    ("locate", "Locate — walk to the transmitter"),
-    ("karma", "Karma — KARMA/MANA rogue AP"),
-    ("census", "Census — network posture A+…F"),
-    ("lamp_room", "Lamp Room — the lens dial"),
+    ("home", "Home \u2014 is anything wrong?"),
+    ("watch_camped", "Watch \u2014 FLOOD LIKELY (camped)"),
+    ("watch_hopping", "Watch \u2014 SUSPICIOUS (hopping)"),
+    ("browse", "Browse \u2014 what a tool is for"),
+    ("detail", "Detail \u2014 the evidence, in cards"),
+    ("quiet", "Watch \u2014 QUIET (nothing to do)"),
+    ("karma", "Karma \u2014 KARMA/MANA rogue AP"),
+    ("mirage", "Mirage \u2014 beacon-flood detection"),
+    ("locate", "Locate \u2014 walk to the transmitter"),
+    ("footprint", "Footprint \u2014 OPSEC (a drill)"),
+    ("spectrum", "Spectrum \u2014 what the room is doing"),
+    ("splash", "Boot \u2014 receive-only, up front"),
 ]
 
 COLS = 3
