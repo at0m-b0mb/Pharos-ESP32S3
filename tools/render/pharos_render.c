@@ -594,7 +594,7 @@ static void screen_karma(const pk_verdict_t *v)
     screen_lumen_live("karma", "KARMA WATCH", pk_band_name(v->band),
                       v->score, v->ceiling,
                       "5 names, 5 never announced",
-                      "one radio answers to names it never announces",
+                      "answers names it never says",
                       "Rogue AP. Do not join. Note the BSSID.",
                       fam, 0x0Bu, h, false, 0);
 }
@@ -608,7 +608,7 @@ static void screen_spectrum(void)
         60,90,140,190,230,255,240,200,160,120,150,190,220,180,130,90 };
     screen_lumen_live("spectrum", "SPECTRUM", "BUSY", 44, 0,
                       "ch1 ch6 ch11 carry the room",
-                      "airtime is not an attack by itself",
+                      "airtime is not an attack",
                       "Read the other watches against this.",
                       fam, 0x00u, h, false, 0x21B6C6u);
 }
@@ -718,7 +718,7 @@ static void screen_mirage(const pf_verdict_t *v)
     screen_lumen_live("mirage", "BEACON FLOOD", pf_band_name(v->band),
                       v->score, v->ceiling,
                       "128 names   3010/min",
-                      "every name from one software radio",
+                      "every name, one radio",
                       "Fake networks. Your phone list is junk.",
                       fam, 0x07u, h, false, 0);
 }
