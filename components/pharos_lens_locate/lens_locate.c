@@ -174,6 +174,20 @@ static bool k_locate_display(struct pharos_lens_display *o)
      * the arc should show how much of the scale this reading has earned. */
     o->ceiling = v.confidence;
     o->has_score = true;
+
+    /* CLOSENESS IS NOT A THREAT SCALE.
+     *
+     * Without this the face colours 81% closeness with the threat palette and
+     * the whole screen goes red as you walk TOWARD the thing you are looking
+     * for - which reads as "danger" at exactly the moment it means "found it".
+     * Locate is pointed at a transmitter another lens already flagged; getting
+     * nearer is the goal, not a finding. So the reading is declared as
+     * carrying no alarm and the ring fills green as you close in.
+     *
+     * (The old face had the same bug and it mattered less, because a thin arc
+     * is easy to ignore. An aura is not.) */
+    o->alert = 0;
+    o->has_alert = true;
     return true;
 }
 

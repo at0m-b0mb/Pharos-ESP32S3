@@ -3,6 +3,7 @@ idf_component_register(
         "pharos_dial.c"
         "pharos_hud.c"
         "pharos_round.c"
+        "pharos_style.c"
         "pharos_theme.c"
         "pharos_ui.c"
     INCLUDE_DIRS "include"

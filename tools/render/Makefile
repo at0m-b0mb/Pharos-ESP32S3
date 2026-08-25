@@ -27,7 +27,8 @@ SRCS := \
   $(ROOT)/components/pharos_engine/pharos_twin.c \
   $(ROOT)/components/pharos_engine/pharos_watch.c \
   $(ROOT)/components/pharos_ui/pharos_dial.c \
-  $(ROOT)/components/pharos_ui/pharos_round.c
+  $(ROOT)/components/pharos_ui/pharos_round.c \
+  $(ROOT)/components/pharos_ui/pharos_style.c
 
 BIN := pharos_render
 OUT := $(ROOT)/assets/screens

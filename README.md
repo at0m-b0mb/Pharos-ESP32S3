@@ -47,19 +47,20 @@ This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested]
 ## What it looks like
 
 Every screenshot below is **generated from the firmware's own code** — the real
-`pharos_round`/`pharos_dial` geometry, driven by the real detection engines, fed
+`pharos_round`/`pharos_style` geometry, driven by the real detection engines, fed
 by the real training scenarios. Nothing here is a mock-up drawn in a design tool.
 
 <p align="center">
-  <img src="assets/screens/watch_camped.png" width="31%" alt="Watch, camped: FLOOD LIKELY at 77">
+  <img src="assets/screens/watch_camped.png" width="31%" alt="Watch, camped: FLOOD LIKELY at 88">
   <img src="assets/screens/watch_hopping.png" width="31%" alt="Watch, hopping: SUSPICIOUS at 60">
   <img src="assets/screens/watch_proven.png" width="31%" alt="Watch, hopping, proven forgery: FLOOD LIKELY at 88">
 </p>
 
 **These three are the whole argument.** The first two are the *identical event
-stream*. Camped on the channel the Watch engine reaches `FLOOD LIKELY` at 77;
-hopping across 1–13 the same evidence tops out at `SUSPICIOUS`, with the red
-ceiling tick sitting right on the score — you are not entitled to claim more.
+stream*. Camped on the channel the Watch engine reaches `FLOOD LIKELY` at 88;
+hopping across 1–13 the same evidence tops out at `SUSPICIOUS` at 60, with the
+red ceiling tick sitting right on the score — you are not entitled to claim
+more.
 That attacker rode the access point's own sequence counter and gave away only
 its position, which is a *measurement*, and measurements are what hopping ruins.
 
@@ -69,9 +70,28 @@ than an estimate, so the same hopping receiver alarms at 88.
 
 Around the top of each face, sixteen bars are the last sixteen seconds of
 disconnect traffic — because a steady trickle and one violent burst produce the
-same ten-second average and are not the same event. The four pips name the
-evidence: `RATE`, `SHAPE`, `FORGE`, `AFTER`. The line at the bottom is the
-single most specific thing the engine can say.
+same ten-second average and are not the same event. The four **named chips** say
+what the evidence actually was: `RATE`, `SHAPE`, `FORGE`, `AFTER`. "Why does it
+think so" is answerable from the glass, not from the manual.
+
+### The reading order
+
+Every screen in Pharos is built from one design system, **LUMEN**
+(`components/pharos_ui/pharos_style.h`), and every screen puts its content in
+the same order:
+
+> **colour → word → number → evidence → action**
+
+The soft aura behind the centre carries the verdict *before you have read a
+single glyph* — you can take the answer from across a room and stop there. The
+word confirms it. The number is **support, and is deliberately set smaller than
+the word it explains**; the face this replaced had that backwards, at 48 px of
+score above 26 px of meaning, which is why it read as a number generator rather
+than as a judgement.
+
+Nothing on the glass is smaller than 14 px. At 466 px across a 1.75 inch circle
+this panel is 266 ppi, so the old face's 12 px body text was about 1.1 mm of cap
+height — legible in a screenshot, mush in a hand.
 
 <p align="center">
   <img src="assets/branding/gallery.png" width="100%" alt="Pharos screen gallery">

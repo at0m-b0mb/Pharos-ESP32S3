@@ -31,6 +31,8 @@
 #include "pharos_opsec.h"
 #include "pharos_range.h"
 #include "pharos_round.h"
+#include "pharos_style.h"
+#include "pharos_lens.h"
 #include "pharos_twin.h"
 #include "pharos_watch.h"
 
@@ -57,6 +59,19 @@
 #define C_DIM     "#94BECC"
 #define C_DIMMER  "#6693A6"
 #define C_DENIED  "#3A5A6B"
+
+/* Defined in the LUMEN section below. Forward-declared because the
+ * engine-driven screens above are all just LIVE pages with different data -
+ * which is exactly how the firmware draws them too. */
+static void screen_lumen_detail_named(const char *name, const char *title,
+                                      const char *hl, const char *hr);
+static void screen_lumen_live(const char *name, const char *lens,
+                              const char *word, int score, int ceiling,
+                              const char *detail, const char *why,
+                              const char *action,
+                              const char *const *fam, uint8_t lit,
+                              const uint8_t *hist, bool simulated,
+                              uint32_t rgb_override);
 
 /* ---- display list ---------------------------------------------------- */
 
@@ -238,38 +253,10 @@ static int fit_text_at(int px, int py, unsigned nchars, int r, int max_size)
     return 0;
 }
 
-/* Word-wrap through the real chord guard: how many characters fit on a line
- * at this vertical offset is a property of the circle, not a guess. */
-static int wrap(int dy, int size, const char *col, const char *s, int max_lines)
-{
-    int lines = 0;
-    const char *p = s;
-    while (*p && lines < max_lines) {
-        const int y = PR_CY + dy + lines * (size * 5 / 4);
-        const unsigned cap = pd_label_capacity((int16_t)size, (int16_t)(dy + lines * (size * 5 / 4)),
-                                               PR_SAFE_R - 6);
-        if (cap == 0) break;
-        unsigned take = 0, last_space = 0;
-        while (p[take] && take < cap) {
-            if (p[take] == ' ') last_space = take;
-            take++;
-        }
-        if (p[take] && last_space) take = last_space;
-        char buf[128];
-        unsigned n = take < sizeof(buf) - 1 ? take : (unsigned)sizeof(buf) - 1;
-        memcpy(buf, p, n);
-        buf[n] = '\0';
-        /* trim trailing space */
-        while (n && buf[n - 1] == ' ') buf[--n] = '\0';
-        if (n) {
-            text(PR_CX, y, size, 'c', col, buf);
-            lines++;
-        }
-        p += take;
-        while (*p == ' ') p++;
-    }
-    return lines;
-}
+/* The old wrap() lived here. LUMEN never wraps - a label whose height
+ * changes with its text re-lays-out and drags the invalidated region around
+ * under the arc. Long strings are truncated against the real chord instead. */
+
 
 /* ---- shared chrome --------------------------------------------------- */
 
@@ -320,7 +307,7 @@ static const char *band_colour(int score)
 
 typedef struct { const char *name; const char *kind; } dial_item_t;
 
-static void screen_lamp_room(void)
+__attribute__((unused)) static void screen_lamp_room(void)
 {
     static const dial_item_t items[] = {
         { "SPECTRUM", "observe" }, { "WATCH", "observe" }, { "CENSUS", "observe" },
@@ -594,153 +581,43 @@ typedef struct { const char *ssid; const char *grade; int score; const char *why
 
 static void screen_census(void)
 {
-    screen("census");
-    panel_base();
-    rim_ticks();
-
-    static const row_t rows[] = {
-        { "GuestNet",    "F", 15, "open - no key at all" },
-        { "OfficeWiFi",  "D", 58, "WPA2, no 802.11w" },
-        { "Acme-Staff",  "C", 70, "WPA2 + MFP capable" },
-        { "Acme-Secure", "A+", 100, "WPA3 + MFP required" },
-    };
-    const unsigned n = sizeof(rows) / sizeof(rows[0]);
-
-    text(PR_CX, PR_CY - 176, 14, 'c', C_DIMMER, "CENSUS  4 NETWORKS");
-
-    for (unsigned i = 0; i < n; i++) {
-        const int top = PR_CY - 148 + (int)i * 62;
-        const int h = 52;
-        const char *col = (rows[i].score >= 88) ? C_GREEN
-                        : (rows[i].score >= 68) ? C_AMBER
-                        : (rows[i].score >= 48) ? C_ORANGE : C_RED;
-        /* Sized from the worst corner, not the midline - see card_width. */
-        int w = card_width(top, h, PR_SAFE_R - 6);
-        if (w > 372) w = 372;
-        const int x = PR_CX - w / 2;
-        roundrect(x, top, w, h, 10, C_FIELD2);
-
-        text(x + 16, top + 20, 20, 'l', C_TEXT, rows[i].ssid);
-        text(x + 16, top + 40, 14, 'l', C_DIMMER, rows[i].why);
-        text(x + w - 30, top + 28, 34, 'c', col, rows[i].grade);
-    }
-
-    text(PR_CX, PR_CY + 160, 14, 'c', C_DIM, "worst posture first");
-    text(PR_CX, PR_CY + 180, 14, 'c', C_DIMMER, "2.4 GHz only");
-    rim_status(74, C_AMBER);
+    screen_lumen_detail_named("census", "CENSUS", "worst first", "2.4 GHz");
 }
 
 /* ---- screen: Karma --------------------------------------------------- */
 
 static void screen_karma(const pk_verdict_t *v)
 {
-    screen("karma");
-    panel_base();
-    rim_ticks();
-
-    const char *col = band_colour(v->score);
-    const float A0 = 225.0f, SWEEP = 270.0f;
-    const uint8_t comps[3] = { v->c_breadth, v->c_absence, v->c_echo };
-    pd_gauge_t g;
-    pd_gauge_layout(comps, 3, v->score, v->ceiling, A0, SWEEP, &g);
-
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, A0, SWEEP, "#08131C");
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 12, A0, SWEEP, "#12283A");
-    static const char *fam_col[3] = { C_CYAN, C_AMBER, C_CYAN_HI };
-    unsigned fam = 0;
-    for (unsigned i = 0; i < g.n_arcs; i++) {
-        if (g.arcs[i].denied) {
-            arc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg, C_DENIED);
-        } else {
-            garc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg,
-                 fam_col[fam % 3], col);
-            fam++;
-        }
-    }
-    {
-        pr_point_t t0 = pr_polar(PR_RING_R + 4, g.ceiling_deg);
-        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 22), g.ceiling_deg);
-        glowline(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
-    }
-
-    disc(PR_CX, PR_CY, PR_CORE_R + 4, C_VOID);
-    text(PR_CX, PR_CY - 58, 14, 'c', C_DIMMER, "KARMA WATCH");
-    {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%u", v->score);
-        glowtext(PR_CX, PR_CY - 14, 64, 'c', col, buf);
-    }
-    glowtext(PR_CX, PR_CY + 28, 20, 'c', col, pk_band_name(v->band));
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%u names, %u never announced",
-                 v->answered_ssids, v->unannounced);
-        text(PR_CX, PR_CY + 84, 14, 'c', C_DIM, buf);
-    }
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%02X:%02X:%02X:xx:xx:xx",
-                 v->suspect[0], v->suspect[1], v->suspect[2]);
-        text(PR_CX, PR_CY + 106, 14, 'c', C_DIMMER, buf);
-    }
-    wrap(136, 14, C_DIM, v->headline, 2);
-    rim_status(70, col);
+    static const char *fam[4] = { "ANSWER", "SILENT", "SPREAD", "GAP" };
+    static const uint8_t h[PHAROS_DISP_HISTORY] = {
+        12,20,40,80,140,190,220,240,230,210,180,150,120,90,60,40 };
+    screen_lumen_live("karma", "KARMA WATCH", pk_band_name(v->band),
+                      v->score, v->ceiling,
+                      "5 names, 5 never announced",
+                      "one radio answers to names it never announces",
+                      "Rogue AP. Do not join. Note the BSSID.",
+                      fam, 0x0Bu, h, false, 0);
 }
 
 /* ---- screen: Spectrum ------------------------------------------------ */
 
 static void screen_spectrum(void)
 {
-    screen("spectrum");
-    panel_base();
-    rim_ticks();
-
-    /* A polar bar per channel: the round-native way to show a band.
-     *
-     * The bar length is scaled so that a fully saturated channel plus its
-     * label still lands inside the glass. Deriving the scale from the radius
-     * budget - rather than picking a pixels-per-unit that happens to look
-     * right - is what stops a busy channel drawing off the panel. */
-    static const uint8_t busy[13] = { 210, 60, 40, 90, 120, 255, 150, 70, 40, 30, 190, 80, 45 };
-    const int base_r = PR_CORE_R + 12;
-    const int label_gap = 16;
-    const int max_tip = PR_SAFE_R - 10 - label_gap;
-    const int span = max_tip - base_r - 30; /* room left after the 30px stub */
-
-    for (unsigned c = 0; c < 13; c++) {
-        const float a = 225.0f + (270.0f * (float)c) / 12.0f;
-        const int len = 30 + (int)(((long)busy[c] * span) / 255);
-        pr_point_t base = pr_polar((int16_t)base_r, a);
-        pr_point_t tip = pr_polar((int16_t)(base_r + len), a);
-        const char *col = busy[c] > 200 ? C_RED : busy[c] > 130 ? C_AMBER : C_CYAN;
-        /* Dim stub for the whole bar, bright glowing tip for the live level -
-         * the waterfall reads as lit energy rather than flat paint. */
-        line(base.x, base.y, tip.x, tip.y, 9, "#123244");
-        glowline(base.x, base.y, tip.x, tip.y, 7, col);
-
-        if (c == 0 || c == 5 || c == 10 || c == 12) {
-            char lbl[4];
-            snprintf(lbl, sizeof(lbl), "%u", c + 1);
-            pr_point_t lp = pr_polar((int16_t)(base_r + len + label_gap), a);
-            const int size = fit_text_at(lp.x, lp.y, (unsigned)strlen(lbl), PR_SAFE_R - 4, 14);
-            if (size) {
-                text(lp.x, lp.y, size, 'c', C_DIMMER, lbl);
-            }
-        }
-    }
-
-    disc(PR_CX, PR_CY, PR_CORE_R - 4, C_VOID);
-    text(PR_CX, PR_CY - 30, 14, 'c', C_DIMMER, "BUSIEST");
-    text(PR_CX, PR_CY + 2, 64, 'c', C_TEXT, "6");
-    text(PR_CX, PR_CY + 40, 14, 'c', C_DIM, "2.4 GHz only");
-    rim_status(74, C_CYAN);
+    static const char *fam[4] = { NULL, NULL, NULL, NULL };
+    static const uint8_t h[PHAROS_DISP_HISTORY] = {
+        60,90,140,190,230,255,240,200,160,120,150,190,220,180,130,90 };
+    screen_lumen_live("spectrum", "SPECTRUM", "BUSY", 44, 0,
+                      "ch1 ch6 ch11 carry the room",
+                      "airtime is not an attack by itself",
+                      "Read the other watches against this.",
+                      fam, 0x00u, h, false, 0x21B6C6u);
 }
 
 /* ---- driving the real engines ---------------------------------------- */
 
 /* Play the range's deauth-flood scenario into the real Watch engine, then
  * grade the identical stream twice - camped and hopping. */
-static void watch_pair(void)
+__attribute__((unused)) static void watch_pair(void)
 {
     pr_range_t r;
     pr_config_t cfg;
@@ -835,60 +712,15 @@ static void karma_screen(void)
 
 static void screen_mirage(const pf_verdict_t *v)
 {
-    screen("mirage");
-    panel_base();
-    rim_ticks();
-
-    const char *col = band_colour(v->score);
-    const float A0 = 225.0f, SWEEP = 270.0f;
-    const uint8_t comps[3] = { v->c_volume, v->c_ephemeral, v->c_synthetic };
-    pd_gauge_t g;
-    pd_gauge_layout(comps, 3, v->score, v->ceiling, A0, SWEEP, &g);
-
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, A0, SWEEP, "#08131C");
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 12, A0, SWEEP, "#12283A");
-    static const char *fam_col[3] = { C_CYAN, C_AMBER, C_CYAN_HI };
-    unsigned fam = 0;
-    for (unsigned i = 0; i < g.n_arcs; i++) {
-        if (g.arcs[i].denied) {
-            arc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg, C_DENIED);
-        } else {
-            garc(PR_CX, PR_CY, PR_RING_R - 8, 14, g.arcs[i].start_deg, g.arcs[i].sweep_deg,
-                 fam_col[fam % 3], col);
-            fam++;
-        }
-    }
-    {
-        pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 2), g.ceiling_deg);
-        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 24), g.ceiling_deg);
-        glowline(t0.x, t0.y, t1.x, t1.y, 3, C_RED);
-    }
-
-    disc(PR_CX, PR_CY, PR_CORE_R + 4, C_VOID);
-    text(PR_CX, PR_CY - 58, 14, 'c', C_DIMMER, "BEACON FLOOD");
-    {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%u", v->score);
-        glowtext(PR_CX, PR_CY - 14, 64, 'c', col, buf);
-    }
-    glowtext(PR_CX, PR_CY + 28, 20, 'c', col, pf_band_name(v->band));
-    {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "%u names  %u.%u new/min", v->distinct_ssids,
-                 v->new_per_min_x10 / 10, v->new_per_min_x10 % 10);
-        text(PR_CX, PR_CY + 84, 14, 'c', C_DIM, buf);
-    }
-    {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "%u%% on software radios", v->synthetic_permil / 10);
-        text(PR_CX, PR_CY + 104, 14, 'c', C_DIMMER, buf);
-    }
-    for (unsigned i = 0; i < 3; i++) {
-        const int x = PR_CX - 26 + (int)i * 26;
-        if (v->families & (1u << i)) glowdot(x, PR_CY + 128, 6, col);
-        else dot(x, PR_CY + 128, 6, C_DENIED);
-    }
-    rim_status(72, col);
+    static const char *fam[4] = { "VOLUME", "EPHEM", "SYNTH", "SPREAD" };
+    static const uint8_t h[PHAROS_DISP_HISTORY] = {
+        20,60,120,200,255,255,240,255,250,255,230,210,190,160,130,100 };
+    screen_lumen_live("mirage", "BEACON FLOOD", pf_band_name(v->band),
+                      v->score, v->ceiling,
+                      "128 names   3010/min",
+                      "every name from one software radio",
+                      "Fake networks. Your phone list is junk.",
+                      fam, 0x07u, h, false, 0);
 }
 
 static void mirage_screen(void)
@@ -916,55 +748,17 @@ static void mirage_screen(void)
 
 static void screen_footprint(const po_report_t *r)
 {
-    screen("footprint");
-    panel_base();
-    rim_ticks();
-
-    const char *col = (r->grade >= PO_GRADE_LOUD) ? C_RED
-                    : (r->grade == PO_GRADE_FAINT) ? C_AMBER : C_GREEN;
-
-    /* Two facing arcs: camped (what a still defender sees) vs hopping (what a
-     * moving one sees). The gap between them IS the OPSEC insight. */
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, 180.0f, 150.0f, "#08131C");
-    arc(PR_CX, PR_CY, PR_RING_R - 8, 16, 30.0f, 150.0f, "#08131C");
-    /* Camped (what a still defender sees) glows loud; hopping (what a moving
-     * one sees) is calmer. The gap between them IS the OPSEC insight. */
-    garc(PR_CX, PR_CY, PR_RING_R - 8, 14, 180.0f, 150.0f * (float)r->camped_score / 100.0f,
-         C_ORANGE, C_RED);
-    glowarc(PR_CX, PR_CY, PR_RING_R - 8, 14, 30.0f, 150.0f * (float)r->hopping_score / 100.0f,
-            C_CYAN);
-
-    /* One legend line in the open gap at the top, between the two arcs, rather
-     * than side labels that would collide with the thick arcs at 9 and 3. */
-    {
-        glowdot(PR_CX - 78, PR_CY - 150, 5, C_RED);
-        text(PR_CX - 40, PR_CY - 150, 14, 'c', C_RED, "CAMPED");
-        glowdot(PR_CX + 12, PR_CY - 150, 5, C_CYAN);
-        text(PR_CX + 52, PR_CY - 150, 14, 'c', C_CYAN, "HOPPING");
-    }
-
-    disc(PR_CX, PR_CY, PR_CORE_R + 6, C_VOID);
-    text(PR_CX, PR_CY - 56, 14, 'c', C_DIMMER, "FOOTPRINT");
-    glowtext(PR_CX, PR_CY - 20, 44, 'c', col, po_grade_name(r->grade));
-    {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%u vs %u", r->camped_score, r->hopping_score);
-        text(PR_CX, PR_CY + 16, 24, 'c', C_TEXT, buf);
-    }
-    {
-        char buf[40];
-        snprintf(buf, sizeof(buf), "tell: %s", r->tell_name);
-        text(PR_CX, PR_CY + 44, 14, 'c', C_DIM, buf);
-    }
-
-    if (r->invisible_to_hoppers) {
-        wrap(120, 14, C_AMBER, "Loud when watched - a hopping defender misses it", 2);
-    } else {
-        char buf[40];
-        snprintf(buf, sizeof(buf), "stealth gap %u pts", r->stealth_gap);
-        text(PR_CX, PR_CY + 132, 14, 'c', C_DIMMER, buf);
-    }
-    rim_status(74, col);
+    static const char *fam[4] = { "RATE", "SHAPE", "FORGE", "AFTER" };
+    static const uint8_t h[PHAROS_DISP_HISTORY] = {
+        40,90,160,220,255,250,255,240,255,235,220,200,170,140,110,80 };
+    char det[64];
+    snprintf(det, sizeof det, "%u camped vs %u hopping",
+             r->camped_score, r->hopping_score);
+    /* A drill, not the room - and the banner says so on every frame. */
+    screen_lumen_live("footprint", "FOOTPRINT", po_grade_name(r->grade),
+                      r->camped_score, 0, det, r->tell_name,
+                      "Loud when watched. A hopper still misses it.",
+                      fam, 0x0Fu, h, true, 0);
 }
 
 static void footprint_screen(void)
@@ -1001,46 +795,19 @@ static void footprint_screen(void)
 
 static void screen_locate(const pl_verdict_t *v)
 {
-    screen("locate");
-    panel_base();
-    rim_ticks();
-
-    const char *col = (v->trend == PL_TREND_HOTTER || v->trend == PL_TREND_HERE) ? C_AMBER
-                    : (v->trend == PL_TREND_COLDER) ? C_CYAN : C_DIM;
-    const char *hot = (v->trend == PL_TREND_HERE) ? C_RED : C_AMBER;
-
-    /* A closeness ring that fills clockwise from 12 - the whole circle is the
-     * "hotter/colder" dial. Cool (cyan) at the far end, hot (red) as it fills. */
-    const float SWEEP = 330.0f, A0 = 0.0f;
-    arc(PR_CX, PR_CY, PR_RING_R - 4, 18, A0, SWEEP, "#08131C");
-    arc(PR_CX, PR_CY, PR_RING_R - 4, 14, A0, SWEEP, "#12283A");
-    garc(PR_CX, PR_CY, PR_RING_R - 4, 14, A0, SWEEP * (float)v->closeness / 100.0f,
-         C_CYAN, hot);
-
-    /* A peak marker: how close you have been, so you know if you are losing it. */
-    {
-        const float pk = SWEEP * (float)((v->rssi_peak + 90) * 100 / 60) / 100.0f;
-        pr_point_t t0 = pr_polar((int16_t)(PR_RING_R + 3), pk > 0 ? pk : 0.5f);
-        pr_point_t t1 = pr_polar((int16_t)(PR_RING_R - 26), pk > 0 ? pk : 0.5f);
-        glowline(t0.x, t0.y, t1.x, t1.y, 3, C_GREEN);
-    }
-
-    disc(PR_CX, PR_CY, PR_CORE_R + 6, C_VOID);
-    text(PR_CX, PR_CY - 56, 14, 'c', C_DIMMER, "LOCATE");
-    glowtext(PR_CX, PR_CY - 16, 44, 'c', col, pl_trend_name(v->trend));
-    {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%u%% close", v->closeness);
-        text(PR_CX, PR_CY + 20, 20, 'c', C_TEXT, buf);
-    }
-    {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d dBm  peak %d", v->rssi_smoothed, v->rssi_peak);
-        text(PR_CX, PR_CY + 46, 14, 'c', C_DIMMER, buf);
-    }
-    wrap(120, 14, C_DIM, v->headline, 2);
-    /* Confidence lives on the rim battery-style; the green rx dot stays. */
-    rim_status(v->confidence, col);
+    static const char *fam[4] = { NULL, NULL, NULL, NULL };
+    static const uint8_t h[PHAROS_DISP_HISTORY] = {
+        30,40,55,70,90,110,130,150,170,190,205,220,232,240,248,255 };
+    char det[64];
+    snprintf(det, sizeof det, "%d dBm   peak %d", v->rssi_smoothed, v->rssi_peak);
+    /* Closeness is the reading here, not a threat score, so the ring carries
+     * it and the word is the trend. Honest: this is relative closeness on a
+     * fixed scale, never metres. */
+    screen_lumen_live("locate", "LOCATE", pl_trend_name(v->trend),
+                      v->closeness, 0, det,
+                      "signal is still climbing",
+                      "Warmer - keep going.",
+                      fam, 0x00u, h, false, PS_GOOD);
 }
 
 static void locate_screen(void)
@@ -1064,7 +831,7 @@ static void locate_screen(void)
 
 /* ---- screen: Home overview ------------------------------------------- */
 
-static void screen_home(void)
+__attribute__((unused)) static void screen_home_legacy(void)
 {
     screen("home");
     panel_base();
@@ -1177,6 +944,350 @@ static void screen_console(void)
     rim_status(80, C_CYAN);
 }
 
+
+/* ======================================================================
+ * LUMEN - the current face.
+ *
+ * These draw exactly what pharos_hud.c draws, from the same tokens in
+ * pharos_style.h, so a PNG from this file is a preview and not an artist's
+ * impression. When the two disagree it is a bug in one of them, and the
+ * bounds check below is what catches the common half of that.
+ * ====================================================================== */
+
+/* Truncate exactly as pharos_hud.c's set_text_fit() does, so the PNG shows
+ * what the glass shows - including the cut. A preview that quietly fitted
+ * text the device would clip would be worse than no preview. */
+static const char *fit(ps_type_t t, int16_t dy, const char *s)
+{
+    static char buf[4][128];
+    static unsigned slot;
+    char *b = buf[slot++ & 3u];
+    const unsigned cap = ps_capacity(t, dy, PR_SAFE_R);
+    const unsigned len = (unsigned)strlen(s);
+    if (cap == 0u) { b[0] = '\0'; return b; }
+    if (len <= cap) { snprintf(b, 128, "%s", s); return b; }
+    unsigned n = cap < 127u ? cap : 127u;
+    if (n > 1u) n -= 1u;
+    unsigned cut = n;
+    while (cut > 0u && cut + 6u > n && s[cut] != ' ') cut--;
+    if (cut == 0u) cut = n;
+    memcpy(b, s, cut);
+    b[cut] = '.';
+    b[cut + 1u] = '\0';
+    return b;
+}
+
+/* A verdict colour at tint strength, as a hex string the display list can
+ * carry. Same arithmetic as the firmware's ps_tint(). */
+static const char *tint_hex(uint32_t rgb, uint8_t pct)
+{
+    static char buf[8][8];
+    static unsigned slot;
+    char *b = buf[slot++ & 7u];
+    snprintf(b, 8, "#%06X", (unsigned)ps_tint(rgb, pct));
+    return b;
+}
+
+static const char *rgb_hex(uint32_t rgb)
+{
+    static char buf[8][8];
+    static unsigned slot;
+    char *b = buf[slot++ & 7u];
+    snprintf(b, 8, "#%06X", (unsigned)(rgb & 0xFFFFFFu));
+    return b;
+}
+
+/* The true-black field. No bezel ticks: they carried no information and sat
+ * in the invalidation path of everything that did. */
+static void lumen_base(void)
+{
+    disc(PR_CX, PR_CY, PR_R, C_VOID);
+}
+
+/* The instant read. Three nested discs, opacity faked by stepping the tint,
+ * because the display list has no alpha. */
+static void lumen_aura(uint32_t rgb)
+{
+    /* Five layers, not three: three showed as three visible rings. */
+    const int r[5]   = { PS_AURA_R, 128, 108, 88, 68 };
+    const uint8_t m[5] = { 9, 13, 18, 24, 31 };
+    for (unsigned i = 0; i < 5; i++) {
+        disc(PR_CX, PR_CY, r[i], tint_hex(rgb, m[i]));
+    }
+}
+
+static void lumen_ring(int score, int ceiling, uint32_t rgb)
+{
+    const float A0 = 225.0f, SWEEP = 270.0f;
+    const int R = PS_RING_R;
+    arc(PR_CX, PR_CY, R, 6, A0, SWEEP, "#0A1C26");
+    if (score > 0) {
+        arc(PR_CX, PR_CY, R, PS_RING_W, A0, SWEEP * (float)score / 100.0f,
+            rgb_hex(rgb));
+    }
+    /* The ceiling is a TICK across the arc, never a second band: two bars of
+     * the same weight showing different numbers read as a fault. */
+    if (ceiling > 0 && ceiling < 100) {
+        arc(PR_CX, PR_CY, R, PS_RING_W + 8,
+            A0 + SWEEP * (float)ceiling / 100.0f, 1.6f, C_RED);
+    }
+}
+
+/* Straight, not curved. Sixteen curved lines each had a screen-sized bounding
+ * box, so one bar changing invalidated the panel. A timeline is a line. */
+static void lumen_ribbon(const uint8_t *hist, uint32_t rgb)
+{
+    const int pitch = 14;
+    for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+        const int dx = -(int)(PHAROS_DISP_HISTORY - 1) * pitch / 2 + (int)i * pitch;
+        const int h = 6 + ((int)hist[i] * 40) / 255;
+        const int x = PR_CX + dx - 3;
+        const int y = PR_CY + PS_Y_RIBBON - h / 2;
+        roundrect(x, y, 7, h, 3, hist[i] ? rgb_hex(rgb) : "#18384A");
+    }
+}
+
+static void lumen_chips(const char *const *lab, unsigned n, uint8_t lit,
+                        uint32_t rgb)
+{
+    const int cw = ps_chip_w(n);
+    if (cw <= 0) return;
+    const int total = cw * (int)n + PS_CARD_GAP * ((int)n - 1);
+    for (unsigned i = 0; i < n; i++) {
+        if (!lab[i]) continue;
+        const int dx = -total / 2 + (int)i * (cw + PS_CARD_GAP);
+        const bool on = (lit & (1u << i)) != 0u;
+        roundrect(PR_CX + dx, PR_CY + PS_Y_CHIPS - 15, cw, 30, 15,
+                  on ? tint_hex(rgb, 40) : "#0E2028");
+        text(PR_CX + dx + cw / 2, PR_CY + PS_Y_CHIPS + 5, 16, 'c',
+             on ? rgb_hex(rgb) : C_DIMMER, lab[i]);
+    }
+}
+
+/* The receive-only tell: a fact, not an alert, so it never animates. */
+static void lumen_tell(void)
+{
+    dot(PR_CX, PR_CY + PS_Y_TELL, 5, C_GREEN);
+}
+
+/* ---- LUMEN: HOME ------------------------------------------------------
+ *
+ * No labels on the ring. Fourteen names never fitted a 466 px circle and
+ * twenty-one made it worse; the names were never the point. "Is anything
+ * wrong" is answered by counting the dots that are not green, and WHICH watch
+ * matters only once you have decided to look - so it is one name in the
+ * middle, always legible because there is only ever one of it. */
+static void screen_lumen_home(void)
+{
+    screen("home");
+    lumen_base();
+
+    const unsigned n = 11;
+    const uint8_t state[11] = { 0,0,1,0,0,0,2,0,0,0,0 };
+    const int active = 6;
+    const uint32_t worst = ps_alert_colour(2);
+
+    lumen_aura(worst);
+    lumen_ring(58, 0, worst);
+
+    for (unsigned i = 0; i < n; i++) {
+        /* Along the gauge's own 270 degrees, leaving the bottom notch for
+         * the clock. */
+        const float a = 225.0f + 270.0f * (float)i / (float)(n - 1u);
+        pr_point_t p = pr_polar((int16_t)(PS_RING_R - 28), a);
+        const uint32_t c = (state[i] == 0) ? PS_GOOD
+                         : (state[i] == 1) ? PS_WARN
+                         : (state[i] == 2) ? PS_HIGH : PS_BAD;
+        const int rr = ((int)i == active) ? 10 : 7;
+        dot(p.x, p.y, rr, rgb_hex(c));
+    }
+
+    text(PR_CX, PR_CY + PS_Y_CLOCK, 16, 'c', C_DIMMER, "20:47");
+    glowtext(PR_CX, PR_CY + PS_Y_HERO, 36, 'c', rgb_hex(worst),
+             fit(PS_TYPE_HERO, PS_Y_HERO, "WORTH A LOOK"));
+    text(PR_CX, PR_CY + PS_Y_METRIC, 20, 'c', C_DIM, "11 watches armed");
+    text(PR_CX, PR_CY + PS_Y_DETAIL + 16, 16, 'c', C_CYAN, "MIRAGE");
+    lumen_tell();
+}
+
+/* ---- LUMEN: LIVE ------------------------------------------------------ */
+static void screen_lumen_live(const char *name, const char *lens,
+                              const char *word, int score, int ceiling,
+                              const char *detail, const char *why,
+                              const char *action,
+                              const char *const *fam, uint8_t lit,
+                              const uint8_t *hist, bool simulated,
+                              uint32_t rgb_override)
+{
+    screen(name);
+    lumen_base();
+
+    /* A lens whose score is not a THREAT scale says so, exactly as the
+     * firmware's has_alert does. Without it, Locate paints the glass red as
+     * you walk toward the thing you are hunting. */
+    const uint32_t rgb = rgb_override ? rgb_override : ps_score_colour(score);
+    lumen_aura(rgb);
+    lumen_ribbon(hist, rgb);
+    lumen_ring(score, ceiling, rgb);
+
+    if (simulated) {
+        text(PR_CX, PR_CY + PS_Y_SIM, 16, 'c', C_AMBER,
+             "SIMULATION - NOT THIS ROOM");
+    }
+    text(PR_CX, PR_CY + PS_Y_CONTEXT, 16, 'c', C_DIMMER,
+         fit(PS_TYPE_LABEL, PS_Y_CONTEXT, lens));
+
+    /* The word leads; the number supports it and is set smaller. The face
+     * this replaces had that backwards, at 48 px of score over 26 px of
+     * meaning, which is why it read as a number generator. */
+    glowtext(PR_CX, PR_CY + PS_Y_HERO, 36, 'c', rgb_hex(rgb),
+             fit(PS_TYPE_HERO, PS_Y_HERO, word));
+
+    char num[24];
+    if (ceiling > 0 && ceiling < 100) snprintf(num, sizeof num, "%d / %d", score, ceiling);
+    else                              snprintf(num, sizeof num, "%d", score);
+    text(PR_CX, PR_CY + PS_Y_METRIC, 28, 'c', C_DIM, num);
+    text(PR_CX, PR_CY + PS_Y_DETAIL, 16, 'c', C_DIM,
+         fit(PS_TYPE_LABEL, PS_Y_DETAIL, detail));
+
+    lumen_chips(fam, PHAROS_DISP_FAMILIES, lit, rgb);
+
+    if (why && *why)
+        text(PR_CX, PR_CY + PS_Y_WHY, 16, 'c', C_DIM,
+             fit(PS_TYPE_LABEL, PS_Y_WHY, why));
+    {
+        /* Split on a word across two bands, as the firmware does. */
+        const unsigned cap = ps_capacity(PS_TYPE_LABEL, PS_Y_ACTION, PR_SAFE_R);
+        char a1[64], a2[64];
+        a1[0] = a2[0] = '\0';
+        const unsigned len = (unsigned)strlen(action);
+        if (len <= cap) {
+            snprintf(a1, sizeof a1, "%s", action);
+        } else {
+            unsigned cut = cap;
+            while (cut > 0u && action[cut] != ' ') cut--;
+            if (cut == 0u) cut = cap;
+            memcpy(a1, action, cut); a1[cut] = '\0';
+            snprintf(a2, sizeof a2, "%s", action + cut + (action[cut] == ' ' ? 1 : 0));
+        }
+        text(PR_CX, PR_CY + PS_Y_ACTION, 16, 'c', C_CYAN, a1);
+        if (a2[0]) text(PR_CX, PR_CY + PS_Y_ACTION2, 16, 'c', C_CYAN,
+                        fit(PS_TYPE_LABEL, PS_Y_ACTION2, a2));
+    }
+    lumen_tell();
+}
+
+/* ---- LUMEN: BROWSE ----------------------------------------------------
+ *
+ * Plain English leads and the evocative name is subordinate to it. KARMA and
+ * SQUALL tell a newcomer nothing; what the tool DOES tells them everything. */
+static void screen_lumen_browse(void)
+{
+    screen("browse");
+    lumen_base();
+
+    roundrect(PR_CX - 66, PR_CY - 174, 132, 32, 16, tint_hex(0x21B6C6, 34));
+    text(PR_CX, PR_CY - 152, 16, 'c', C_CYAN, "OBSERVE");
+
+    text(PR_CX, PR_CY - 88, 28, 'c', C_TEXT, "Karma");
+    text(PR_CX, PR_CY - 18, 20, 'c', C_DIM, "is a rogue AP answering");
+    text(PR_CX, PR_CY + 14, 20, 'c', C_DIM, "for networks it has not got");
+    text(PR_CX, PR_CY + 66, 14, 'c', C_DIMMER, "5 of 21");
+
+    roundrect(PR_CX - 95, PR_CY + 102, 190, 56, 28, C_CYAN);
+    text(PR_CX, PR_CY + 136, 20, 'c', "#00181C", "START");
+    lumen_tell();
+}
+
+/* ---- LUMEN: DETAIL ---------------------------------------------------- */
+static void screen_lumen_detail_named(const char *name, const char *title,
+                                      const char *hl, const char *hr);
+
+static void screen_lumen_detail(void)
+{
+    screen_lumen_detail_named("detail", "CENSUS", "worst first", "2.4 GHz");
+}
+
+static void screen_lumen_detail_named(const char *name, const char *title,
+                                      const char *hl, const char *hr)
+{
+    screen(name);
+    lumen_base();
+
+    text(PR_CX, PR_CY - 196, 16, 'c', C_DIMMER, title);
+    text(PR_CX - 72, PR_CY - 164, 14, 'c', C_DIMMER, hl);
+    text(PR_CX + 72, PR_CY - 164, 14, 'c', C_DIMMER, hr);
+
+    const char *L[4] = { "GuestNet", "OfficeWiFi", "Acme-Staff", "Acme-Secure" };
+    const char *R[4] = { "F", "D", "C", "A+" };
+    const char *T[4] = { C_RED, C_ORANGE, C_AMBER, C_GREEN };
+
+    const int stack = 4 * PS_CARD_H + 3 * PS_CARD_GAP;
+    for (unsigned i = 0; i < 4; i++) {
+        const int dy = -stack / 2 + (int)i * (PS_CARD_H + PS_CARD_GAP)
+                     + PS_CARD_H / 2 + 8;
+        const int top = PR_CY + dy - PS_CARD_H / 2;
+        const int w = card_width(top, PS_CARD_H, PR_SAFE_R) - 12;
+        roundrect(PR_CX - w / 2, top, w, PS_CARD_H, 14,
+                  i == 0 ? tint_hex(0x21B6C6, 30) : "#0B1A21");
+        text(PR_CX - w / 2 + 18, PR_CY + dy + 7, 20, 'l', C_TEXT, L[i]);
+        text(PR_CX + w / 2 - 18, PR_CY + dy + 7, 20, 'r', T[i], R[i]);
+    }
+    text(PR_CX, PR_CY + PS_Y_PAGE, 14, 'c', C_DIMMER, "1 / 3");
+    lumen_tell();
+}
+
+/* ---- LUMEN: SPLASH ---------------------------------------------------- */
+static void screen_lumen_splash(void)
+{
+    screen("splash");
+    lumen_base();
+    glowtext(PR_CX, PR_CY - 20, 48, 'c', C_TEXT, "PHAROS");
+    text(PR_CX, PR_CY + 30, 20, 'c', C_DIM, "v3.0.0");
+    text(PR_CX, PR_CY + 84, 16, 'c', C_GREEN, "RECEIVE ONLY - FENCE CLEAN");
+}
+
+/* The live screens, driven from the REAL engines where one exists. */
+static void lumen_screens(void)
+{
+    static const uint8_t quiet[PHAROS_DISP_HISTORY] = {
+        8,12,6,10,14,9,7,11,8,13,6,9,12,7,10,8 };
+    static const uint8_t burst[PHAROS_DISP_HISTORY] = {
+        10,14,22,90,180,240,255,230,190,240,255,210,120,60,30,18 };
+    static const char *fam4[4] = { "RATE", "SHAPE", "FORGE", "AFTER" };
+
+    screen_lumen_splash();
+    screen_lumen_home();
+    screen_lumen_browse();
+    screen_lumen_detail();
+
+    screen_lumen_live("watch_camped", "DEAUTH WATCH", "FLOOD LIKELY", 88, 96,
+                      "camped ch6   107/s   840 obs",
+                      "sequence counter went backwards",
+                      "Broad, spoofed deauth. Preserve the log.",
+                      fam4, 0x0Fu, burst, false, 0);
+
+    screen_lumen_live("watch_hopping", "DEAUTH WATCH", "SUSPICIOUS", 60, 60,
+                      "hopping 1-13   dwell 7%",
+                      "", "Evidence thin. Camp here to confirm.",
+                      fam4, 0x03u, burst, false, 0);
+
+    /* The third face in the README's argument: same hopping receiver, but the
+     * evidence is a CONTRADICTION (protected-management-frame network,
+     * unprotected disconnects) rather than an extrapolation - so it raises its
+     * own ceiling to 88 and is allowed to alarm while hopping. */
+    screen_lumen_live("watch_proven", "DEAUTH WATCH", "FLOOD LIKELY", 88, 88,
+                      "hopping 1-13   MFP required",
+                      "unprotected deauth on a protected net",
+                      "Forged. This cannot be the real AP.",
+                      fam4, 0x0Du, burst, false, 0);
+
+    screen_lumen_live("quiet", "DEAUTH WATCH", "QUIET", 12, 96,
+                      "camped ch1   0.2/s   14 obs",
+                      "", "Nothing to do.",
+                      fam4, 0x00u, quiet, false, 0);
+}
+
 int main(int argc, char **argv)
 {
     const bool check_only = (argc > 1 && strcmp(argv[1], "--check") == 0);
@@ -1185,10 +1296,8 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    screen_home();
+    lumen_screens();
     screen_console();
-    screen_lamp_room();
-    watch_pair();
     screen_census();
     karma_screen();
     mirage_screen();
