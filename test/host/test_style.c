@@ -20,6 +20,7 @@
 
 #include "pharos_lens.h"
 #include "pharos_probe.h"
+#include "pharos_watch.h"
 #include "pharos_style.h"
 #include "test_support.h"
 
@@ -171,10 +172,13 @@ void test_style(void)
         CHECK(ps_chip_w(2) >= ps_chip_w(4), "two chips should be wider than four");
         CHECK(ps_chip_w(0) == 0, "zero chips have no width");
 
-        /* And the row of them has to stay inside the glass. */
+        /* And the row of them has to stay inside THE GAUGE, not merely
+         * inside the glass. Fitted against PR_SAFE_R the outer two chips were
+         * drawn on top of the score arc. */
         const int16_t total = (int16_t)(w4 * 4 + PS_CARD_GAP * 3);
-        const int16_t half = pr_chord_halfwidth(PR_SAFE_R, PS_Y_CHIPS + PS_CARD_GAP);
+        const int16_t half = pr_chord_halfwidth(PS_INNER_R, PS_Y_CHIPS + PS_CARD_GAP);
         CHECK(total <= half * 2, "four chips overflow the chord at their own offset");
+        CHECK(PS_INNER_R < PR_SAFE_R, "the gauge page's working radius must be inside the glass");
 
         /* Enough chips and it must give up rather than draw slivers. */
         CHECK_EQ(ps_chip_w(12), 0);
@@ -267,6 +271,30 @@ void test_style(void)
         CHECK(112 >= ps_text_w(PS_TYPE_LABEL, (unsigned)cap),
               "the value column cannot draw %u characters at PS_TYPE_LABEL",
               (unsigned)cap);
+    }
+
+    banner("style: the why line's own vocabulary fits the why band");
+    {
+        /* The "why" line is the single most valuable string on a live face -
+         * the one specific finding, as opposed to the band word's generality.
+         * It sits at PS_Y_WHY inside the gauge, which is about 26 characters,
+         * and pw_forgery_name() was returning 28 to 31. The cut landed on
+         * exactly the word carrying the meaning: "sequence counter went
+         * backwards" displayed as "sequence counter went."
+         *
+         * Truncation is the right BEHAVIOUR for an unbounded string and the
+         * wrong OUTCOME for a fixed vocabulary somebody chose. So the
+         * vocabulary is checked. */
+        const unsigned cap = ps_capacity(PS_TYPE_LABEL, PS_Y_WHY, PS_INNER_R);
+        CHECK(cap >= 20u, "the why band holds only %u characters", cap);
+
+        for (int f = 0; f < 8; f++) {
+            const char *n = pw_forgery_name((uint8_t)(1u << f));
+            if (!n || !*n) continue;
+            CHECK(strlen(n) <= cap,
+                  "forgery reason \"%s\" is %u chars, the band holds %u",
+                  n, (unsigned)strlen(n), cap);
+        }
     }
 
     banner("style: nothing a finger must hit is smaller than a finger");

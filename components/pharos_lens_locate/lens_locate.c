@@ -167,7 +167,7 @@ static bool k_locate_display(struct pharos_lens_display *o)
              v.locked ? "Walk slowly; watch the trend."
                       : "Hold still to settle the reading.");
     if (!v.locked) {
-        snprintf(o->why, sizeof(o->why), "not enough samples to trust yet");
+        snprintf(o->why, sizeof(o->why), "too few samples yet");
     }
     o->score = v.closeness;
     /* Confidence IS the ceiling here: a trend from six samples is a guess and

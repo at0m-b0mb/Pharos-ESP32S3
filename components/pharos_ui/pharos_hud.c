@@ -108,7 +108,7 @@ static lv_obj_t *s_toast;
  * at build time and never touched, so changing the verdict invalidates three
  * fills and nothing else. A radial gradient would be one object and would
  * recompute every frame; this is the cheap way to get a soft falloff. */
-#define AURA_N 5
+#define AURA_N 7
 static lv_obj_t *s_aura[AURA_N];
 static uint32_t s_aura_rgb = 0xFFFFFFFFu;
 
@@ -127,7 +127,7 @@ static unsigned s_h_n;
 
 /* BROWSE */
 static lv_obj_t *s_b_kind, *s_b_kind_txt, *s_b_name, *s_b_l1, *s_b_l2;
-static lv_obj_t *s_b_pos, *s_b_go, *s_b_go_txt;
+static lv_obj_t *s_b_pos, *s_b_go, *s_b_go_txt, *s_b_rim;
 
 /* DETAIL */
 static lv_obj_t *s_d_title, *s_d_hl, *s_d_hr, *s_d_page, *s_d_empty;
@@ -145,7 +145,7 @@ static lv_obj_t *s_g_chip[4], *s_g_chip_txt[4];
 static int s_g_step = -1;                   /* what is on screen now       */
 
 /* SPLASH */
-static lv_obj_t *s_s_name, *s_s_ver, *s_s_fence;
+static lv_obj_t *s_s_name, *s_s_ver, *s_s_fence, *s_s_ring;
 
 /* BARS */
 static lv_obj_t *s_bar_patch[6], *s_bar_name[6];
@@ -190,12 +190,13 @@ static void set_text(lv_obj_t *o, const char *s)
  *
  * Truncating is a last resort, not a licence - an engine whose advice needs
  * cutting should shorten its advice. This stops it looking broken. */
-static void set_text_fit(lv_obj_t *o, ps_type_t t, int16_t dy, const char *s)
+static void set_text_fit_r(lv_obj_t *o, ps_type_t t, int16_t dy, int16_t r,
+                           const char *s)
 {
     if (!o) return;
     if (!s || !*s) { set_text(o, ""); return; }
 
-    const unsigned cap = ps_capacity(t, dy, PR_SAFE_R);
+    const unsigned cap = ps_capacity(t, dy, r);
     const unsigned len = (unsigned)strlen(s);
     if (cap == 0u) { set_text(o, ""); return; }
     if (len <= cap) { set_text(o, s); return; }
@@ -214,6 +215,12 @@ static void set_text_fit(lv_obj_t *o, ps_type_t t, int16_t dy, const char *s)
     buf[cut] = '.';
     buf[cut + 1u] = '\0';
     set_text(o, buf);
+}
+
+/* The common case: a page with no gauge, so the glass is the only limit. */
+static void set_text_fit(lv_obj_t *o, ps_type_t t, int16_t dy, const char *s)
+{
+    set_text_fit_r(o, t, dy, PR_SAFE_R, s);
 }
 
 static void set_fg(lv_obj_t *o, uint32_t rgb)
@@ -257,6 +264,12 @@ static void show(lv_obj_t *o, bool on)
  * interpolate. The duration is capped: an arc that took a leisurely second to
  * swing up to an alarm would be prettier and later. */
 static void arc_anim_cb(void *obj, int32_t v) { lv_arc_set_value((lv_obj_t *)obj, v); }
+
+/* Shared by the breath and by the guide's fingertip. */
+static void opa_anim_cb(void *obj, int32_t v)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
 
 static void set_arc_value(lv_obj_t *o, int v)
 {
@@ -392,8 +405,11 @@ static void aura_build(lv_obj_t *parent)
     /* FIVE LAYERS, NOT THREE. Three showed as three visible rings on the
      * first render - a 66 px step between discs is a hard edge, not a
      * falloff. Five at ~33 px with gentler opacity reads as a glow. */
-    const int r[AURA_N] = { PS_AURA_R, 128, 108, 88, 68 };
-    const uint8_t opa[AURA_N] = { 34, 40, 46, 52, 58 };
+    /* SEVEN LAYERS. Three showed as three rings; five still stepped
+     * visibly on a 300 px disc. Seven at ~20 px with a shallow opacity ramp
+     * is below the point the eye resolves a band. */
+    const int r[AURA_N] = { PS_AURA_R, 134, 118, 102, 86, 70, 54 };
+    const uint8_t opa[AURA_N] = { 28, 32, 36, 40, 44, 48, 52 };
     for (unsigned i = 0; i < AURA_N; i++) {
         s_aura[i] = mk_surface(parent, r[i] * 2, r[i] * 2, 0, 0,
                                ps_tint(PS_GOOD, 42), opa[i], LV_RADIUS_CIRCLE);
@@ -406,7 +422,7 @@ static void aura_set(uint32_t rgb)
     s_aura_rgb = rgb;
     /* Mixed towards black so the hero text stays the brightest thing inside
      * it. An aura at full strength turns the word into a silhouette. */
-    const uint8_t mix[AURA_N] = { 20, 26, 32, 38, 44 };
+    const uint8_t mix[AURA_N] = { 16, 20, 24, 28, 33, 38, 44 };
     for (unsigned i = 0; i < AURA_N; i++) {
         set_bg(s_aura[i], ps_tint(rgb, mix[i]));
     }
@@ -529,9 +545,36 @@ bool pharos_hud_create(void)
                         LV_RADIUS_CIRCLE);
     show(s_tell, false);
 
+    /* THE ONE THING ON THE GLASS THAT NEVER STOPS MOVING.
+     *
+     * "Is it frozen?" was a real question asked of the old face, because a
+     * quiet room produces a completely static screen and a crashed device
+     * looks identical to a calm one. This is the answer: a slow breath on the
+     * receive-only pip, which is already the one element present on every
+     * page. Ten pixels, four seconds, and it never touches the reading - so
+     * it costs a rounding error of the frame budget rather than the
+     * full-screen shimmer an animated aura would have been. */
+    {
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_tell);
+        lv_anim_set_exec_cb(&a, opa_anim_cb);
+        lv_anim_set_values(&a, 255, 90);
+        lv_anim_set_duration(&a, PS_MS_BREATH / 2);
+        lv_anim_set_reverse_duration(&a, PS_MS_BREATH / 2);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_start(&a);
+    }
+
     /* ---- SPLASH ---- */
     {
         lv_obj_t *p = s_page[PAGE_SPLASH];
+        /* The boot screen is up for a second and a half whatever happens, so
+         * it may as well do something. The ring sweeping closed is the
+         * lighthouse turning: it is the identity, and it also tells somebody
+         * watching that the device is running rather than stuck. */
+        s_s_ring  = mk_arc(p, PS_RING_R * 2, 4, C_ACCENT, 0, 270, 360);
         s_s_name  = mk_label(p, PS_TYPE_METRIC, C_TEXT, 0, -34, "PHAROS");
         s_s_ver   = mk_label(p, PS_TYPE_BODY, C_DIM, 0, 24, "");
         s_s_fence = mk_label(p, PS_TYPE_LABEL, PS_GOOD, 0, 78, "");
@@ -557,7 +600,14 @@ bool pharos_hud_create(void)
      * staggered-radius machinery all at once. */
     {
         lv_obj_t *p = s_page[PAGE_HOME];
-        s_h_track = mk_arc(p, PS_RING_R * 2, 6, C_TRACK2, 100, 135, 270);
+        /* THE TRACK IS THE SAME WEIGHT AS THE SCORE.
+         *
+         * It was 6 px of near-black under a 14 px bright arc, so a low
+         * reading - QUIET at 12 - drew a lone stub at the bottom left with
+         * nothing behind it, and read as a rendering fault rather than as a
+         * small number. A gauge needs a visible channel for the needle to
+         * fill; that is what makes 12 look like 12 out of 100. */
+        s_h_track = mk_arc(p, PS_RING_R * 2, PS_RING_W, C_TRACK, 100, 135, 270);
         s_h_ring  = mk_arc(p, PS_RING_R * 2, PS_RING_W, PS_GOOD, 0, 135, 270);
         for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
             s_h_dot[i] = mk_surface(p, 14, 14, 0, 0, C_TRACK, LV_OPA_COVER,
@@ -579,14 +629,18 @@ bool pharos_hud_create(void)
      * it does not have" tells them everything. */
     {
         lv_obj_t *p = s_page[PAGE_BROWSE];
-        s_b_kind     = mk_surface(p, 132, 32, 0, -158, C_TRACK, LV_OPA_COVER, 16);
-        s_b_kind_txt = mk_label(p, PS_TYPE_LABEL, C_DIMMER, 0, -158, "");
-        s_b_name     = mk_label(p, PS_TYPE_TITLE, C_TEXT, 0, -96, "");
+        /* A full rim in the tool's own colour. The browse card was a lot of
+         * black around a little text; this gives each of the twenty-one an
+         * identity you register before reading the name, and costs one arc. */
+        s_b_rim      = mk_arc(p, PS_RING_R * 2 + 12, 3, C_ACCENT, 100, 135, 270);
+        s_b_kind     = mk_surface(p, 132, 32, 0, -150, C_TRACK, LV_OPA_COVER, 16);
+        s_b_kind_txt = mk_label(p, PS_TYPE_LABEL, C_DIMMER, 0, -150, "");
+        s_b_name     = mk_label(p, PS_TYPE_TITLE, C_TEXT, 0, -88, "");
         /* Two fixed lines rather than a wrapping block: lesson 3. The caller
          * splits; the height never changes; nothing re-lays-out. */
-        s_b_l1 = mk_label(p, PS_TYPE_BODY, C_DIM, 0, -26, "");
-        s_b_l2 = mk_label(p, PS_TYPE_BODY, C_DIM, 0,   6, "");
-        s_b_pos      = mk_label(p, PS_TYPE_MICRO, C_DIMMER, 0, 62, "");
+        s_b_l1 = mk_label(p, PS_TYPE_BODY, C_DIM, 0, -22, "");
+        s_b_l2 = mk_label(p, PS_TYPE_BODY, C_DIM, 0,  10, "");
+        s_b_pos      = mk_label(p, PS_TYPE_MICRO, C_DIMMER, 0, 64, "");
         s_b_go       = mk_surface(p, 190, 56, 0, 130, C_ACCENT, LV_OPA_COVER, 28);
         s_b_go_txt   = mk_label(p, PS_TYPE_BODY, PS_VOID, 0, 130, "START");
     }
@@ -595,7 +649,7 @@ bool pharos_hud_create(void)
     {
         lv_obj_t *p = s_page[PAGE_LIVE];
 
-        s_l_track = mk_arc(p, PS_RING_R * 2, 6, C_TRACK2, 100, 135, 270);
+        s_l_track = mk_arc(p, PS_RING_R * 2, PS_RING_W, C_TRACK, 100, 135, 270);
         s_l_ring  = mk_arc(p, PS_RING_R * 2, PS_RING_W, PS_GOOD, 0, 135, 270);
 
         /* The ceiling: a hard stop drawn as a TICK across the arc, never as a
@@ -638,6 +692,10 @@ bool pharos_hud_create(void)
             const int dx = -total / 2 + (int)i * (cw + PS_CARD_GAP) + cw / 2;
             s_l_chip[i]     = mk_surface(p, cw, 30, dx, PS_Y_CHIPS, C_TRACK,
                                          LV_OPA_COVER, 15);
+            /* A lit chip gets a hairline edge as well as a fill. Fill alone
+             * is ambiguous at these sizes against a coloured aura. */
+            lv_obj_set_style_border_width(s_l_chip[i], 1, 0);
+            lv_obj_set_style_border_opa(s_l_chip[i], LV_OPA_TRANSP, 0);
             s_l_chip_txt[i] = mk_label(p, PS_TYPE_LABEL, C_DIMMER, dx, PS_Y_CHIPS, "");
             show(s_l_chip[i], false);
             show(s_l_chip_txt[i], false);
@@ -918,6 +976,22 @@ void pharos_hud_splash(const char *version, bool fence_clean)
 {
     if (!s_built) return;
     page_show(PAGE_SPLASH);
+
+    /* Sweep the ring closed once. Not repeated: a boot screen that loops
+     * looks like a boot that has not finished. */
+    lv_anim_delete(s_s_ring, arc_anim_cb);
+    lv_arc_set_value(s_s_ring, 0);
+    {
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_s_ring);
+        lv_anim_set_exec_cb(&a, arc_anim_cb);
+        lv_anim_set_values(&a, 0, 100);
+        lv_anim_set_duration(&a, 1100);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
+    }
+    set_arc_rgb(s_s_ring, fence_clean ? PS_GOOD : PS_BAD);
     set_text(s_s_ver, version ? version : "");
     set_text(s_s_fence, fence_clean ? "RECEIVE ONLY - FENCE CLEAN"
                                     : "FENCE NOT PROVEN");
@@ -993,14 +1067,15 @@ void pharos_hud_home(const struct pharos_hud_home *h)
     set_arc_value(s_h_ring, h->worst_score);
 
     set_text(s_h_clock, h->clock);
-    set_text_fit(s_h_word, PS_TYPE_HERO, PS_Y_HERO, h->headline);
+    set_text_fit_r(s_h_word, PS_TYPE_HERO, PS_Y_HERO, PS_INNER_R, h->headline);
     set_fg(s_h_word, (h->worst_state == 0) ? C_TEXT : rgb);
-    set_text_fit(s_h_sub, PS_TYPE_BODY, PS_Y_METRIC, h->sub);
+    set_text_fit_r(s_h_sub, PS_TYPE_BODY, PS_Y_METRIC, PS_INNER_R, h->sub);
 
     /* The one name on this screen, and it is always legible because there is
      * only ever one of it. */
     const char *act = (h->active >= 0 && h->active < (int)n) ? h->label[h->active] : NULL;
-    set_text_fit(s_h_active, PS_TYPE_LABEL, PS_Y_DETAIL + 16, act ? act : "");
+    set_text_fit_r(s_h_active, PS_TYPE_LABEL, PS_Y_DETAIL + 16, PS_INNER_R,
+                   act ? act : "");
 }
 
 int pharos_hud_home_hit(int16_t x, int16_t y)
@@ -1051,7 +1126,7 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
     page_show(PAGE_BROWSE);
     toast_tick();
 
-    set_text_fit(s_b_name, PS_TYPE_TITLE, -96, name);
+    set_text_fit_r(s_b_name, PS_TYPE_TITLE, -88, PS_INNER_R, name);
     set_fg(s_b_name, C_TEXT);
 
     set_text(s_b_kind_txt, team ? team : "");
@@ -1059,7 +1134,7 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
     set_fg(s_b_kind_txt, rgb ? rgb : C_ACCENT);
 
     char l1[40], l2[40];
-    const unsigned cap = ps_capacity(PS_TYPE_BODY, -26, PR_SAFE_R);
+    const unsigned cap = ps_capacity(PS_TYPE_BODY, -22, PS_INNER_R);
     split_two(summary, cap < 39u ? cap : 39u, l1, sizeof l1, l2, sizeof l2);
     set_text(s_b_l1, l1);
     set_text(s_b_l2, l2);
@@ -1069,6 +1144,7 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
     set_text(s_b_pos, pos);
 
     set_bg(s_b_go, rgb ? rgb : C_ACCENT);
+    set_arc_rgb(s_b_rim, rgb ? rgb : C_ACCENT);
     set_text(s_b_go_txt, "START");
 }
 
@@ -1079,6 +1155,14 @@ static void ribbon_set(unsigned i, uint8_t level, uint32_t rgb)
     if (i >= PHAROS_DISP_HISTORY) return;
     if (s_ribbon_level[i] == level) return;
     s_ribbon_level[i] = level;
+
+    /* OLDER IS DIMMER.
+     *
+     * history[] is oldest-first, and drawing all sixteen seconds at one
+     * intensity made the ribbon read as a static pattern rather than as time
+     * passing. Fading the tail gives it direction: the bright end is NOW. */
+    const uint8_t age_opa = (uint8_t)(96u + (159u * i) / (PHAROS_DISP_HISTORY - 1u));
+    lv_obj_set_style_bg_opa(s_l_ribbon[i], level ? age_opa : 90u, 0);
     /* 6 px minimum so a quiet stretch is a visible baseline rather than a
      * gap - a timeline with nothing on it is information, and a hole in the
      * ribbon reads as a rendering fault. */
@@ -1101,7 +1185,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
         set_text(s_l_word, "STARTING");
         set_fg(s_l_word, C_DIM);
         set_text(s_l_score, "");
-        set_text_fit(s_l_ctx, PS_TYPE_LABEL, PS_Y_CONTEXT, lens);
+        set_text_fit_r(s_l_ctx, PS_TYPE_LABEL, PS_Y_CONTEXT, PS_INNER_R, lens);
         set_text(s_l_detail, "");
         set_text(s_l_why, "");
         set_text_fit(s_l_action, PS_TYPE_LABEL, PS_Y_ACTION, "listening");
@@ -1133,7 +1217,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     }
 
     /* WORD second, and it is the biggest thing on the glass. */
-    set_text_fit(s_l_word, PS_TYPE_HERO, PS_Y_HERO, d->band);
+    set_text_fit_r(s_l_word, PS_TYPE_HERO, PS_Y_HERO, PS_INNER_R, d->band);
     set_fg(s_l_word, rgb);
 
     /* NUMBER third, deliberately smaller than the word it supports. */
@@ -1149,8 +1233,8 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     }
     set_text(s_l_score, num);
 
-    set_text_fit(s_l_ctx, PS_TYPE_LABEL, PS_Y_CONTEXT, lens);
-    set_text_fit(s_l_detail, PS_TYPE_LABEL, PS_Y_DETAIL, d->detail);
+    set_text_fit_r(s_l_ctx, PS_TYPE_LABEL, PS_Y_CONTEXT, PS_INNER_R, lens);
+    set_text_fit_r(s_l_detail, PS_TYPE_LABEL, PS_Y_DETAIL, PS_INNER_R, d->detail);
     show(s_l_sim, d->simulated);
 
     /* EVIDENCE fourth: named chips, never anonymous dots. "Why does it think
@@ -1164,6 +1248,8 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
         set_text(s_l_chip_txt[i], d->fam_label[i]);
         set_bg(s_l_chip[i], lit ? ps_tint(rgb, 40) : C_TRACK2);
         set_fg(s_l_chip_txt[i], lit ? rgb : C_DIMMER);
+        lv_obj_set_style_border_color(s_l_chip[i], lv_color_hex(rgb), 0);
+        lv_obj_set_style_border_opa(s_l_chip[i], lit ? 150 : LV_OPA_TRANSP, 0);
     }
 
     /* The ribbon: what shape, over time. */
@@ -1176,7 +1262,7 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     }
 
     /* ACTION last: the one specific finding, then what to do about it. */
-    set_text_fit(s_l_why, PS_TYPE_LABEL, PS_Y_WHY, d->why);
+    set_text_fit_r(s_l_why, PS_TYPE_LABEL, PS_Y_WHY, PS_INNER_R, d->why);
     {
         /* Two lines, split on a word. See the note on PS_Y_ACTION2: cutting
          * "Broad, spoofed deauth. Preserve the log." down to its first
@@ -1247,11 +1333,6 @@ static void g_finger_size_cb(void *o, int32_t v)
     lv_obj_set_style_radius((lv_obj_t *)o, LV_RADIUS_CIRCLE, 0);
 }
 
-static void g_finger_opa_cb(void *o, int32_t v)
-{
-    lv_obj_set_style_bg_opa((lv_obj_t *)o, (lv_opa_t)v, 0);
-}
-
 static void g_x_cb(void *o, int32_t v)
 {
     lv_obj_set_x((lv_obj_t *)o, v);
@@ -1278,7 +1359,7 @@ static void g_pulse_at(int dx, int dy, int base, int peak, uint32_t period)
     lv_anim_t o;
     lv_anim_init(&o);
     lv_anim_set_var(&o, s_g_finger);
-    lv_anim_set_exec_cb(&o, g_finger_opa_cb);
+    lv_anim_set_exec_cb(&o, opa_anim_cb);
     lv_anim_set_values(&o, 200, 40);
     lv_anim_set_duration(&o, period);
     lv_anim_set_reverse_duration(&o, period);

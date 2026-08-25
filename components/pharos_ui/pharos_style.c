@@ -118,7 +118,7 @@ int16_t ps_chip_w(unsigned n)
     /* Chips sit on one line at PS_Y_CHIPS, so the room they have is the chord
      * there - not the screen width. Forgetting that is how a fourth chip ends
      * up half off the glass on a circle that looked fine as a rectangle. */
-    const int16_t half = pr_chord_halfwidth(PR_SAFE_R, PS_Y_CHIPS + PS_CARD_GAP);
+    const int16_t half = pr_chord_halfwidth(PS_INNER_R, PS_Y_CHIPS + PS_CARD_GAP);
     const int16_t avail = (int16_t)(half * 2 - 8);
     const int16_t gaps = (int16_t)(PS_CARD_GAP * (int)(n - 1u));
     const int16_t w = (int16_t)((avail - gaps) / (int)n);

@@ -213,6 +213,19 @@ uint32_t ps_alert_colour(uint8_t alert);
 #define PS_RING_R    206 /* the score arc's radius                  */
 #define PS_RING_W    14  /* ...and its weight                       */
 
+/* THE WORKING RADIUS ON A PAGE THAT HAS A GAUGE.
+ *
+ * PR_SAFE_R is where the GLASS stops. On the live and home faces the score
+ * arc stops sooner, and content fitted against the glass runs underneath it:
+ * the four evidence chips were laid out to +/-190 while the arc crosses their
+ * row at +/-178, so the outer two sat on top of the gauge.
+ *
+ * Nothing on a gauge page may use PR_SAFE_R for a horizontal budget. It uses
+ * this instead - the inner edge of the track, less a margin - and the two
+ * numbers stay in step because this one is derived from the other two rather
+ * than typed in again. */
+#define PS_INNER_R   (PS_RING_R - PS_RING_W / 2 - 8)
+
 /* A card is the list row, and it is 58 px tall because a fingertip contact
  * patch is about 9 mm and this panel is 266 ppi. 36 px rows were legible and
  * untappable, which is exactly how "I can't click them correctly" happens.
@@ -229,7 +242,8 @@ uint32_t ps_alert_colour(uint8_t alert);
 /* Is this rect a legal touch target? */
 bool ps_touchable(int16_t w, int16_t h);
 
-/* Widest a chip may be when n of them share the width available at PS_Y_CHIPS.
+/* Widest a chip may be when n of them share the width available at PS_Y_CHIPS,
+ * measured against PS_INNER_R because the gauge is in the way.
  * Returns 0 when n chips cannot be drawn at a legible size, which means draw
  * fewer - the caller shows the strongest and drops the rest, the way an
  * instrument does not number every tick. */

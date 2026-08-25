@@ -957,12 +957,12 @@ static void screen_console(void)
 /* Truncate exactly as pharos_hud.c's set_text_fit() does, so the PNG shows
  * what the glass shows - including the cut. A preview that quietly fitted
  * text the device would clip would be worse than no preview. */
-static const char *fit(ps_type_t t, int16_t dy, const char *s)
+static const char *fit_r(ps_type_t t, int16_t dy, int16_t rr, const char *s)
 {
     static char buf[4][128];
     static unsigned slot;
     char *b = buf[slot++ & 3u];
-    const unsigned cap = ps_capacity(t, dy, PR_SAFE_R);
+    const unsigned cap = ps_capacity(t, dy, rr);
     const unsigned len = (unsigned)strlen(s);
     if (cap == 0u) { b[0] = '\0'; return b; }
     if (len <= cap) { snprintf(b, 128, "%s", s); return b; }
@@ -975,6 +975,11 @@ static const char *fit(ps_type_t t, int16_t dy, const char *s)
     b[cut] = '.';
     b[cut + 1u] = '\0';
     return b;
+}
+
+static const char *fit(ps_type_t t, int16_t dy, const char *s)
+{
+    return fit_r(t, dy, PR_SAFE_R, s);
 }
 
 /* A verdict colour at tint strength, as a hex string the display list can
@@ -1009,9 +1014,9 @@ static void lumen_base(void)
 static void lumen_aura(uint32_t rgb)
 {
     /* Five layers, not three: three showed as three visible rings. */
-    const int r[5]   = { PS_AURA_R, 128, 108, 88, 68 };
-    const uint8_t m[5] = { 9, 13, 18, 24, 31 };
-    for (unsigned i = 0; i < 5; i++) {
+    const int r[7]   = { PS_AURA_R, 134, 118, 102, 86, 70, 54 };
+    const uint8_t m[7] = { 7, 9, 12, 15, 19, 24, 30 };
+    for (unsigned i = 0; i < 7; i++) {
         disc(PR_CX, PR_CY, r[i], tint_hex(rgb, m[i]));
     }
 }
@@ -1020,7 +1025,9 @@ static void lumen_ring(int score, int ceiling, uint32_t rgb)
 {
     const float A0 = 225.0f, SWEEP = 270.0f;
     const int R = PS_RING_R;
-    arc(PR_CX, PR_CY, R, 6, A0, SWEEP, "#0A1C26");
+    /* Same weight as the score: a 6 px dark groove under a 14 px bright arc
+     * made a low reading look like a stray mark. */
+    arc(PR_CX, PR_CY, R, PS_RING_W, A0, SWEEP, "#12303E");
     if (score > 0) {
         arc(PR_CX, PR_CY, R, PS_RING_W, A0, SWEEP * (float)score / 100.0f,
             rgb_hex(rgb));
@@ -1043,7 +1050,10 @@ static void lumen_ribbon(const uint8_t *hist, uint32_t rgb)
         const int h = 6 + ((int)hist[i] * 40) / 255;
         const int x = PR_CX + dx - 3;
         const int y = PR_CY + PS_Y_RIBBON - h / 2;
-        roundrect(x, y, 7, h, 3, hist[i] ? rgb_hex(rgb) : "#18384A");
+        /* Older is dimmer, so the ribbon reads as time flowing toward now. */
+        const uint8_t age = (uint8_t)(38u + (62u * i) / (PHAROS_DISP_HISTORY - 1u));
+        roundrect(x, y, 7, h, 3,
+                  hist[i] ? tint_hex(rgb, age) : "#16303E");
     }
 }
 
@@ -1057,6 +1067,8 @@ static void lumen_chips(const char *const *lab, unsigned n, uint8_t lit,
         if (!lab[i]) continue;
         const int dx = -total / 2 + (int)i * (cw + PS_CARD_GAP);
         const bool on = (lit & (1u << i)) != 0u;
+        if (on) roundrect(PR_CX + dx - 1, PR_CY + PS_Y_CHIPS - 16, cw + 2, 32, 16,
+                          tint_hex(rgb, 70));
         roundrect(PR_CX + dx, PR_CY + PS_Y_CHIPS - 15, cw, 30, 15,
                   on ? tint_hex(rgb, 40) : "#0E2028");
         text(PR_CX + dx + cw / 2, PR_CY + PS_Y_CHIPS + 5, 16, 'c',
@@ -1104,7 +1116,7 @@ static void screen_lumen_home(void)
 
     text(PR_CX, PR_CY + PS_Y_CLOCK, 16, 'c', C_DIMMER, "20:47");
     glowtext(PR_CX, PR_CY + PS_Y_HERO, 36, 'c', rgb_hex(worst),
-             fit(PS_TYPE_HERO, PS_Y_HERO, "WORTH A LOOK"));
+             fit_r(PS_TYPE_HERO, PS_Y_HERO, PS_INNER_R, "WORTH A LOOK"));
     text(PR_CX, PR_CY + PS_Y_METRIC, 20, 'c', C_DIM, "11 watches armed");
     text(PR_CX, PR_CY + PS_Y_DETAIL + 16, 16, 'c', C_CYAN, "MIRAGE");
     lumen_tell();
@@ -1135,26 +1147,26 @@ static void screen_lumen_live(const char *name, const char *lens,
              "SIMULATION - NOT THIS ROOM");
     }
     text(PR_CX, PR_CY + PS_Y_CONTEXT, 16, 'c', C_DIMMER,
-         fit(PS_TYPE_LABEL, PS_Y_CONTEXT, lens));
+         fit_r(PS_TYPE_LABEL, PS_Y_CONTEXT, PS_INNER_R, lens));
 
     /* The word leads; the number supports it and is set smaller. The face
      * this replaces had that backwards, at 48 px of score over 26 px of
      * meaning, which is why it read as a number generator. */
     glowtext(PR_CX, PR_CY + PS_Y_HERO, 36, 'c', rgb_hex(rgb),
-             fit(PS_TYPE_HERO, PS_Y_HERO, word));
+             fit_r(PS_TYPE_HERO, PS_Y_HERO, PS_INNER_R, word));
 
     char num[24];
     if (ceiling > 0 && ceiling < 100) snprintf(num, sizeof num, "%d / %d", score, ceiling);
     else                              snprintf(num, sizeof num, "%d", score);
     text(PR_CX, PR_CY + PS_Y_METRIC, 28, 'c', C_DIM, num);
     text(PR_CX, PR_CY + PS_Y_DETAIL, 16, 'c', C_DIM,
-         fit(PS_TYPE_LABEL, PS_Y_DETAIL, detail));
+         fit_r(PS_TYPE_LABEL, PS_Y_DETAIL, PS_INNER_R, detail));
 
     lumen_chips(fam, PHAROS_DISP_FAMILIES, lit, rgb);
 
     if (why && *why)
         text(PR_CX, PR_CY + PS_Y_WHY, 16, 'c', C_DIM,
-             fit(PS_TYPE_LABEL, PS_Y_WHY, why));
+             fit_r(PS_TYPE_LABEL, PS_Y_WHY, PS_INNER_R, why));
     {
         /* Split on a word across two bands, as the firmware does. */
         const unsigned cap = ps_capacity(PS_TYPE_LABEL, PS_Y_ACTION, PR_SAFE_R);
@@ -1186,13 +1198,16 @@ static void screen_lumen_browse(void)
     screen("browse");
     lumen_base();
 
-    roundrect(PR_CX - 66, PR_CY - 174, 132, 32, 16, tint_hex(0x21B6C6, 34));
-    text(PR_CX, PR_CY - 152, 16, 'c', C_CYAN, "OBSERVE");
+    /* the tool's own rim */
+    arc(PR_CX, PR_CY, PS_RING_R + 6, 3, 225.0f, 270.0f, C_CYAN);
 
-    text(PR_CX, PR_CY - 88, 28, 'c', C_TEXT, "Karma");
-    text(PR_CX, PR_CY - 18, 20, 'c', C_DIM, "is a rogue AP answering");
-    text(PR_CX, PR_CY + 14, 20, 'c', C_DIM, "for networks it has not got");
-    text(PR_CX, PR_CY + 66, 14, 'c', C_DIMMER, "5 of 21");
+    roundrect(PR_CX - 66, PR_CY - 166, 132, 32, 16, tint_hex(0x21B6C6, 34));
+    text(PR_CX, PR_CY - 144, 16, 'c', C_CYAN, "OBSERVE");
+
+    text(PR_CX, PR_CY - 80, 28, 'c', C_TEXT, "Karma");
+    text(PR_CX, PR_CY - 14, 20, 'c', C_DIM, "is a rogue AP answering");
+    text(PR_CX, PR_CY + 18, 20, 'c', C_DIM, "for networks it has not got");
+    text(PR_CX, PR_CY + 68, 14, 'c', C_DIMMER, "5 of 21");
 
     roundrect(PR_CX - 95, PR_CY + 102, 190, 56, 28, C_CYAN);
     text(PR_CX, PR_CY + 136, 20, 'c', "#00181C", "START");
@@ -1251,8 +1266,9 @@ static void screen_lumen_splash(void)
 {
     screen("splash");
     lumen_base();
+    arc(PR_CX, PR_CY, PS_RING_R, 4, 0.0f, 300.0f, C_GREEN);
     glowtext(PR_CX, PR_CY - 20, 48, 'c', C_TEXT, "PHAROS");
-    text(PR_CX, PR_CY + 30, 20, 'c', C_DIM, "v3.1.1");
+    text(PR_CX, PR_CY + 30, 20, 'c', C_DIM, "v3.2.0");
     text(PR_CX, PR_CY + 84, 16, 'c', C_GREEN, "RECEIVE ONLY - FENCE CLEAN");
 }
 
@@ -1344,7 +1360,7 @@ static void lumen_screens(void)
 
     screen_lumen_live("watch_camped", "DEAUTH WATCH", "FLOOD LIKELY", 88, 96,
                       "camped ch6   107/s   840 obs",
-                      "sequence counter went backwards",
+                      "counter went backwards",
                       "Broad, spoofed deauth. Preserve the log.",
                       fam4, 0x0Fu, burst, false, 0);
 
@@ -1359,7 +1375,7 @@ static void lumen_screens(void)
      * own ceiling to 88 and is allowed to alarm while hopping. */
     screen_lumen_live("watch_proven", "DEAUTH WATCH", "FLOOD LIKELY", 88, 88,
                       "hopping 1-13   MFP required",
-                      "unprotected deauth on a protected net",
+                      "unprotected on MFP net",
                       "Forged. This cannot be the real AP.",
                       fam4, 0x0Du, burst, false, 0);
 

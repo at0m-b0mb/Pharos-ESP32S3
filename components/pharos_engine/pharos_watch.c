@@ -940,16 +940,24 @@ const char *pw_band_hint(pw_band_t band)
     }
 }
 
+/* THESE LAND ON THE GLASS, AND THE GLASS IS 26 CHARACTERS WIDE.
+ *
+ * pw_forgery_name() is what the live face shows as its "why" line - the one
+ * specific finding worth a line of screen. The band at PS_Y_WHY holds about
+ * 26 characters inside the gauge, and these were 28 to 31, so the most
+ * valuable string on the page was being cut at exactly the word that carried
+ * the meaning: "sequence counter went backwards" became "sequence counter
+ * went." test_style.c asserts the whole table. */
 const char *pw_forgery_name(uint8_t forgery_mask)
 {
     /* Strongest first: the operator should be told the best reason, not the
      * first one that happened to be tested. */
-    if (forgery_mask & PW_FORGE_MFP_PROOF)  return "unprotected on an 802.11w net";
-    if (forgery_mask & PW_FORGE_SEQ_ORDER)  return "sequence counter went backwards";
-    if (forgery_mask & PW_FORGE_SEQ_FROZEN) return "sequence counter never moves";
-    if (forgery_mask & PW_FORGE_RSSI_SPLIT) return "wrong signal level for this AP";
-    if (forgery_mask & PW_FORGE_MFP_HINT)   return "unprotected, 802.11w offered";
-    if (forgery_mask & PW_FORGE_GHOST)      return "source has never beaconed";
+    if (forgery_mask & PW_FORGE_MFP_PROOF)  return "unprotected on MFP net";
+    if (forgery_mask & PW_FORGE_SEQ_ORDER)  return "counter went backwards";
+    if (forgery_mask & PW_FORGE_SEQ_FROZEN) return "counter never moves";
+    if (forgery_mask & PW_FORGE_RSSI_SPLIT) return "signal level is wrong";
+    if (forgery_mask & PW_FORGE_MFP_HINT)   return "unprotected, MFP offered";
+    if (forgery_mask & PW_FORGE_GHOST)      return "source never beaconed";
     return (const char *)0;
 }
 

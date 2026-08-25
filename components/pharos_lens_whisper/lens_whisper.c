@@ -209,9 +209,9 @@ static bool k_whisper_display(struct pharos_lens_display *o)
     }
     snprintf(o->advice, sizeof(o->advice), "%s", pac_band_hint(v.band));
     if (v.notes & PAC_NOTE_EDGE_OF_HEARING) {
-        snprintf(o->why, sizeof(o->why), "at the edge of what this mic hears");
+        snprintf(o->why, sizeof(o->why), "at the edge of mic range");
     } else if (v.notes & PAC_NOTE_LOUD_ROOM) {
-        snprintf(o->why, sizeof(o->why), "loud room - harmonics possible");
+        snprintf(o->why, sizeof(o->why), "loud room: harmonics");
     }
     o->families = v.families;
     o->fam_label[0] = "LEVEL";

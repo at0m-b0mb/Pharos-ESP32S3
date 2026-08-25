@@ -1,5 +1,62 @@
 # Changelog
 
+## v3.2.0 — 2026-08-25
+
+### The gauge has a channel now
+
+A score of 12 used to draw a lone green stub at the bottom-left of the face,
+floating in black, and it read as a rendering fault rather than as a small
+number. The track behind it was 6 px of near-black under a 14 px bright arc —
+so there was nothing for the reading to be a *fraction of*.
+
+The track is the same weight as the score now, and lifted out of the shadows.
+`QUIET 12 / 96` finally looks like twelve out of ninety-six.
+
+### Nothing sits on top of the gauge any more
+
+`PR_SAFE_R` is where the *glass* stops. On a face with a score arc, the arc
+stops sooner — and everything was being fitted against the glass. The four
+evidence chips were laid out to ±190 px while the arc crosses their row at
+±178, so the outer two were drawn on top of it.
+
+There is a second working radius now, **`PS_INNER_R`**, derived from the ring's
+own geometry rather than typed in again, and every horizontal budget on a gauge
+page measures against it.
+
+### The words that mattered were the ones getting cut
+
+Fitting to the gauge made the `why` line narrower, which exposed something
+worse: its vocabulary never fitted in the first place. `pw_forgery_name()` was
+returning 25–31 characters into a 24-character band, and the cut landed on
+exactly the word carrying the meaning —
+
+> `sequence counter went backwards` → **`sequence counter went.`**
+
+Truncation is the right *behaviour* for an unbounded string and the wrong
+*outcome* for a fixed vocabulary somebody chose. So the vocabulary was
+shortened — `counter went backwards`, `signal level is wrong`,
+`unprotected on MFP net`, `source never beaconed` — and a host test now walks
+the whole table.
+
+### Polish
+
+- **A smoother aura.** Seven layers instead of five; five still stepped
+  visibly across a 300 px disc.
+- **The ribbon flows.** Older seconds are dimmer, so the sixteen-second
+  timeline has a direction and the bright end is *now*.
+- **Lit chips get a hairline edge** as well as a fill — fill alone is
+  ambiguous against a coloured aura.
+- **The boot screen earns its second and a half:** the ring sweeps closed once,
+  green for a clean fence, red if it could not be proven.
+- **Each tool gets its own rim** on the browse card, so twenty-one tools have
+  an identity you register before reading the name.
+- **The receive-only pip breathes.** *"Is it frozen?"* was a real question
+  asked of the old face, because a quiet room and a crashed device look
+  identical. Ten pixels, four seconds, and it never touches the reading.
+
+7883 checks. Fence, lens, display and sources audits pass. `missed=1` across
+500 paints on hardware — a single miss during the splash sweep, not a cost.
+
 ## v3.1.1 — 2026-08-25
 
 ### A row's value could still become two lines
