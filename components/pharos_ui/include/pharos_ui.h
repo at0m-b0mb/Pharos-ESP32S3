@@ -100,6 +100,11 @@ void pharos_ui_request_nav(pharos_nav_t what);
 bool pharos_ui_aegis_snapshot(pa_verdict_t *out);
 void pharos_ui_aegis_ack(void);
 
+/* Replay the first-run guide. Shown automatically once, on a first boot with
+ * a clean fence; this is how somebody handing the device to a colleague gets
+ * it back, and how the `guide` console command works. */
+void pharos_ui_guide_start(void);
+
 /* Never returns. fence_ok gates the radio lenses: when the transmit fence did
  * not verify clean, the UI still runs but refuses to launch anything holding a
  * radio capability, and says why. */

@@ -74,6 +74,46 @@ same ten-second average and are not the same event. The four **named chips** say
 what the evidence actually was: `RATE`, `SHAPE`, `FORGE`, `AFTER`. "Why does it
 think so" is answerable from the glass, not from the manual.
 
+### It teaches itself
+
+A device with twenty-one tools, four verdict colours and a touch surface with
+no visible buttons cannot be learned by poking at it. The console banner
+explained the controls, which is no help at all to somebody holding the device
+and looking at the *glass*.
+
+So on first boot the glass explains itself — nine steps, once, remembered in
+NVS, replayable forever with `guide` on the console.
+
+<p align="center">
+  <img src="assets/screens/guide_sides.png" width="31%" alt="Guide: change tool">
+  <img src="assets/screens/guide_verdict.png" width="31%" alt="Guide: the colour key">
+  <img src="assets/screens/guide_ring.png" width="31%" alt="Guide: the home ring">
+</p>
+
+Each step **shows the gesture rather than describing it** — the outline of a
+zone appears and a fingertip pulses inside it, travelling between the two side
+zones for the one that has two. You copy what you just watched instead of
+skimming a sentence about it. The order is controls first (you cannot explore
+without them), then the colour key (it is the key to every other screen), then
+the two pieces of vocabulary that are genuinely unusual: the ring of dots and
+the evidence chips.
+
+Anyone who already knows the device leaves in one press.
+
+### Touch, in full
+
+|  | Ordinary pages | Detail page |
+|---|---|---|
+| **left edge** | previous tool | page up |
+| **right edge** | next tool | page down |
+| **centre** | start the tool | open the focused row |
+| **bottom strip** | show the evidence | — |
+| **anywhere, held** | stop and step back | stop and step back |
+
+On **Home**, tapping a watch dot jumps straight to that watch and tapping the
+middle opens the Survey. The physical BOOT button mirrors the essentials:
+short press steps, hold stops.
+
 ### The reading order
 
 Every screen in Pharos is built from one design system, **LUMEN**

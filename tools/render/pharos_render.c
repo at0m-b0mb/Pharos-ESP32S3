@@ -1218,8 +1218,12 @@ static void screen_lumen_detail_named(const char *name, const char *title,
     text(PR_CX - 72, PR_CY - 164, 14, 'c', C_DIMMER, hl);
     text(PR_CX + 72, PR_CY - 164, 14, 'c', C_DIMMER, hr);
 
-    const char *L[4] = { "GuestNet", "OfficeWiFi", "Acme-Staff", "Acme-Secure" };
-    const char *R[4] = { "F", "D", "C", "A+" };
+    /* The third of these is the string that broke on hardware: parented to
+     * the page and centre-aligned, its left half ran off the glass and the
+     * row read "p models / advs". It is kept here as the regression. */
+    const char *L[4] = { "GuestNet", "OfficeWiFi",
+                         "Top models / advs", "Acme-Secure" };
+    const char *R[4] = { "F", "D", "0/0", "A+" };
     const char *T[4] = { C_RED, C_ORANGE, C_AMBER, C_GREEN };
 
     const int stack = 4 * PS_CARD_H + 3 * PS_CARD_GAP;
@@ -1247,6 +1251,75 @@ static void screen_lumen_splash(void)
     text(PR_CX, PR_CY + 84, 16, 'c', C_GREEN, "RECEIVE ONLY - FENCE CLEAN");
 }
 
+/* ---- LUMEN: the first-run guide ---------------------------------------
+ *
+ * Drawn from the same tokens as the firmware's guide page. The animations are
+ * static here, obviously - a still shows the outline and the fingertip at one
+ * moment of the pulse, which is enough to check the geometry fits. */
+static void guide_frame(const char *name, unsigned step, unsigned total,
+                        const char *title, const char *l1, const char *l2,
+                        const char *hint)
+{
+    screen(name);
+    lumen_base();
+
+    const int pitch = 18;
+    for (unsigned i = 0; i < total; i++) {
+        const int dx = -(int)(total - 1u) * pitch / 2 + (int)i * pitch;
+        const bool here = (i == step);
+        dot(PR_CX + dx, PR_CY + PS_Y_GUIDE_PIPS, here ? 6 : 4,
+            here ? C_CYAN : "#18384A");
+    }
+    text(PR_CX, PR_CY + PS_Y_GUIDE_TITLE + 10, 28, 'c', C_TEXT, title);
+    text(PR_CX, PR_CY + PS_Y_GUIDE_L1 + 7, 20, 'c', C_DIM, l1);
+    text(PR_CX, PR_CY + PS_Y_GUIDE_L2 + 7, 20, 'c', C_DIM, l2);
+    text(PR_CX, PR_CY + PS_Y_GUIDE_HINT + 5, 16, 'c', C_CYAN, hint);
+    lumen_tell();
+}
+
+static void screen_guide_sides(void)
+{
+    guide_frame("guide_sides", 1, 9, "Change tool",
+                "Tap the left or right edge",
+                "to move through the tools.",
+                "try it, this page waits");
+    /* the zone, and the fingertip travelling between the two of them */
+    roundrect(PR_CX - 195, PR_CY - 100, 110, 200, 24, "#0E2630");
+    dot(PR_CX - 140, PR_CY, 27, "#2F7C8C");
+    dot(PR_CX + 140, PR_CY, 20, "#173D48");
+}
+
+static void screen_guide_verdict(void)
+{
+    guide_frame("guide_verdict", 5, 9, "The colour key",
+                "Every screen uses these four.",
+                "You may stop at the colour.",
+                "right side to go on");
+    static const char *col[4] = { C_GREEN, C_AMBER, C_ORANGE, C_RED };
+    static const char *mean[4] = { "nothing to do", "worth knowing",
+                                   "one real finding", "act on this" };
+    for (unsigned i = 0; i < 4; i++) {
+        const int dy = -58 + (int)i * 46;
+        roundrect(PR_CX - 134, PR_CY + dy - 17, 44, 34, 10, col[i]);
+        text(PR_CX - 78, PR_CY + dy + 6, 16, 'l', C_TEXT, mean[i]);
+    }
+}
+
+static void screen_guide_ring(void)
+{
+    guide_frame("guide_ring", 6, 9, "The home ring",
+                "One dot for each watch.",
+                "Count the ones not green.",
+                "right side to go on");
+    static const uint8_t st[8] = { 0, 0, 0, 1, 0, 0, 3, 0 };
+    for (unsigned i = 0; i < 8; i++) {
+        const float a = 225.0f + 270.0f * (float)i / 7.0f;
+        pr_point_t p = pr_polar(96, a);
+        const char *c = st[i] == 0 ? C_GREEN : st[i] == 1 ? C_AMBER : C_RED;
+        dot(p.x, p.y, st[i] ? 11 : 8, c);
+    }
+}
+
 /* The live screens, driven from the REAL engines where one exists. */
 static void lumen_screens(void)
 {
@@ -1257,6 +1330,9 @@ static void lumen_screens(void)
     static const char *fam4[4] = { "RATE", "SHAPE", "FORGE", "AFTER" };
 
     screen_lumen_splash();
+    screen_guide_sides();
+    screen_guide_verdict();
+    screen_guide_ring();
     screen_lumen_home();
     screen_lumen_browse();
     screen_lumen_detail();

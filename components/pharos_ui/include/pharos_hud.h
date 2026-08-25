@@ -218,6 +218,51 @@ void pharos_hud_detail(const char *lens, const char *head_left,
                        const struct pharos_lens_row *rows, unsigned n,
                        unsigned page, unsigned pages, int focus, bool openable);
 
+
+/* ---- the first-run guide ---------------------------------------------
+ *
+ * A device with twenty-one tools, four verdict colours and a touch surface
+ * with no visible buttons cannot be learned by poking at it. The console
+ * banner explained the controls, but the console is exactly where a new user
+ * is NOT looking - they are looking at the glass.
+ *
+ * So the glass explains itself, once, on first boot: what this thing is, where
+ * to press, what the colours mean, and how to read a verdict. It is the tour a
+ * new phone gives you, and for the same reason.
+ *
+ * It is shown once (a flag in NVS) and can be replayed forever from the
+ * console with `guide`, or from Settings. Nothing about it is modal beyond
+ * that first run - somebody who knows the device skips it in one press.
+ *
+ * Each step names an ANIMATION rather than describing one, because the whole
+ * point is to show the gesture rather than write a sentence about it: the
+ * outline of the zone appears and a fingertip pulses inside it. You copy what
+ * you just watched. */
+typedef enum {
+    PHAROS_GUIDE_ANIM_NONE = 0,
+    PHAROS_GUIDE_ANIM_SIDES,   /* the two side zones, alternating   */
+    PHAROS_GUIDE_ANIM_CENTRE,  /* the centre disc                   */
+    PHAROS_GUIDE_ANIM_BOTTOM,  /* the bottom strip                  */
+    PHAROS_GUIDE_ANIM_HOLD,    /* a press that expands: long-press  */
+    PHAROS_GUIDE_ANIM_VERDICT, /* the four colours, named           */
+    PHAROS_GUIDE_ANIM_RING,    /* the home ring of watch dots       */
+    PHAROS_GUIDE_ANIM_CHIPS,   /* the evidence chips lighting       */
+} pharos_guide_anim_t;
+
+struct pharos_hud_guide {
+    unsigned step;    /* 0-based                                    */
+    unsigned total;
+    const char *title;
+    const char *line1; /* kept as two short lines rather than one    */
+    const char *line2; /* wrapping block - see lesson 3 in the .c    */
+    const char *hint;  /* what to do to move on                      */
+    pharos_guide_anim_t anim;
+};
+
+/* Draw one step. Safe to call every repaint: the animations are owned by LVGL
+ * and are only restarted when the step actually changes. */
+void pharos_hud_guide(const struct pharos_hud_guide *g);
+
 /* The boot splash and the `screen test` command. */
 void pharos_hud_splash(const char *version, bool fence_clean);
 void pharos_hud_toast(const char *msg);

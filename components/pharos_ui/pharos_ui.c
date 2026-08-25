@@ -151,7 +151,7 @@ void pharos_ui_aegis_ack(void)
  * So the callback records an intent and returns. The UI task, which owns the
  * lens lifecycle already, performs it on the next tick. */
 typedef enum { VIEW_HOME = 0, VIEW_BROWSE, VIEW_LIVE, VIEW_DETAIL,
-               VIEW_OPENED } view_t;
+               VIEW_OPENED, VIEW_GUIDE } view_t;
 
 static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
 static unsigned s_order_n;
@@ -805,6 +805,156 @@ static void row_apply(void)
     }
 }
 
+/* ---- the first-run guide ---------------------------------------------
+ *
+ * Twenty-one tools, four verdict colours, and a touch surface with no visible
+ * buttons. The console banner explained the controls, which is no help at all:
+ * a person meeting this device is looking at the GLASS, not at a serial
+ * terminal on a laptop they may not even have connected.
+ *
+ * So the glass explains itself, once. Each step shows the gesture rather than
+ * describing it - the outline of a zone appears and a fingertip pulses inside
+ * it - because somebody copies what they just watched and skims what they had
+ * to read.
+ *
+ * Order matters. Controls first (you cannot explore without them), then the
+ * colour key (it is the key to every other screen), then the two pieces of
+ * vocabulary that are actually unusual: the ring of dots and the evidence
+ * chips. Nine steps, which is about as long as anybody will sit through.
+ */
+static const struct pharos_hud_guide k_guide[] = {
+    /* Every string here is sized against the chord at the band it is drawn
+     * in - see PS_Y_GUIDE_* in pharos_style.h. The bottom of a circle is
+     * narrow: the hint band holds about 27 characters and the second body
+     * line about 27, so these are not arbitrary phrasings. tools/render
+     * bounds-checks them, and caught ten escapes on the first draft. */
+    { 0, 9, "Pharos",
+      "It listens to the air",
+      "and never transmits.",
+      "tap the right side", PHAROS_GUIDE_ANIM_NONE },
+
+    { 1, 9, "Change tool",
+      "Tap the left or right edge",
+      "to move through the tools.",
+      "try it, this page waits", PHAROS_GUIDE_ANIM_SIDES },
+
+    { 2, 9, "Start it",
+      "Tap the middle to run",
+      "the tool you are on.",
+      "right side to go on", PHAROS_GUIDE_ANIM_CENTRE },
+
+    { 3, 9, "See the evidence",
+      "Tap the bottom strip for",
+      "the numbers behind it.",
+      "right side to go on", PHAROS_GUIDE_ANIM_BOTTOM },
+
+    { 4, 9, "Go back",
+      "Press and hold to stop",
+      "and step back out.",
+      "right side to go on", PHAROS_GUIDE_ANIM_HOLD },
+
+    { 5, 9, "The colour key",
+      "Every screen uses these four.",
+      "You may stop at the colour.",
+      "right side to go on", PHAROS_GUIDE_ANIM_VERDICT },
+
+    { 6, 9, "The home ring",
+      "One dot for each watch.",
+      "Count the ones not green.",
+      "right side to go on", PHAROS_GUIDE_ANIM_RING },
+
+    { 7, 9, "Why it thinks so",
+      "Lit chips name the evidence",
+      "a verdict was built from.",
+      "right side to go on", PHAROS_GUIDE_ANIM_CHIPS },
+
+    { 8, 9, "Ready",
+      "Nothing here transmits.",
+      "Tap the middle to begin.",
+      "tap the middle", PHAROS_GUIDE_ANIM_NONE },
+};
+#define GUIDE_STEPS ((unsigned)(sizeof(k_guide) / sizeof(k_guide[0])))
+
+static unsigned s_guide_step;
+
+static void paint_guide(void)
+{
+    if (!pharos_bsp_display_lock(30)) {
+        s_paint_misses++;
+        return;
+    }
+    s_paints++;
+    pharos_hud_create();
+    theme_sync();
+    pharos_hud_guide(&k_guide[s_guide_step < GUIDE_STEPS ? s_guide_step : 0]);
+    pharos_bsp_display_unlock();
+}
+
+/* Remembered so it appears once and never nags. Replayable forever with the
+ * `guide` command, which is also what somebody handing the device to a
+ * colleague wants. */
+static bool guide_seen(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    uint8_t v = 0;
+    const bool ok = (nvs_get_u8(h, "guide_seen", &v) == ESP_OK) && v;
+    nvs_close(h);
+    return ok;
+}
+
+static void guide_mark_seen(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_u8(h, "guide_seen", 1);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+void pharos_ui_guide_start(void)
+{
+    s_guide_step = 0;
+    s_view = VIEW_GUIDE;
+}
+
+/* Left/right walk it, the centre finishes it. Returns true when the guide
+ * consumed the press, which keeps every other view's handling untouched. */
+static bool guide_nav(pharos_nav_t what)
+{
+    if (s_view != VIEW_GUIDE) {
+        return false;
+    }
+    switch (what) {
+    case PHAROS_NAV_NEXT:
+        if (s_guide_step + 1u < GUIDE_STEPS) {
+            s_guide_step++;
+        } else {
+            guide_mark_seen();
+            s_view = VIEW_HOME;
+        }
+        return true;
+    case PHAROS_NAV_PREV:
+        if (s_guide_step) {
+            s_guide_step--;
+        }
+        return true;
+    case PHAROS_NAV_SELECT:
+    case PHAROS_NAV_HOME:
+    case PHAROS_NAV_DETAIL:
+    default:
+        /* Anything else leaves. Somebody who already knows the device should
+         * not have to walk nine screens to get out of the tutorial. */
+        guide_mark_seen();
+        s_view = VIEW_HOME;
+        return true;
+    }
+}
+
 static void nav_apply(void)
 {
     const int want = s_nav_pending;
@@ -812,6 +962,9 @@ static void nav_apply(void)
         return;
     }
     s_nav_pending = -1;
+    if (guide_nav((pharos_nav_t)want)) {
+        return;
+    }
     if (!s_order_n) {
         return;
     }
@@ -1681,6 +1834,10 @@ static void tower_rotate(void)
 
 static void paint(const pharos_lens_t *active)
 {
+    if (s_view == VIEW_GUIDE) {
+        paint_guide();
+        return;
+    }
     if (s_view == VIEW_HOME) {
         paint_home();
         return;
@@ -1857,7 +2014,19 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         pharos_bsp_display_unlock();
     }
     vTaskDelay(pdMS_TO_TICKS(1500)); /* let the identity be read */
-    paint_home();
+
+    /* FIRST BOOT: teach the device before handing it over.
+     *
+     * Only once, and only when the fence is clean - a device that could not
+     * prove it is receive-only has something more urgent to say than a
+     * tutorial. Replay it any time with the `guide` command. */
+    if (s_fence_ok && !guide_seen()) {
+        ESP_LOGI(TAG, "first boot: showing the guide");
+        pharos_ui_guide_start();
+        paint_guide();
+    } else {
+        paint_home();
+    }
 
     uint64_t last_us = (uint64_t)esp_timer_get_time();
     uint32_t heartbeat = 0;

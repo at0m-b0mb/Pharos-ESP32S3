@@ -653,6 +653,15 @@ static int cli_rows(int argc, char **argv)
     return 0;
 }
 
+static int cli_guide(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    pharos_ui_guide_start();
+    printf("guide: replaying from step 1\n");
+    printf("  left/right walk it, the centre leaves at any point\n");
+    return 0;
+}
+
 static int cli_nav(int argc, char **argv)
 {
     if (argc < 2) {
@@ -821,6 +830,14 @@ void pharos_console_start(void)
         .func = &cli_nav,
     };
     esp_console_cmd_register(&nav);
+
+    const esp_console_cmd_t guide = {
+        .command = "guide",
+        .help = "replay the first-run tour of the screen",
+        .hint = NULL,
+        .func = &cli_guide,
+    };
+    esp_console_cmd_register(&guide);
 
     const esp_console_cmd_t motion = {
         .command = "motion",

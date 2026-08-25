@@ -112,6 +112,14 @@ void test_style(void)
             { "metric",  PS_Y_METRIC,  PS_TYPE_METRIC, 3 },
             { "detail",  PS_Y_DETAIL,  PS_TYPE_BODY,  20 },
             { "action",  PS_Y_ACTION,  PS_TYPE_LABEL, 22 },
+            /* The guide's bands. The first draft of the tour put its body at
+             * +132/+162 and its hint at +198 - fine on a rectangle, hopeless
+             * on a circle, where the chord at +198 holds about thirteen
+             * characters. Ten primitives escaped the glass. */
+            { "guide title", PS_Y_GUIDE_TITLE, PS_TYPE_TITLE, 17 },
+            { "guide l1",    PS_Y_GUIDE_L1,    PS_TYPE_BODY,  29 },
+            { "guide l2",    PS_Y_GUIDE_L2,    PS_TYPE_BODY,  27 },
+            { "guide hint",  PS_Y_GUIDE_HINT,  PS_TYPE_LABEL, 23 },
         };
         for (unsigned i = 0; i < sizeof(b) / sizeof(b[0]); i++) {
             const unsigned cap = ps_capacity(b[i].t, b[i].dy, PR_SAFE_R);
@@ -168,6 +176,45 @@ void test_style(void)
 
         /* Enough chips and it must give up rather than draw slivers. */
         CHECK_EQ(ps_chip_w(12), 0);
+    }
+
+    banner("style: a detail row's two columns fit its card");
+    {
+        /* The bug this guards: the row labels were children of the PAGE,
+         * aligned by their bounding-box CENTRE at the card's left edge, so an
+         * auto-sized label grew symmetrically and half of a long string ran
+         * off the glass. Every sensor page lost the front of every row -
+         * "Top models / advs" rendered as "p models / advs" on hardware.
+         *
+         * They are children of the card now, with explicit widths. This
+         * asserts the budget those widths are drawn from actually holds the
+         * longest row the display contract can carry. */
+        const int16_t pad = 12, val_w = 104;
+        for (unsigned i = 0; i < PS_CARDS; i++) {
+            const int16_t stack =
+                (int16_t)(PS_CARDS * PS_CARD_H + (PS_CARDS - 1) * PS_CARD_GAP);
+            const int16_t dy = (int16_t)(-stack / 2 + (int)i * (PS_CARD_H + PS_CARD_GAP)
+                                         + PS_CARD_H / 2 + 8);
+            const int16_t far = (dy >= 0) ? (int16_t)(dy + PS_CARD_H / 2)
+                                          : (int16_t)(dy - PS_CARD_H / 2);
+            const int16_t w = (int16_t)((pr_chord_halfwidth(PR_SAFE_R, far) - 6) * 2);
+            const int16_t lab_w = (int16_t)(w - val_w - pad * 2 - 8);
+
+            CHECK(lab_w > 0, "row %u has no room for a label at all", i);
+            /* struct pharos_lens_row carries left[26]; 25 printable chars at
+             * PS_TYPE_LABEL must fit, or rows are silently ellipsised on
+             * every page rather than only on the long ones. */
+            CHECK(lab_w >= ps_text_w(PS_TYPE_LABEL, 20),
+                  "row %u fits only %d px of label, needs 20 chars (%d px)",
+                  i, (int)lab_w, (int)ps_text_w(PS_TYPE_LABEL, 20));
+            /* And the value column must hold the widest thing right[12] can
+             * be, or grades and counts get cut instead. */
+            CHECK(val_w >= ps_text_w(PS_TYPE_BODY, 8),
+                  "the value column cannot hold 8 characters");
+            /* The two columns plus padding may not exceed the card. */
+            CHECK(lab_w + val_w + pad * 2 + 8 <= w,
+                  "row %u columns overflow their card", i);
+        }
     }
 
     banner("style: nothing a finger must hit is smaller than a finger");

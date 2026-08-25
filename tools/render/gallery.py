@@ -15,6 +15,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # Curated hero set: what best shows the product, in reading order.
 SCREENS = [
+    ("guide_sides", "Guide \u2014 it teaches the gestures"),
+    ("guide_verdict", "Guide \u2014 the colour key"),
     ("home", "Home \u2014 is anything wrong?"),
     ("watch_camped", "Watch \u2014 FLOOD LIKELY (camped)"),
     ("watch_hopping", "Watch \u2014 SUSPICIOUS (hopping)"),
@@ -25,8 +27,6 @@ SCREENS = [
     ("mirage", "Mirage \u2014 beacon-flood detection"),
     ("locate", "Locate \u2014 walk to the transmitter"),
     ("footprint", "Footprint \u2014 OPSEC (a drill)"),
-    ("spectrum", "Spectrum \u2014 what the room is doing"),
-    ("splash", "Boot \u2014 receive-only, up front"),
 ]
 
 COLS = 3

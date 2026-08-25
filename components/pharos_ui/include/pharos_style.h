@@ -166,6 +166,19 @@ uint32_t ps_alert_colour(uint8_t alert);
 #define PS_Y_PAGE    (188)  /* the detail page counter                 */
 #define PS_Y_TELL    (214)  /* the permanent receive-only pip          */
 
+/* THE GUIDE'S OWN BANDS.
+ *
+ * The first draft put its body text at +132/+162 and its hint at +198, which
+ * are fine offsets on a rectangle and hopeless on a circle: the chord at +198
+ * is 210 px, about thirteen characters. Ten primitives escaped the glass.
+ * These are the bands where the text actually fits, with the animation living
+ * in the clear space between the title and the first line. */
+#define PS_Y_GUIDE_PIPS  (-196)
+#define PS_Y_GUIDE_TITLE (-152)
+#define PS_Y_GUIDE_L1    (112)
+#define PS_Y_GUIDE_L2    (142)
+#define PS_Y_GUIDE_HINT  (176)
+
 /* WHY ADVICE GETS TWO LINES.
  *
  * The display contract carries 96 characters of advice and the chord at

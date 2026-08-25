@@ -91,6 +91,7 @@ typedef enum {
     PAGE_BROWSE,
     PAGE_LIVE,
     PAGE_DETAIL,
+    PAGE_GUIDE,
     PAGE_BARS,
     PAGE_N,
 } hud_page_t;
@@ -132,6 +133,16 @@ static lv_obj_t *s_b_pos, *s_b_go, *s_b_go_txt;
 static lv_obj_t *s_d_title, *s_d_hl, *s_d_hr, *s_d_page, *s_d_empty;
 static lv_obj_t *s_d_card[PHAROS_HUD_ROWS];
 static lv_obj_t *s_d_left[PHAROS_HUD_ROWS], *s_d_right[PHAROS_HUD_ROWS];
+
+/* GUIDE */
+static lv_obj_t *s_g_ghost;                 /* outline of the zone taught  */
+static lv_obj_t *s_g_finger;                /* the pulsing fingertip       */
+static lv_obj_t *s_g_title, *s_g_l1, *s_g_l2, *s_g_hint;
+static lv_obj_t *s_g_pip[10];               /* progress                    */
+static lv_obj_t *s_g_swatch[4], *s_g_sw_txt[4];
+static lv_obj_t *s_g_dot[8];                /* the mini home ring          */
+static lv_obj_t *s_g_chip[4], *s_g_chip_txt[4];
+static int s_g_step = -1;                   /* what is on screen now       */
 
 /* SPLASH */
 static lv_obj_t *s_s_name, *s_s_ver, *s_s_fence;
@@ -657,16 +668,136 @@ bool pharos_hud_create(void)
                 (int16_t)(dy >= 0 ? dy + PS_CARD_H / 2 : dy - PS_CARD_H / 2));
             const int w = (half - 6) * 2;
             s_d_card[i]  = mk_surface(p, w, PS_CARD_H, 0, dy, C_TRACK2, LV_OPA_COVER, 14);
-            s_d_left[i]  = mk_label(p, PS_TYPE_BODY,  C_TEXT, 0, dy, "");
-            s_d_right[i] = mk_label(p, PS_TYPE_BODY,  C_DIM,  0, dy, "");
-            lv_obj_align(s_d_left[i],  LV_ALIGN_CENTER, -w / 2 + 18, dy);
+
+            /* THE TEXT IS A CHILD OF ITS CARD, AND THAT IS THE WHOLE FIX.
+             *
+             * These were children of the PAGE, positioned with
+             * lv_obj_align(LV_ALIGN_CENTER, -w/2 + 18, dy). That aligns the
+             * label's BOUNDING BOX centre at that x - and an auto-sized label
+             * grows symmetrically about it, so half of a long string extended
+             * further left, off the card and off the glass. Every row on
+             * every sensor page lost its first few characters: "Top models"
+             * rendered as "p models".
+             *
+             * LV_TEXT_ALIGN_LEFT did not save it, because that aligns lines
+             * WITHIN the box; it says nothing about where the box sits.
+             *
+             * Parented to the card and given an explicit width, the text is
+             * clipped by its own card and can no longer reach the edge of the
+             * panel however long it gets. LONG_DOT then ellipsises the few
+             * labels that genuinely do not fit, which is a legible failure
+             * instead of a silent amputation. */
+            /* Sized against the NARROWEST card, which is the bottom one:
+             * the chord shrinks toward the rim, and a budget taken from
+             * the middle rows leaves the last row two characters short.
+             * 104 px still holds eight characters of value at
+             * PS_TYPE_BODY, which covers every grade and count the row
+             * contract can carry. */
+            const int pad = 12;
+            const int val_w = 104;
+            const int lab_w = w - val_w - pad * 2 - 8;
+
+            s_d_left[i] = lv_label_create(s_d_card[i]);
+            lv_obj_remove_flag(s_d_left[i], LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_remove_flag(s_d_left[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_text_font(s_d_left[i], font_of(PS_TYPE_LABEL), 0);
+            lv_obj_set_style_text_color(s_d_left[i], lv_color_hex(C_TEXT), 0);
+            lv_obj_set_width(s_d_left[i], lab_w);
+            lv_label_set_long_mode(s_d_left[i], LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_align(s_d_left[i], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_align(s_d_right[i], LV_ALIGN_CENTER,  w / 2 - 18, dy);
+            lv_label_set_text(s_d_left[i], "");
+            lv_obj_align(s_d_left[i], LV_ALIGN_LEFT_MID, pad, 0);
+
+            s_d_right[i] = lv_label_create(s_d_card[i]);
+            lv_obj_remove_flag(s_d_right[i], LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_remove_flag(s_d_right[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_text_font(s_d_right[i], font_of(PS_TYPE_BODY), 0);
+            lv_obj_set_style_text_color(s_d_right[i], lv_color_hex(C_DIM), 0);
+            lv_obj_set_width(s_d_right[i], val_w);
+            lv_label_set_long_mode(s_d_right[i], LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_align(s_d_right[i], LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(s_d_right[i], "");
+            lv_obj_align(s_d_right[i], LV_ALIGN_RIGHT_MID, -pad, 0);
         }
         s_d_page  = mk_label(p, PS_TYPE_MICRO, C_DIMMER, 0, PS_Y_PAGE, "");
         s_d_empty = mk_label(p, PS_TYPE_BODY, C_DIMMER, 0, 0, "Nothing found yet");
         show(s_d_empty, false);
+    }
+
+
+    /* ---- GUIDE ----
+     *
+     * Built once and re-pointed per step rather than rebuilt, because a
+     * rebuild inside an animation callback is how you free an object LVGL is
+     * still walking. Everything that a given step does not use is hidden. */
+    {
+        lv_obj_t *p = s_page[PAGE_GUIDE];
+
+        /* The zone outline: a hollow rounded rect that says WHERE. Drawn
+         * first so the fingertip pulses on top of it. */
+        s_g_ghost = mk_box(p);
+        lv_obj_set_style_radius(s_g_ghost, 24, 0);
+        lv_obj_set_style_bg_opa(s_g_ghost, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_color(s_g_ghost, lv_color_hex(C_ACCENT), 0);
+        lv_obj_set_style_border_width(s_g_ghost, 3, 0);
+        lv_obj_set_style_border_opa(s_g_ghost, 160, 0);
+        lv_obj_set_size(s_g_ghost, 120, 120);
+        lv_obj_center(s_g_ghost);
+        show(s_g_ghost, false);
+
+        s_g_finger = mk_surface(p, 54, 54, 0, 0, C_ACCENT, 150, LV_RADIUS_CIRCLE);
+        show(s_g_finger, false);
+
+        for (unsigned i = 0; i < 10; i++) {
+            s_g_pip[i] = mk_surface(p, 8, 8, 0, PS_Y_GUIDE_PIPS, C_TRACK, LV_OPA_COVER,
+                                    LV_RADIUS_CIRCLE);
+            show(s_g_pip[i], false);
+        }
+
+        s_g_title = mk_label(p, PS_TYPE_TITLE, C_TEXT,   0, PS_Y_GUIDE_TITLE, "");
+        s_g_l1    = mk_label(p, PS_TYPE_BODY,  C_DIM,    0, PS_Y_GUIDE_L1, "");
+        s_g_l2    = mk_label(p, PS_TYPE_BODY,  C_DIM,    0, PS_Y_GUIDE_L2, "");
+        s_g_hint  = mk_label(p, PS_TYPE_LABEL, C_ACCENT, 0, PS_Y_GUIDE_HINT, "");
+
+        /* The four verdict colours, named. This is the single most valuable
+         * screen in the guide: it is the key to every other screen. */
+        {
+            const uint32_t v[4] = { PS_GOOD, PS_WARN, PS_HIGH, PS_BAD };
+            for (unsigned i = 0; i < 4; i++) {
+                const int dy = -58 + (int)i * 46;
+                s_g_swatch[i] = mk_surface(p, 44, 34, -112, dy, v[i],
+                                           LV_OPA_COVER, 10);
+                s_g_sw_txt[i] = mk_label(p, PS_TYPE_LABEL, C_TEXT, 26, dy, "");
+                lv_obj_set_width(s_g_sw_txt[i], 196);
+                lv_label_set_long_mode(s_g_sw_txt[i], LV_LABEL_LONG_DOT);
+                lv_obj_set_style_text_align(s_g_sw_txt[i], LV_TEXT_ALIGN_LEFT, 0);
+                show(s_g_swatch[i], false);
+                show(s_g_sw_txt[i], false);
+            }
+        }
+
+        /* A miniature home ring, so the dots are explained with dots. */
+        for (unsigned i = 0; i < 8; i++) {
+            s_g_dot[i] = mk_surface(p, 16, 16, 0, 0, PS_GOOD, LV_OPA_COVER,
+                                    LV_RADIUS_CIRCLE);
+            show(s_g_dot[i], false);
+        }
+
+        /* And the evidence chips, explained with chips. */
+        {
+            static const char *k_names[4] = { "RATE", "SHAPE", "FORGE", "AFTER" };
+            const int cw = 84, gap = 6;
+            const int total = cw * 4 + gap * 3;
+            for (unsigned i = 0; i < 4; i++) {
+                const int dx = -total / 2 + (int)i * (cw + gap) + cw / 2;
+                s_g_chip[i] = mk_surface(p, cw, 34, dx, 0, C_TRACK2,
+                                         LV_OPA_COVER, 17);
+                s_g_chip_txt[i] = mk_label(p, PS_TYPE_LABEL, C_DIMMER, dx, 0,
+                                           k_names[i]);
+                show(s_g_chip[i], false);
+                show(s_g_chip_txt[i], false);
+            }
+        }
     }
 
     /* ---- BARS (the `screen test` command) ---- */
@@ -1080,6 +1211,220 @@ void pharos_hud_detail(const char *lens, const char *head_left,
     (void)openable;
 }
 
+/* ---- the guide -------------------------------------------------------
+ *
+ * The animations are the content. A sentence that says "press and hold to go
+ * back" is a sentence somebody skims; an outline of the bottom strip with a
+ * fingertip swelling inside it is a gesture somebody copies. So each step
+ * points the same two objects - an outline and a fingertip - at the zone it is
+ * teaching, and lets LVGL run the motion.
+ *
+ * All of it is LVGL-owned. Nothing here is driven from the UI loop, so a step
+ * that is already on screen costs exactly nothing to "redraw". */
+
+static void g_finger_size_cb(void *o, int32_t v)
+{
+    lv_obj_set_size((lv_obj_t *)o, v, v);
+    lv_obj_set_style_radius((lv_obj_t *)o, LV_RADIUS_CIRCLE, 0);
+}
+
+static void g_finger_opa_cb(void *o, int32_t v)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)o, (lv_opa_t)v, 0);
+}
+
+static void g_x_cb(void *o, int32_t v)
+{
+    lv_obj_set_x((lv_obj_t *)o, v);
+}
+
+/* A tap: the fingertip swells and fades, forever, at one spot. */
+static void g_pulse_at(int dx, int dy, int base, int peak, uint32_t period)
+{
+    lv_anim_delete(s_g_finger, NULL);
+    lv_obj_align(s_g_finger, LV_ALIGN_CENTER, dx, dy);
+    lv_obj_set_size(s_g_finger, base, base);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_g_finger);
+    lv_anim_set_exec_cb(&a, g_finger_size_cb);
+    lv_anim_set_values(&a, base, peak);
+    lv_anim_set_duration(&a, period);
+    lv_anim_set_reverse_duration(&a, period);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+
+    lv_anim_t o;
+    lv_anim_init(&o);
+    lv_anim_set_var(&o, s_g_finger);
+    lv_anim_set_exec_cb(&o, g_finger_opa_cb);
+    lv_anim_set_values(&o, 200, 40);
+    lv_anim_set_duration(&o, period);
+    lv_anim_set_reverse_duration(&o, period);
+    lv_anim_set_repeat_count(&o, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&o);
+}
+
+/* The two side zones, taught by moving the fingertip between them - because
+ * the thing being explained is that there are TWO of them and they do
+ * opposite things. A pulse on one side alone teaches half the gesture. */
+static void g_sweep_sides(int dy)
+{
+    lv_anim_delete(s_g_finger, NULL);
+    lv_obj_align(s_g_finger, LV_ALIGN_CENTER, -140, dy);
+    lv_obj_set_size(s_g_finger, 54, 54);
+    lv_obj_set_style_bg_opa(s_g_finger, 170, 0);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_g_finger);
+    lv_anim_set_exec_cb(&a, g_x_cb);
+    lv_anim_set_values(&a, -140, 140);
+    lv_anim_set_duration(&a, 1100);
+    lv_anim_set_reverse_duration(&a, 1100);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+static void g_hide_all(void)
+{
+    show(s_g_ghost, false);
+    show(s_g_finger, false);
+    for (unsigned i = 0; i < 4; i++) {
+        show(s_g_swatch[i], false);
+        show(s_g_sw_txt[i], false);
+        show(s_g_chip[i], false);
+        show(s_g_chip_txt[i], false);
+    }
+    for (unsigned i = 0; i < 8; i++) show(s_g_dot[i], false);
+}
+
+static void g_ghost(int w, int h, int dx, int dy)
+{
+    lv_obj_set_size(s_g_ghost, w, h);
+    lv_obj_align(s_g_ghost, LV_ALIGN_CENTER, dx, dy);
+    show(s_g_ghost, true);
+}
+
+void pharos_hud_guide(const struct pharos_hud_guide *g)
+{
+    if (!s_built || !g) return;
+    page_show(PAGE_GUIDE);
+    toast_tick();
+
+    set_text_fit(s_g_title, PS_TYPE_TITLE, PS_Y_GUIDE_TITLE, g->title);
+    set_text_fit(s_g_l1, PS_TYPE_BODY, PS_Y_GUIDE_L1, g->line1);
+    set_text_fit(s_g_l2, PS_TYPE_BODY, PS_Y_GUIDE_L2, g->line2);
+    set_text_fit(s_g_hint, PS_TYPE_LABEL, PS_Y_GUIDE_HINT, g->hint);
+
+    /* Progress. Ten is the most the strip can hold at a legible spacing; a
+     * longer guide would need a bar, and a guide longer than ten steps is a
+     * manual nobody finishes anyway. */
+    unsigned total = g->total > 10u ? 10u : g->total;
+    for (unsigned i = 0; i < 10u; i++) {
+        const bool on = i < total;
+        show(s_g_pip[i], on);
+        if (!on) continue;
+        const int pitch = 18;
+        const int dx = -(int)(total - 1u) * pitch / 2 + (int)i * pitch;
+        lv_obj_align(s_g_pip[i], LV_ALIGN_CENTER, dx, PS_Y_GUIDE_PIPS);
+        const bool here = (i == g->step);
+        set_bg(s_g_pip[i], here ? C_ACCENT : C_TRACK);
+        lv_obj_set_size(s_g_pip[i], here ? 12 : 8, here ? 12 : 8);
+        lv_obj_set_style_radius(s_g_pip[i], LV_RADIUS_CIRCLE, 0);
+    }
+
+    /* Restarting an infinite animation every repaint would reset it to its
+     * first frame ten times a second, which looks exactly like a stutter. */
+    if ((int)g->step == s_g_step) return;
+    s_g_step = (int)g->step;
+
+    g_hide_all();
+
+    switch (g->anim) {
+    case PHAROS_GUIDE_ANIM_SIDES:
+        /* 110x200 at dx=-140: the corners land at r=219, inside the
+         * 224 safe radius. A 150x250 zone outline did not. */
+        g_ghost(110, 200, -140, 0);
+        show(s_g_finger, true);
+        g_sweep_sides(0);
+        break;
+
+    case PHAROS_GUIDE_ANIM_CENTRE:
+        g_ghost(190, 190, 0, 0);
+        show(s_g_finger, true);
+        g_pulse_at(0, 0, 44, 96, 700);
+        break;
+
+    case PHAROS_GUIDE_ANIM_BOTTOM:
+        g_ghost(280, 84, 0, 60);
+        show(s_g_finger, true);
+        g_pulse_at(0, 60, 40, 84, 700);
+        break;
+
+    case PHAROS_GUIDE_ANIM_HOLD:
+        /* Slower and bigger than a tap, which is the entire difference being
+         * taught. */
+        g_ghost(190, 190, 0, 0);
+        show(s_g_finger, true);
+        g_pulse_at(0, 0, 40, 150, 1500);
+        break;
+
+    case PHAROS_GUIDE_ANIM_VERDICT: {
+        static const char *k_meaning[4] = {
+            "nothing to do",
+            "worth knowing",
+            "one real finding",
+            "act on this",
+        };
+        for (unsigned i = 0; i < 4; i++) {
+            show(s_g_swatch[i], true);
+            show(s_g_sw_txt[i], true);
+            set_text(s_g_sw_txt[i], k_meaning[i]);
+        }
+        break;
+    }
+
+    case PHAROS_GUIDE_ANIM_RING: {
+        /* One dot per watch, and the point of the picture is that you count
+         * the ones that are not green. */
+        static const uint8_t k_state[8] = { 0, 0, 0, 1, 0, 0, 3, 0 };
+        for (unsigned i = 0; i < 8; i++) {
+            const float deg = 225.0f + 270.0f * (float)i / 7.0f;
+            const pr_point_t pt = pr_polar(96, deg);
+            lv_obj_align(s_g_dot[i], LV_ALIGN_CENTER,
+                         pt.x - PR_CX, pt.y - PR_CY);
+            set_bg(s_g_dot[i], home_dot_colour(k_state[i]));
+            lv_obj_set_size(s_g_dot[i], k_state[i] ? 22 : 16,
+                            k_state[i] ? 22 : 16);
+            lv_obj_set_style_radius(s_g_dot[i], LV_RADIUS_CIRCLE, 0);
+            show(s_g_dot[i], true);
+        }
+        break;
+    }
+
+    case PHAROS_GUIDE_ANIM_CHIPS: {
+        /* Two lit, two not - so the difference is visible rather than
+         * asserted. */
+        static const bool k_lit[4] = { true, true, false, false };
+        for (unsigned i = 0; i < 4; i++) {
+            show(s_g_chip[i], true);
+            show(s_g_chip_txt[i], true);
+            set_bg(s_g_chip[i], k_lit[i] ? ps_tint(PS_BAD, 40) : C_TRACK2);
+            set_fg(s_g_chip_txt[i], k_lit[i] ? PS_BAD : C_DIMMER);
+        }
+        break;
+    }
+
+    case PHAROS_GUIDE_ANIM_NONE:
+    default:
+        break;
+    }
+}
+
 /* ---- colour bars ------------------------------------------------------ */
 
 void pharos_hud_colourbars(void)
@@ -1122,5 +1467,6 @@ void pharos_hud_splash(const char *version, bool fence_clean)
     (void)version; (void)fence_clean;
 }
 void pharos_hud_colourbars(void) {}
+void pharos_hud_guide(const struct pharos_hud_guide *g) { (void)g; }
 
 #endif /* ESP_PLATFORM */
