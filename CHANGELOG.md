@@ -1,5 +1,64 @@
 # Changelog
 
+## v3.1.0 — 2026-08-25
+
+### The guide: the device teaches itself
+
+Twenty-one tools, four verdict colours, and a touch surface with no visible
+buttons. The controls were explained in the console banner — which is no help
+at all to somebody holding the device and looking at the *glass*.
+
+So the glass explains itself now. Nine steps on first boot, remembered in NVS,
+replayable forever with the new **`guide`** command, and left in a single press
+by anybody who already knows the device.
+
+Each step **shows the gesture rather than describing it**: the outline of a
+zone appears and a fingertip pulses inside it, travelling between the two side
+zones for the step that has two. You copy what you just watched instead of
+skimming a sentence about it.
+
+The order is deliberate — controls first, because you cannot explore without
+them; then the colour key, because it is the key to every other screen; then
+the two pieces of vocabulary that are genuinely unusual: the ring of dots and
+the evidence chips.
+
+### Every detail row was losing its first word
+
+Reported from a photograph of the Rival page, and it affected **every lens**:
+
+| shown on hardware | should have read |
+|---|---|
+| `p models / advs` | `popup models / advs` |
+| `resses used` | `addresses used` |
+| `ed senders` | `faked senders` |
+
+The row labels were children of the *page*, positioned with
+`lv_obj_align(LV_ALIGN_CENTER, -w/2 + 18, dy)`. That aligns a label's bounding
+**box centre** at that x — and an auto-sized label grows symmetrically about
+it, so half of any long string extended further left, off its card and off the
+glass. `LV_TEXT_ALIGN_LEFT` does not help: it aligns lines *within* the box and
+says nothing about where the box sits.
+
+Rows are children of their **card** now, with explicit widths, so text is
+clipped by the card and cannot reach the panel edge however long it gets.
+`LONG_DOT` ellipsises the few labels that genuinely do not fit — a legible
+failure instead of a silent amputation.
+
+The column budget is taken from the **narrowest** card, the bottom one, where
+the chord has shrunk toward the rim. A budget measured on the middle rows
+leaves the last row two characters short; a host test asserts this and found
+exactly that.
+
+### Layout is still arithmetic
+
+The first draft of the guide put its body text at +132/+162 and its hint at
++198 — fine offsets on a rectangle, hopeless on a circle, where the chord at
++198 holds about thirteen characters. `tools/render` caught **ten escaped
+primitives** before any of it reached the device. The guide's bands are named
+tokens now, with host tests behind them.
+
+7851 checks. Display, sources, fence and lens audits pass.
+
 ## v3.0.0 — 2026-08-25
 
 ### LUMEN: the face, rewritten from scratch
