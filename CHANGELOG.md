@@ -1,5 +1,43 @@
 # Changelog
 
+## v3.1.1 — 2026-08-25
+
+### A row's value could still become two lines
+
+Reported from a photograph of the PROBE page: the grade `unclassified`
+rendered as `unclassifi` with a lone `e` floating outside its card.
+
+Two faults compounding, and both are fixed.
+
+**The label wrapped.** `LV_LABEL_LONG_DOT` is documented as "break the text and
+write dots in the last line" — and *break* means **wrap**. With the height left
+to grow, an over-long value simply became two lines and dotted the second. Both
+row columns are pinned to a single line height now, which leaves `LONG_DOT` no
+room to wrap into, so it truncates horizontally as intended. It also restores
+the rule that a cell's height can never change, and therefore can never move
+the invalidated region.
+
+**Three strings never fitted in the first place.** `struct pharos_lens_row`
+carries `right[12]` — eleven printable characters — and `pp_place_name()` was
+returning `shop or cafe` (12), `carrier hotspot` (15) and `unclassified` (12),
+so `snprintf` silently cut them on the way *into* the row before the UI ever
+saw them. They are now `shop/cafe`, `carrier` and `unknown`, and a host test
+walks the **whole table** against the contract — because the next place name
+somebody adds will be long too, and nothing else would have noticed.
+
+### Which column loses, when one has to
+
+The narrowest card is the bottom one, where the chord has shrunk toward the
+rim, and it has about 310 px for both columns. The **value** takes 112 of it
+and is never cut: it is the judgement, and a grade that reads `A` when it meant
+`A+` is a wrong answer, not a cosmetic loss. The **label** is the column that
+degrades — 19 characters, which covers every row the firmware currently
+produces, with an honest ellipsis beyond that.
+
+That trade is now an assertion rather than an accident.
+
+7875 checks.
+
 ## v3.1.0 — 2026-08-25
 
 ### The guide: the device teaches itself

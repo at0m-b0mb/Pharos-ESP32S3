@@ -358,12 +358,19 @@ void pp_grade_device(const pp_device_t *d, pp_verdict_t *out)
     }
 }
 
+/* EVERY ONE OF THESE HAS TO FIT struct pharos_lens_row.right[12].
+ *
+ * That is 11 characters. "shop or cafe", "carrier hotspot" and
+ * "unclassified" did not, so the row column received them already truncated
+ * by snprintf - "unclassifie" - and then the label wrapped what was left.
+ * test_probe_place_names_fit() asserts the whole table against the contract,
+ * because the next name somebody adds will be long too. */
 const char *pp_place_name(pp_place_t p)
 {
     switch (p) {
     case PP_PLACE_GENERIC:     return "generic";
-    case PP_PLACE_RETAIL:      return "shop or cafe";
-    case PP_PLACE_TELECOM:     return "carrier hotspot";
+    case PP_PLACE_RETAIL:      return "shop/cafe";
+    case PP_PLACE_TELECOM:     return "carrier";
     case PP_PLACE_TRANSIT:     return "travel";
     case PP_PLACE_HOSPITALITY: return "hotel";
     case PP_PLACE_EDUCATION:   return "education";
@@ -372,7 +379,7 @@ const char *pp_place_name(pp_place_t p)
     case PP_PLACE_HEALTHCARE:  return "healthcare";
     case PP_PLACE_HOME:        return "home";
     case PP_PLACE_UNKNOWN:
-    default:                   return "unclassified";
+    default:                   return "unknown";
     }
 }
 

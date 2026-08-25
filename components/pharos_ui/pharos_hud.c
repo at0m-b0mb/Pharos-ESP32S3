@@ -694,7 +694,7 @@ bool pharos_hud_create(void)
              * PS_TYPE_BODY, which covers every grade and count the row
              * contract can carry. */
             const int pad = 12;
-            const int val_w = 104;
+            const int val_w = 112;
             const int lab_w = w - val_w - pad * 2 - 8;
 
             s_d_left[i] = lv_label_create(s_d_card[i]);
@@ -702,7 +702,20 @@ bool pharos_hud_create(void)
             lv_obj_remove_flag(s_d_left[i], LV_OBJ_FLAG_CLICKABLE);
             lv_obj_set_style_text_font(s_d_left[i], font_of(PS_TYPE_LABEL), 0);
             lv_obj_set_style_text_color(s_d_left[i], lv_color_hex(C_TEXT), 0);
-            lv_obj_set_width(s_d_left[i], lab_w);
+            /* WIDTH ALONE IS NOT ENOUGH - SET THE HEIGHT TOO.
+             *
+             * LV_LABEL_LONG_DOT is documented as "break the text and write
+             * dots in the last line". BREAK means wrap: with an auto height
+             * the label simply grows to two lines and dots the second one,
+             * which is how "unclassified" appeared on a PROBE row as
+             * "unclassifi" with a stray "e" floating out of the card.
+             *
+             * Pinning the height to a single line leaves LONG_DOT no room to
+             * wrap into, so it truncates horizontally, which is what was
+             * wanted. It also restores lesson 3: a cell whose height cannot
+             * change can never move the invalidated region. */
+            lv_obj_set_size(s_d_left[i], lab_w,
+                            lv_font_get_line_height(font_of(PS_TYPE_LABEL)));
             lv_label_set_long_mode(s_d_left[i], LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_align(s_d_left[i], LV_TEXT_ALIGN_LEFT, 0);
             lv_label_set_text(s_d_left[i], "");
@@ -711,9 +724,15 @@ bool pharos_hud_create(void)
             s_d_right[i] = lv_label_create(s_d_card[i]);
             lv_obj_remove_flag(s_d_right[i], LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_remove_flag(s_d_right[i], LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_text_font(s_d_right[i], font_of(PS_TYPE_BODY), 0);
+            /* The VALUE is the judgement - the thing somebody is scanning
+             * the page for - so it is the column that must never be cut. At
+             * PS_TYPE_LABEL the full 11 characters right[] can carry fit in
+             * val_w exactly; at PS_TYPE_BODY they did not, and the overflow
+             * became a wrap. */
+            lv_obj_set_style_text_font(s_d_right[i], font_of(PS_TYPE_LABEL), 0);
             lv_obj_set_style_text_color(s_d_right[i], lv_color_hex(C_DIM), 0);
-            lv_obj_set_width(s_d_right[i], val_w);
+            lv_obj_set_size(s_d_right[i], val_w,
+                            lv_font_get_line_height(font_of(PS_TYPE_LABEL)));
             lv_label_set_long_mode(s_d_right[i], LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_align(s_d_right[i], LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(s_d_right[i], "");

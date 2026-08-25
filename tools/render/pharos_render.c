@@ -1221,9 +1221,12 @@ static void screen_lumen_detail_named(const char *name, const char *title,
     /* The third of these is the string that broke on hardware: parented to
      * the page and centre-aligned, its left half ran off the glass and the
      * row read "p models / advs". It is kept here as the regression. */
-    const char *L[4] = { "GuestNet", "OfficeWiFi",
-                         "Top models / advs", "Acme-Secure" };
-    const char *R[4] = { "F", "D", "0/0", "A+" };
+    /* The third row is the string that ran off the glass; the second value
+     * is the 11-character contract at full width, which used to WRAP. Both
+     * are kept as regressions. */
+    const char *L[4] = { "GuestNet", "\"Sunset12\"",
+                         "popup models / advs", "Acme-Secure" };
+    const char *R[4] = { "F", "unknown", "0/0", "A+" };
     const char *T[4] = { C_RED, C_ORANGE, C_AMBER, C_GREEN };
 
     const int stack = 4 * PS_CARD_H + 3 * PS_CARD_GAP;
@@ -1234,8 +1237,10 @@ static void screen_lumen_detail_named(const char *name, const char *title,
         const int w = card_width(top, PS_CARD_H, PR_SAFE_R) - 12;
         roundrect(PR_CX - w / 2, top, w, PS_CARD_H, 14,
                   i == 0 ? tint_hex(0x21B6C6, 30) : "#0B1A21");
-        text(PR_CX - w / 2 + 18, PR_CY + dy + 7, 20, 'l', C_TEXT, L[i]);
-        text(PR_CX + w / 2 - 18, PR_CY + dy + 7, 20, 'r', T[i], R[i]);
+        /* Both columns at PS_TYPE_LABEL, one line each - see the note in
+         * pharos_hud.c about LONG_DOT wrapping when the height is free. */
+        text(PR_CX - w / 2 + 12, PR_CY + dy + 6, 16, 'l', C_TEXT, L[i]);
+        text(PR_CX + w / 2 - 12, PR_CY + dy + 6, 16, 'r', T[i], R[i]);
     }
     text(PR_CX, PR_CY + PS_Y_PAGE, 14, 'c', C_DIMMER, "1 / 3");
     lumen_tell();
@@ -1247,7 +1252,7 @@ static void screen_lumen_splash(void)
     screen("splash");
     lumen_base();
     glowtext(PR_CX, PR_CY - 20, 48, 'c', C_TEXT, "PHAROS");
-    text(PR_CX, PR_CY + 30, 20, 'c', C_DIM, "v3.1.0");
+    text(PR_CX, PR_CY + 30, 20, 'c', C_DIM, "v3.1.1");
     text(PR_CX, PR_CY + 84, 16, 'c', C_GREEN, "RECEIVE ONLY - FENCE CLEAN");
 }
 

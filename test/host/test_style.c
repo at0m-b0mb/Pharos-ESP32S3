@@ -18,6 +18,8 @@
  */
 #include <string.h>
 
+#include "pharos_lens.h"
+#include "pharos_probe.h"
 #include "pharos_style.h"
 #include "test_support.h"
 
@@ -189,7 +191,7 @@ void test_style(void)
          * They are children of the card now, with explicit widths. This
          * asserts the budget those widths are drawn from actually holds the
          * longest row the display contract can carry. */
-        const int16_t pad = 12, val_w = 104;
+        const int16_t pad = 12, val_w = 112;
         for (unsigned i = 0; i < PS_CARDS; i++) {
             const int16_t stack =
                 (int16_t)(PS_CARDS * PS_CARD_H + (PS_CARDS - 1) * PS_CARD_GAP);
@@ -201,20 +203,70 @@ void test_style(void)
             const int16_t lab_w = (int16_t)(w - val_w - pad * 2 - 8);
 
             CHECK(lab_w > 0, "row %u has no room for a label at all", i);
-            /* struct pharos_lens_row carries left[26]; 25 printable chars at
-             * PS_TYPE_LABEL must fit, or rows are silently ellipsised on
-             * every page rather than only on the long ones. */
-            CHECK(lab_w >= ps_text_w(PS_TYPE_LABEL, 20),
-                  "row %u fits only %d px of label, needs 20 chars (%d px)",
-                  i, (int)lab_w, (int)ps_text_w(PS_TYPE_LABEL, 20));
-            /* And the value column must hold the widest thing right[12] can
-             * be, or grades and counts get cut instead. */
-            CHECK(val_w >= ps_text_w(PS_TYPE_BODY, 8),
-                  "the value column cannot hold 8 characters");
+            /* WHICH COLUMN LOSES, WHEN ONE HAS TO.
+             *
+             * The narrowest card - the bottom one, where the chord has shrunk
+             * toward the rim - has about 310 px for both columns. The value
+             * takes 112 of it, because the value is the JUDGEMENT and it is
+             * what somebody is scanning the page for; a grade that reads "A" 
+             * when it meant "A+" is a wrong answer, not a cosmetic loss.
+             *
+             * So the LABEL is the column that degrades. 19 characters covers
+             * every row the firmware currently produces ("popup models / advs"
+             * and "hardware identified" are the longest, at 19); anything
+             * longer gets an ellipsis, which is a visible, honest truncation
+             * of a field that is only ever context. */
+            CHECK(lab_w >= ps_text_w(PS_TYPE_LABEL, 19),
+                  "row %u fits only %d px of label, needs 19 chars (%d px)",
+                  i, (int)lab_w, (int)ps_text_w(PS_TYPE_LABEL, 19));
+            /* The value column must draw the FULL 11-character contract -
+             * see the place-name suite below for why this is not 8. */
+            CHECK(val_w >= ps_text_w(PS_TYPE_LABEL, 11),
+                  "the value column cannot hold the full right[] contract");
             /* The two columns plus padding may not exceed the card. */
             CHECK(lab_w + val_w + pad * 2 + 8 <= w,
                   "row %u columns overflow their card", i);
         }
+    }
+
+    banner("style: every word a lens can put in a row column actually fits");
+    {
+        /* THE CONTRACT IS ELEVEN CHARACTERS, AND THREE NAMES BROKE IT.
+         *
+         * struct pharos_lens_row.right[12] holds 11 printable characters.
+         * pp_place_name() was returning "shop or cafe", "carrier hotspot" and
+         * "unclassified" - 12, 15 and 12 - so snprintf silently cut them on
+         * the way into the row, and the label then WRAPPED the remainder onto
+         * a second line. On a PROBE page that read "unclassifi" with a lone
+         * "e" floating outside the card.
+         *
+         * Checking the widest name against the column is the cheap half. The
+         * valuable half is checking the WHOLE TABLE, because the next place
+         * name somebody adds will be long too and nothing else would notice. */
+        /* Taken from the type itself rather than written as 11, so the test
+         * follows the contract if the contract ever changes. */
+        const size_t cap = sizeof(((struct pharos_lens_row *)0)->right) - 1u;
+
+        for (int p = 0; p <= PP_PLACE_HOME; p++) {
+            const char *n = pp_place_name((pp_place_t)p);
+            CHECK(n != NULL, "place %d has no name", p);
+            if (!n) continue;
+            CHECK(strlen(n) <= cap,
+                  "place name \"%s\" is %u chars, the row column holds %u",
+                  n, (unsigned)strlen(n), (unsigned)cap);
+        }
+        /* And the default arm, which is the one that was worst. */
+        {
+            const char *n = pp_place_name((pp_place_t)999);
+            CHECK(strlen(n) <= cap,
+                  "the fallback place name \"%s\" does not fit either", n);
+        }
+
+        /* The column has to be able to DRAW the full contract, or the fix
+         * above just moves the truncation from snprintf into LVGL. */
+        CHECK(112 >= ps_text_w(PS_TYPE_LABEL, (unsigned)cap),
+              "the value column cannot draw %u characters at PS_TYPE_LABEL",
+              (unsigned)cap);
     }
 
     banner("style: nothing a finger must hit is smaller than a finger");
