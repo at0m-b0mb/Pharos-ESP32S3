@@ -1,5 +1,84 @@
 # Changelog
 
+## v3.0.0 — 2026-08-25
+
+### LUMEN: the face, rewritten from scratch
+
+The old face was an aircraft-instrument pastiche — a 24-tick bezel, hairline
+arcs, text down to 12 px. It photographed well and read badly in a hand, which
+is the only place it is ever used. It is gone.
+
+**Nothing on the glass is under 14 px now.** At 466 px across a 1.75 inch
+circle this panel is 266 ppi, so the old 12 px body text was about 1.1 mm of
+cap height — legible in a screenshot, mush at arm's length. Half the supporting
+text was set in it. Montserrat 28/32/36 were added to the build because the old
+scale jumped 26 → 48 with nothing usable in between, which forced every verdict
+*word* down to 26 while numbers sat at 48.
+
+**Every screen now reads in one order:** colour → word → number → evidence →
+action. A soft aura behind the centre carries the verdict before you have read
+a single glyph, so a glance from across a room gets the answer and can stop.
+The number is now set *smaller* than the word it explains — the old face had
+that exactly backwards, which is why it read as a number generator rather than
+as a judgement.
+
+**The evidence chips are named.** `RATE` `SHAPE` `FORGE` `AFTER`, not four
+anonymous dots. "Why does it think so" is answerable from the glass instead of
+from the manual.
+
+### The home ring lost its labels, and that is the fix
+
+Fourteen names never fitted a 466 px circle at any radius; twenty-one lenses
+made it worse. Names were being drawn through the headline, behind a rule about
+which ones were "worth naming". The names were never the point: you answer *is
+anything wrong* by counting the dots that are not green. Which watch it is
+matters only once you have decided to look, and then it is one name in the
+middle — always legible, because there is only ever one of it.
+
+Removing the labels removed the clipping bug, the capacity rule and the
+staggered-radius machinery in one go. The dots now sit along the gauge's own
+270°, leaving the bottom notch for the clock.
+
+### Measured on the device
+
+| | before | after |
+|---|---|---|
+| frames | `painted=257 missed=20` (~7% dropped) | `painted=983 missed=0` |
+| internal DMA RAM free | 25 KB | **59 KB** |
+| `esp_lv_adapter_lock` failures | repeated, every boot | none |
+
+Twenty-four bezel ticks that meant nothing, and sixteen curved `lv_line` bars
+whose bounding boxes each spanned most of the panel, were being redrawn
+underneath everything that *did* mean something. LUMEN draws nothing that does
+not carry information.
+
+### Two real bugs this exposed
+
+**Locate painted the glass red as you walked toward your target.** Its score is
+*closeness*, not threat, but it never set `has_alert`, so the threat palette
+was applied to it — "found it" rendered as "danger". Harmless behind a thin
+arc; not behind an aura.
+
+**Advice was being cut to its first sentence**, throwing away the half that
+says what to *do*: "Broad, spoofed deauth." survived, "Preserve the log." did
+not. Advice now runs to two fixed lines.
+
+### The parts that did not change
+
+The four verdict colours are frozen and asserted byte-for-byte in
+`test_style.c`. A red on Census means what a red on Watch means; that contract
+outranks any visual refresh. The transmit fence, the confidence ceilings and
+every detection engine are untouched.
+
+Layout is arithmetic, not opinion: `pharos_style.c` is free of LVGL and
+ESP-IDF, so the type scale, the chip row and the card stack are all proved on a
+laptop — **514 new checks, 7831 total**. `tools/render` now draws the LUMEN
+face from the same tokens and bounds-checks every primitive against the safe
+radius; it caught five escapes on the first pass, four of them real engine
+advice lines that would have run off the edge of the glass.
+
+Fence and lens audits pass. Verified on hardware.
+
 ## v2.3.0 — 2026-08-20
 
 ### No screen shows invented data any more
