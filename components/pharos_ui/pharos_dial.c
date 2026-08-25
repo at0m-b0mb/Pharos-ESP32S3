@@ -238,6 +238,17 @@ bool pd_ring_fits(const pd_ring_t *r, unsigned n, int16_t label_w,
             }
         }
 
+        /* Clear of the core disc. A label whose box crosses the middle is
+         * drawn over the headline, and the two together are unreadable. The
+         * nearest corner to the centre is the one to test. */
+        {
+            const float nx = (ax0 > 0.0f) ? ax0 : ((ax1 < 0.0f) ? -ax1 : 0.0f);
+            const float ny = (ay0 > 0.0f) ? ay0 : ((ay1 < 0.0f) ? -ay1 : 0.0f);
+            if (sqrtf(nx * nx + ny * ny) < (float)PD_RING_CORE_R) {
+                return false;
+            }
+        }
+
         /* Against every other label. Only the immediate neighbours can
          * realistically touch, but checking all of them costs nothing here and
          * cannot be fooled by an unusual count. */
@@ -273,6 +284,24 @@ static float ring_score(const pd_ring_t *r, unsigned n, int16_t w, int16_t h)
                 return -1.0f;
             }
         }
+
+        /* AND IT MUST CLEAR THE CORE.
+         *
+         * This scorer maximised the space BETWEEN labels and had no opinion
+         * about the middle of the dial, so the search happily bought elbow
+         * room by pushing the inner ring inward - onto the headline. On the
+         * glass that read as CENSUS, WARD and SQUALL written through "worth a
+         * look". Disqualifying, not merely penalised: a label over the
+         * headline makes two things unreadable and no amount of spacing
+         * elsewhere compensates. */
+        {
+            const float nx = (ax0 > 0.0f) ? ax0 : ((ax1 < 0.0f) ? -ax1 : 0.0f);
+            const float ny = (ay0 > 0.0f) ? ay0 : ((ay1 < 0.0f) ? -ay1 : 0.0f);
+            if (sqrtf(nx * nx + ny * ny) < (float)PD_RING_CORE_R) {
+                return -1.0f;
+            }
+        }
+
         for (unsigned k = i + 1u; k < n; k++) {
             float bx0, by0, bx1, by1;
             ring_label_box(r, k, n, w, h, &bx0, &by0, &bx1, &by1);
@@ -299,6 +328,22 @@ static float ring_score(const pd_ring_t *r, unsigned n, int16_t w, int16_t h)
  * The measured numbers on this 466 px dial, seven-character names: eight
  * watches clear each other by 64 px, ten by 30, twelve by 24, and thirteen by
  * 10 - which is the point at which it starts reading as one long word. */
+unsigned pd_ring_capacity(int16_t label_w, int16_t label_h, int16_t gap)
+{
+    /* Defined in terms of pd_ring_fits, so the capacity and the checker can
+     * never disagree about what fits. */
+    unsigned best = 0;
+    for (unsigned n = 1; n <= 24u; n++) {
+        pd_ring_t r;
+        pd_ring_layout(n, label_w, label_h, gap, &r);
+        if (!pd_ring_fits(&r, n, label_w, label_h, gap)) {
+            break;
+        }
+        best = n;
+    }
+    return best;
+}
+
 void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
                     pd_ring_t *out)
 {
@@ -310,35 +355,57 @@ void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
     out->r_odd = 142;
     out->staggered = false;
     out->gap_px = 0;
+    out->capacity = n;
     if (n < 2u) {
         out->gap_px = 999;
         return;
     }
 
-    /* One radius first: an unstaggered ring is tidier, and for a handful of
-     * watches it clears the requirement outright. */
-    for (int16_t r = 142; r <= 156; r = (int16_t)(r + 2)) {
+    /* ONE RADIUS, ALWAYS.
+     *
+     * Two radii buy clear space by putting alternate labels nearer the middle,
+     * and on the glass that reads as broken rather than clever: the eye sees a
+     * ring of names at one distance with every other one pulled inward, and
+     * calls it misaligned. It was, reported exactly that way. A dial's labels
+     * belong on a circle.
+     *
+     * So the only freedom left is HOW FAR OUT the circle sits, and how many
+     * names it carries. Push the radius outward for more circumference, and
+     * when even the outermost cannot give every label its clear space, carry
+     * fewer names rather than moving some of them somewhere they do not
+     * belong. */
+    float best = -1.0f;
+    for (int16_t r = 140; r <= 156; r = (int16_t)(r + 2)) {
         pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = 168,
-                        .staggered = false, .gap_px = 0 };
+                        .staggered = false, .gap_px = 0, .capacity = n };
         const float g = ring_score(&t, n, label_w, label_h);
-        if (g >= (float)gap) {
+        if (g > best) {
+            best = g;
             *out = t;
-            out->gap_px = (int16_t)g;
-            return;
+            out->gap_px = (int16_t)((g < 0.0f) ? 0.0f : g);
         }
     }
 
-    /* Otherwise the widest breathing room two radii can buy. */
-    float best = -1.0f;
-    for (int16_t re = 130; re <= 156; re = (int16_t)(re + 2)) {
-        for (int16_t ro = 100; ro <= 156; ro = (int16_t)(ro + 2)) {
-            pd_ring_t t = { .r_even = re, .r_odd = ro, .r_dot = 168,
-                            .staggered = (re != ro), .gap_px = 0 };
-            const float g = ring_score(&t, n, label_w, label_h);
-            if (g > best) {
-                best = g;
-                *out = t;
-                out->gap_px = (int16_t)((g < 0.0f) ? 0.0f : g);
+    /* HOW MANY NAMES THIS CIRCLE CAN CARRY.
+     *
+     * When the ring cannot give every label its clear space, the honest answer
+     * is that it holds fewer labels - not that the labels should be squeezed
+     * or scattered. The caller reads `capacity` and names the watches that
+     * matter most. */
+    out->capacity = n;
+    if (best < (float)gap) {
+        out->capacity = 0;
+        for (unsigned k = n; k >= 2u; k--) {
+            for (int16_t r = 140; r <= 156; r = (int16_t)(r + 2)) {
+                pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = 168,
+                                .staggered = false, .gap_px = 0, .capacity = k };
+                if (ring_score(&t, k, label_w, label_h) >= (float)gap) {
+                    out->capacity = k;
+                    break;
+                }
+            }
+            if (out->capacity) {
+                break;
             }
         }
     }

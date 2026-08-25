@@ -271,6 +271,7 @@ static bool k_spectrum_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_spectrum = {
     .id = "wifi.spectrum",
+    .purpose = "channel airtime",
     .name = "Spectrum",
     .summary = "2.4 GHz airtime waterfall - the map you read the others against",
     .glyph = "waves",

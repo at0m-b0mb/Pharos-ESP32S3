@@ -41,10 +41,14 @@ SRCS := \
   test_survey.c \
   test_ring.c \
   test_motion.c \
+  test_roster.c \
+  test_wps.c \
   $(ROOT)/components/pharos_ui/pharos_theme.c \
   $(ROOT)/components/pharos_engine/pharos_tower.c \
   $(ROOT)/components/pharos_engine/pharos_survey.c \
   $(ROOT)/components/pharos_engine/pharos_motion.c \
+  $(ROOT)/components/pharos_engine/pharos_roster.c \
+  $(ROOT)/components/pharos_engine/pharos_wps.c \
   $(ROOT)/components/pharos_core/pharos_bus.c \
   $(ROOT)/components/pharos_core/pharos_caps.c \
   $(ROOT)/components/pharos_core/pharos_lens.c \

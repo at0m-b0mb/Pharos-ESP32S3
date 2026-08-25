@@ -898,8 +898,225 @@ static void test_rival_steady_spam_reads_steady(void)
     CHECK_EQ(active, samples); /* every single one, not most of them */
 }
 
+/* THE MARAUDER SITTING THERE AS A ROGUE ACCESS POINT.
+ *
+ * A Marauder doing a deauthentication flood is Watch's problem, and doing
+ * beacon spam is Mirage's. Standing up an evil portal it was invisible: it
+ * looked like any other network, because nothing here read the one part of the
+ * frame that gives it away - the radio's own address.
+ *
+ * Nearly every cheap Wi-Fi attack tool is an ESP32, and no manufactured router
+ * carries an Espressif OUI. */
+static void test_rival_devboard_access_points(void)
+{
+    banner("rival: a dev board running an access point is not a router");
+
+    /* 24:0A:C4 - Espressif. This is an ESP32 beaconing. */
+    const uint8_t esp[6] = { 0x24, 0x0A, 0xC4, 0x11, 0x22, 0x33 };
+    /* 00:1D:7E - Cisco-Linksys. A real router. */
+    const uint8_t real[6] = { 0x00, 0x1D, 0x7E, 0x44, 0x55, 0x66 };
+
+    CHECK(prv_is_devboard_oui(esp), "an Espressif prefix is recognised");
+    CHECK(!prv_is_devboard_oui(real), "a router vendor's is not");
+    CHECK(!prv_is_devboard_oui(NULL), "and NULL is survivable");
+
+    /* A LOCALLY-ADMINISTERED address is not a manufacturer assignment at all,
+     * so an OUI table says nothing about it. Every one of these tools can set
+     * one, and matching anyway would produce confident nonsense. */
+    const uint8_t laa[6] = { 0x26, 0x0A, 0xC4, 0x11, 0x22, 0x33 };
+    CHECK(!prv_is_devboard_oui(laa), "a locally-administered address is refused");
+
+    /* AN ENCRYPTED dev-board network is a smart plug, a sensor, a hobby
+     * project. Worth noting, and no more - this is the false positive that
+     * would otherwise be somebody's furniture. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 20; i++) {
+            prv_observe_beacon_ex(&s, esp, "MyPlug", 6, false, false, -50,
+                                  T0 + (uint64_t)i * 100000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK_EQ(v.n_devices, 1);
+        CHECK(v.worst_kind == PRV_KIND_DEV_BOARD,
+              "a closed dev-board network is just a dev board");
+        CHECK(v.score <= PRV_CAP_PRESENCE_ONLY,
+              "and presence alone stays capped (%u)", (unsigned)v.score);
+    }
+
+    /* AN OPEN one is the shape a captive portal needs and a finished smart
+     * plug does not. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 20; i++) {
+            prv_observe_beacon_ex(&s, esp, "Free WiFi", 9, false, true, -50,
+                                  T0 + (uint64_t)i * 100000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.worst_kind == PRV_KIND_ROGUE_AP,
+              "an open dev-board network is a portal's shape");
+        CHECK(v.score > 0, "and it is reported");
+        CHECK(v.score <= PRV_CAP_PRESENCE_ONLY,
+              "still capped - a shape is not a confession (%u)",
+              (unsigned)v.score);
+    }
+
+    /* A REAL ROUTER, open or not, is not this engine's business. An open
+     * guest network is a configuration finding for Census, and if Rival
+     * reported every cafe hotspot as attack hardware nobody would use it. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 20; i++) {
+            prv_observe_beacon_ex(&s, real, "Cafe Guest", 10, false, true, -50,
+                                  T0 + (uint64_t)i * 100000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK_EQ(v.n_devices, 0);
+        CHECK(v.band == PRV_BAND_CLEAR, "an open cafe hotspot is not a finding");
+    }
+
+    /* A board that ANNOUNCES itself keeps the more specific classification -
+     * the OUI test must not overwrite a name that already said more. */
+    {
+        prv_state_t s; prv_verdict_t v;
+        prv_reset(&s);
+        for (int i = 0; i < 20; i++) {
+            prv_observe_beacon_ex(&s, esp, "pwned", 5, false, true, -50,
+                                  T0 + (uint64_t)i * 100000ull);
+        }
+        prv_evaluate(&s, T0 + 2000000ull, &v);
+        CHECK(v.worst_kind == PRV_KIND_DEAUTHER,
+              "a board that names the attack keeps that name (got %s)",
+              prv_kind_name(v.worst_kind));
+    }
+}
+
+/* THE MODULE THAT HAS BEEN RENAMED.
+ *
+ * Every BLE serial bridge in the skimmer literature ships with a factory name,
+ * and changing it is a single AT command - so a name list catches the careless
+ * and nobody else. The GATT profile is what the module IS, and changing that
+ * means reflashing it. */
+static void test_rival_serial_bridge_by_profile(void)
+{
+    banner("rival: a serial bridge is caught by its profile, not its name");
+
+    const uint8_t addr[6] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 };
+
+    /* Advertising FFE0 - the transparent-UART service - under a name that
+     * gives nothing away. */
+    static const uint8_t ffe0[] = {
+        0x02, 0x01, 0x06,
+        0x03, 0x03, 0xE0, 0xFF,             /* complete 16-bit UUID: FFE0 */
+        0x05, 0x09, 'P', 'u', 'm', 'p',     /* an innocuous name          */
+    };
+    prv_state_t s; prv_verdict_t v;
+    prv_reset(&s);
+    for (int i = 0; i < 20; i++) {
+        prv_observe_ble_adv(&s, addr, "Pump", ffe0, (uint8_t)sizeof(ffe0), -55,
+                            T0 + (uint64_t)i * 100000ull);
+    }
+    prv_evaluate(&s, T0 + 2000000ull, &v);
+    CHECK_EQ(v.n_devices, 1);
+    CHECK(v.worst_kind == PRV_KIND_SERIAL_BRIDGE,
+          "the profile gives it away despite the name (got %s)",
+          prv_kind_name(v.worst_kind));
+
+    /* FFF0, the other common clone family. */
+    static const uint8_t fff0[] = {
+        0x02, 0x01, 0x06,
+        0x03, 0x03, 0xF0, 0xFF,
+    };
+    prv_state_t s2;
+    prv_reset(&s2);
+    for (int i = 0; i < 20; i++) {
+        prv_observe_ble_adv(&s2, addr, NULL, fff0, (uint8_t)sizeof(fff0), -55,
+                            T0 + (uint64_t)i * 100000ull);
+    }
+    prv_evaluate(&s2, T0 + 2000000ull, &v);
+    CHECK(v.worst_kind == PRV_KIND_SERIAL_BRIDGE, "so does FFF0");
+
+    /* AND IT IS STILL ONLY A SERIAL BRIDGE. The identical module is inside
+     * scoreboards, door locks and a thousand hobby projects - calling it a
+     * skimmer on this evidence would be inventing intent, and at a fuel pump
+     * that is the difference between a warning and an accusation. */
+    CHECK(v.score <= PRV_CAP_PRESENCE_ONLY,
+          "presence stays capped (%u)", (unsigned)v.score);
+
+    /* An ordinary BLE device with neither the name nor the profile is not
+     * swept up. */
+    static const uint8_t plain[] = {
+        0x02, 0x01, 0x06,
+        0x03, 0x03, 0x0D, 0x18,             /* heart rate service         */
+    };
+    prv_state_t s3;
+    prv_reset(&s3);
+    for (int i = 0; i < 20; i++) {
+        prv_observe_ble_adv(&s3, addr, "Band", plain, (uint8_t)sizeof(plain),
+                            -55, T0 + (uint64_t)i * 100000ull);
+    }
+    prv_evaluate(&s3, T0 + 2000000ull, &v);
+    CHECK_EQ(v.n_devices, 0);
+}
+
+/* THE CABLE WITH A RADIO IN IT. */
+static void test_rival_implant(void)
+{
+    banner("rival: an O.MG cable's access point is recognised");
+
+    /* DE:4F:22 - the locally-administered form of Espressif's DC:4F:22, and
+     * the documented O.MG indicator. */
+    const uint8_t omg[6]  = { 0xDE, 0x4F, 0x22, 0xAA, 0xBB, 0xCC };
+    /* DC:4F:22 - the ordinary Espressif assignment for the same part. */
+    const uint8_t esp[6]  = { 0xDC, 0x4F, 0x22, 0xAA, 0xBB, 0xCC };
+
+    CHECK(prv_is_implant_oui(omg), "DE:4F:22 is recognised");
+    CHECK(!prv_is_implant_oui(esp), "DC:4F:22 is not - that is any ESP8266");
+    CHECK(!prv_is_implant_oui(NULL), "NULL is survivable");
+
+    /* AND THE REASON IT NEEDS ITS OWN TEST: the dev-board table refuses
+     * locally-administered addresses, so this one would otherwise be missed
+     * entirely - the general rule is right, and this is its exception. */
+    CHECK(!prv_is_devboard_oui(omg),
+          "the dev-board test still refuses a made-up address");
+    CHECK(prv_is_devboard_oui(esp), "and still accepts the real assignment");
+
+    prv_state_t s; prv_verdict_t v;
+    prv_reset(&s);
+    for (int i = 0; i < 20; i++) {
+        prv_observe_beacon_ex(&s, omg, "iPhone", 6, false, false, -40,
+                              T0 + (uint64_t)i * 100000ull);
+    }
+    prv_evaluate(&s, T0 + 2000000ull, &v);
+    CHECK_EQ(v.n_devices, 1);
+    CHECK(v.worst_kind == PRV_KIND_IMPLANT,
+          "an implant, not a dev board (got %s)", prv_kind_name(v.worst_kind));
+
+    /* Encrypted or open, it is the same finding - unlike a dev board, where
+     * open is what distinguishes a portal from a smart plug. A cable has no
+     * innocent reason to be broadcasting at all. */
+    prv_state_t o;
+    prv_reset(&o);
+    for (int i = 0; i < 20; i++) {
+        prv_observe_beacon_ex(&o, omg, NULL, 0, false, true, -40,
+                              T0 + (uint64_t)i * 100000ull);
+    }
+    prv_evaluate(&o, T0 + 2000000ull, &v);
+    CHECK(v.worst_kind == PRV_KIND_IMPLANT, "open too");
+
+    /* Still capped at presence. The address is one anything could have set, so
+     * this is a strong hint and not an identification. */
+    CHECK(v.score <= PRV_CAP_PRESENCE_ONLY, "presence stays capped (%u)",
+          (unsigned)v.score);
+}
+
 void test_rival(void)
 {
+    test_rival_devboard_access_points();
+    test_rival_implant();
+    test_rival_serial_bridge_by_profile();
     test_rival_names();
     test_rival_pwnagotchi();
     test_rival_flipper_advertisement();

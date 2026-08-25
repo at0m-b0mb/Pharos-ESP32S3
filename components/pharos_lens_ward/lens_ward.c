@@ -51,7 +51,7 @@
 #include "freertos/semphr.h"
 
 #include "pharos_bus.h"
-#include "pharos_census.h"
+#include "pharos_lens_census.h"
 #include "pharos_lens.h"
 #include "pharos_lens_census.h"
 #include "pharos_radio.h"
@@ -410,6 +410,7 @@ static bool k_ward_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_ward = {
     .id = "wifi.ward",
+    .purpose = "your chosen network",
     .name = "Ward",
     .summary = "Guard one network: camp on it and watch only what targets it",
     .glyph = "shield",

@@ -215,6 +215,7 @@ static bool k_mirage_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_mirage = {
     .id = "wifi.mirage",
+    .purpose = "fake AP floods",
     .name = "Mirage",
     .summary = "Detects the beacon flood that fills a phone with fake networks",
     .glyph = "sparkles",

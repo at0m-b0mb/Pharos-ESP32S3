@@ -29,6 +29,8 @@ idf_component_register(
         pharos_lens_harvest
         pharos_lens_squall
         pharos_lens_vigil
+        pharos_sense
+        pharos_lens_roster
         pharos_lens_ring
         pharos_lens_survey
         pharos_lens_system

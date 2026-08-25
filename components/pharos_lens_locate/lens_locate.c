@@ -249,6 +249,7 @@ static bool k_locate_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_locate = {
     .id = "wifi.locate",
+    .purpose = "walk to a transmitter",
     .name = "Locate",
     .summary = "Walk toward a flagged transmitter - hotter, colder, here",
     .glyph = "compass",

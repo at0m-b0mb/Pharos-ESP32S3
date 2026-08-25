@@ -23,10 +23,14 @@
 #include "freertos/task.h"
 
 #include "pharos_bsp.h"
+#include "pharos_sense.h"
 #include "pharos_audio.h"
 #include "pharos_hud.h"
 #include "pharos_survey.h"
 #include "pharos_tower.h"
+
+unsigned pharos_lens_roster_export(char *buf, unsigned cap, bool redact);
+unsigned pharos_lens_roster_count(void);
 #include "pharos_survey_hook.h"
 #include "pharos_ui.h"
 
@@ -441,9 +445,73 @@ static int cli_motion(int argc, char **argv)
     return 0;
 }
 
+/* THE HONEST ROUTE TO CVEs.
+ *
+ * Pharos cannot reach a device to test it and cannot reach the internet to
+ * look one up - it holds a transmit fence, and that fence is the whole reason
+ * the device can be trusted in somebody else's building. So the inventory
+ * leaves here as text, and a machine that IS allowed to talk to the network
+ * and to a CVE database finishes the job.
+ *
+ * Redacted by default: the vendor half of each address is public and carries
+ * the device class, and the host half is hashed, so the export can be pasted
+ * into a ticket without naming anyone's specific hardware. */
+/* The motion sensor, and whether it is there at all.
+ *
+ * The QMI8658 has no vendor driver on this board, so the first question is
+ * simply whether it answers. Everything else is a live read - which is also
+ * how the motion engine's thresholds get checked against a real hand rather
+ * than against a synthesised trace. */
+static int cli_imu(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (!pharos_bsp_imu_present()) {
+        printf("no IMU: the QMI8658 did not answer on either address\n");
+        return 1;
+    }
+    printf("QMI8658 present. Ten samples:\n");
+    for (unsigned i = 0; i < 10u; i++) {
+        int32_t x = 0, y = 0, z = 0;
+        if (!pharos_bsp_imu_read(&x, &y, &z)) {
+            printf("  read failed\n");
+            return 1;
+        }
+        const int32_t mag = (int32_t)(x * x + y * y + z * z);
+        printf("  %5ld %5ld %5ld mg   |a|^2=%ld\n", (long)x, (long)y, (long)z,
+               (long)mag);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return 0;
+}
+
+static int cli_devices(int argc, char **argv)
+{
+    const bool raw = (argc >= 2 && strcmp(argv[1], "full") == 0);
+    static char buf[3072];
+    const unsigned n = pharos_lens_roster_export(buf, sizeof(buf), !raw);
+    if (!n) {
+        printf("no devices heard yet (run `lens net.roster` and give it a minute)\n");
+        return 0;
+    }
+    printf("# vendor\tmodel\tclass\taddress\texposure  (%u devices%s)\n",
+           pharos_lens_roster_count(), raw ? "" : ", redacted");
+    fwrite(buf, 1, n, stdout);
+    printf("# exposure bits: 1=open 2=WEP 4=WPA1 8=WPS 10=fixed-MAC "
+           "20=probes-open 40=no-MFP 80=name-leak 100=WPS-PIN\n");
+    printf("# models come from the AP's own WPS beacon - feed them to a CVE\n"
+           "# database from a machine that is allowed to talk to one.\n");
+    printf("# `devices full` for unredacted addresses\n");
+    return 0;
+}
+
 static int cli_ring(int argc, char **argv)
 {
     const unsigned n = pharos_ui_ring_count();
+    if (argc >= 2 && strcmp(argv[1], "reset") == 0) {
+        pharos_ui_ring_reset();
+        printf("ring: back to defaults\n");
+        return 0;
+    }
     if (argc >= 2) {
         const int i = atoi(argv[1]);
         if (i < 0 || (unsigned)i >= n) {
@@ -762,10 +830,26 @@ void pharos_console_start(void)
     };
     esp_console_cmd_register(&motion);
 
+    const esp_console_cmd_t imu = {
+        .command = "imu",
+        .help = "is the motion sensor there, and what does it read?",
+        .hint = NULL,
+        .func = &cli_imu,
+    };
+    esp_console_cmd_register(&imu);
+
+    const esp_console_cmd_t devices = {
+        .command = "devices",
+        .help = "export the device inventory for offline CVE lookup",
+        .hint = "[full]",
+        .func = &cli_devices,
+    };
+    esp_console_cmd_register(&devices);
+
     const esp_console_cmd_t ring = {
         .command = "ring",
         .help = "choose which watches the home screen carries",
-        .hint = "[<n> [1-4]]",
+        .hint = "[reset | <n> [1-4]]",
         .func = &cli_ring,
     };
     esp_console_cmd_register(&ring);

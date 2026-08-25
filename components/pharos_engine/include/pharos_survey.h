@@ -114,6 +114,14 @@ typedef struct {
     unsigned weak;
     unsigned hidden;
     unsigned modern;
+    /* THE WEAKEST NETWORK'S GRADE, AS A pc_grade_t.
+     *
+     * Which counts UPWARD to better: UNGRADED, F, E, D, C, B, A, A+. The name
+     * says "worst" and the ordering says the opposite, and that mismatch cost
+     * this project its most embarrassing bug - the Survey page reported every
+     * grade inverted, showing an open network as a green A. It is a
+     * pc_grade_t; render it with pc_grade_name() and compare it with < for
+     * worse, never with >. PC_GRADE_UNGRADED means nothing was graded. */
     uint8_t worst_grade;
 
     unsigned devices;      /* devices that announced network names   */

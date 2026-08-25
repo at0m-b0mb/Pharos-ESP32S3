@@ -69,6 +69,11 @@ uint32_t pharos_ui_ring_lap_ms(void);
 bool pharos_ui_ring_running(void);
 void pharos_ui_ring_set_running(bool on);
 
+/* Forget the saved ring and rebuild it from the shipped defaults. The way back
+ * when a stored choice - or a stale one from an older firmware - is not what
+ * somebody wants. */
+void pharos_ui_ring_reset(void);
+
 #include "pharos_aegis.h"
 /* pharos_nav_t lives here; the nav request below speaks in it. */
 #include "pharos_hud.h"

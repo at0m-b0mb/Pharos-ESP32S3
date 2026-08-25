@@ -137,6 +137,21 @@ typedef struct pharos_lens {
     const char *id;      /* stable slug, used in logs: "wifi.census" */
     const char *name;    /* shown on the dial: "Census"              */
     const char *summary; /* one line shown on the info card          */
+
+    /* WHAT IT DOES, IN WORDS SOMEBODY WHO DID NOT WRITE IT WOULD USE.
+     *
+     * The names on this device are evocative and, on their own, opaque: KARMA,
+     * SQUALL and MIRAGE tell a person nothing about what they will see if they
+     * press one. That was fine while there were six lenses and a browse card
+     * explaining each; it stopped being fine when fourteen of them became dots
+     * on a dial with room for a name and nothing else.
+     *
+     * This is the plain-English half, short enough for the middle of the ring
+     * (22 characters), shown for whichever watch currently holds the radio. The
+     * name stays on the rim and the meaning appears in the centre, so the dial
+     * teaches its own vocabulary while it runs rather than requiring the
+     * operator to have learned it first. */
+    const char *purpose;
     const char *glyph;   /* icon name in the built-in atlas          */
 
     pharos_lens_kind_t kind;

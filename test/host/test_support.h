@@ -93,6 +93,12 @@ void test_ring(void);
 /* Suite defined in test_motion.c */
 void test_motion(void);
 
+/* Suite defined in test_roster.c */
+void test_roster(void);
+
+/* Suite defined in test_wps.c */
+void test_wps(void);
+
 /* Suite defined in test_rival.c */
 void test_rival(void);
 

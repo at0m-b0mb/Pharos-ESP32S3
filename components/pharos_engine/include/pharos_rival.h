@@ -60,6 +60,8 @@ typedef enum {
     PRV_KIND_DEV_BOARD,      /* an ESP32 or similar advertising a default */
     PRV_KIND_DEAUTHER,       /* a board whose NAME announces the attack   */
     PRV_KIND_PWNAGOTCHI,     /* handshake collector, announces in beacons */
+    PRV_KIND_ROGUE_AP,       /* a dev board offering an OPEN network      */
+    PRV_KIND_IMPLANT,        /* a cable or plug with a radio hidden in it */
     PRV_KIND_PINEAPPLE,      /* a rogue-AP appliance's default network    */
     PRV_KIND_FLIPPER,        /* Flipper Zero, over Bluetooth              */
     PRV_KIND_COUNT,
@@ -288,6 +290,15 @@ void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid
                         uint8_t ssid_len, bool whisper, int8_t rssi,
                         uint64_t t_us);
 
+/* As above, plus whether the network is OPEN.
+ *
+ * The extra bit is what separates a Marauder's evil portal from a smart plug:
+ * both are ESP32s running an access point, and only one of them needs the
+ * network to be joinable without a key. See prv_is_devboard_oui(). */
+void prv_observe_beacon_ex(prv_state_t *s, const uint8_t bssid[6],
+                           const char *ssid, uint8_t ssid_len, bool whisper,
+                           bool open_network, int8_t rssi, uint64_t t_us);
+
 /* Kept as the plain-SSID form for callers with nothing else to offer. */
 void prv_observe_ssid(prv_state_t *s, const uint8_t bssid[6], const char *ssid,
                       uint8_t ssid_len, int8_t rssi, uint64_t t_us);
@@ -299,6 +310,36 @@ bool prv_is_pwnagotchi_addr(const uint8_t addr[6]);
  * name can be changed in a minute; the OUI is what the vendor shipped, so this
  * sees a renamed Pineapple that a name match never could. */
 bool prv_is_hak5_oui(const uint8_t addr[6]);
+
+/* True when this address belongs to one of Espressif's IEEE-assigned prefixes
+ * - the radios inside Marauder, the Deauther family and the evil-portal
+ * builds. An access point on one is a dev board, not a manufactured router.
+ *
+ * NOT proof of an attack: ESPHome sensors, Tasmota plugs and Shelly relays are
+ * the same silicon, and plenty of them run a setup access point. See the
+ * definition for what raises it and what does not. Returns false for
+ * locally-administered addresses, where an OUI means nothing. */
+bool prv_is_devboard_oui(const uint8_t addr[6]);
+
+/* THE CABLE WITH A RADIO IN IT.
+ *
+ * O.MG cables and plugs look exactly like the charging cable they replace and
+ * carry an ESP8266 that stands up an access point for command and control.
+ * Espressif's assignment for that part is DC:4F:22 - already covered by the
+ * dev-board table - but the documented indicator for these implants is
+ * DE:4F:22, the SAME prefix with the locally-administered bit set.
+ *
+ * That bit is why this needs its own test: prv_is_devboard_oui() refuses
+ * locally-administered addresses outright, because in general an OUI table
+ * says nothing about an address a device made up. This is the narrow, known
+ * exception - a specific made-up prefix that is documented as belonging to a
+ * specific implant.
+ *
+ * NOT proof. Any device can set any locally-administered address, so this is a
+ * strong hint rather than an identification, and a carefully configured
+ * implant will not be in access-point mode at all. A quiet result here means
+ * nothing was heard, never that a cable is safe. */
+bool prv_is_implant_oui(const uint8_t addr[6]);
 
 /* How long THIS device may be silent before it is treated as gone, from the
  * cadence it was actually heard at. Between PRV_STALE_MIN_US and

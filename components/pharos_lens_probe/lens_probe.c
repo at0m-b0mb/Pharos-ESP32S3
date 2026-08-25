@@ -273,6 +273,7 @@ static bool k_probe_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_probe = {
     .id = "wifi.probe",
+    .purpose = "what phones leak",
     .name = "Probe",
     .summary = "Shows a room what its phones are broadcasting about their owners",
     .glyph = "ear",

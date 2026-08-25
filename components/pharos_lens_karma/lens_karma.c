@@ -213,6 +213,7 @@ static bool k_karma_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_karma = {
     .id = "wifi.karma",
+    .purpose = "APs answering any name",
     .name = "Karma",
     .summary = "Finds the radio that agrees to be whatever a phone asks for",
     .glyph = "mask",

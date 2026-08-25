@@ -10,6 +10,7 @@
 #ifndef PHAROS_EVENT_H
 #define PHAROS_EVENT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -21,6 +22,7 @@ typedef enum {
     PHAROS_EV_DOT11,     /* one 802.11 frame header, any type   */
     PHAROS_EV_BLE_ADV,   /* one BLE advertising report          */
     PHAROS_EV_DWELL,     /* the scanner finished a channel dwell */
+    PHAROS_EV_WPS,       /* an AP volunteered its make and model */
     PHAROS_EV_MOTION,    /* IMU gesture or orientation change   */
     PHAROS_EV_ACOUSTIC,  /* mic band-energy summary, no audio   */
     PHAROS_EV_SYSTEM,    /* battery, storage, thermal           */
@@ -92,6 +94,18 @@ typedef struct {
     uint8_t subtype; /* PHAROS_ST_*  */
     uint8_t flags;   /* PHAROS_DOT11_F_* */
     uint8_t rate_idx;
+
+    /* HOW BIG THE FRAME WAS.
+     *
+     * Carried for one reason: a device that uploads CONTINUOUSLY is the shape
+     * of a camera, and nothing else on this device could measure that. Frame
+     * counts alone cannot - a chatty sensor sends many tiny frames and a
+     * camera sends few large ones - so the size is what separates them.
+     *
+     * No payload is copied and none is readable: on a protected network the
+     * body is ciphertext. This is the length of the envelope, which is all
+     * that is needed and all that is available. */
+    uint16_t frame_len;
     /* EAPOL-Key message number 1..4, or 0 when the frame is not one.
      *
      * Only the pairwise 4-way handshake is identified, and only messages 1
@@ -147,6 +161,25 @@ typedef struct {
     int32_t value;
 } pharos_ev_system_t;
 
+/* WHAT AN ACCESS POINT SAID ABOUT ITSELF.
+ *
+ * Access points supporting Wi-Fi Protected Setup broadcast their manufacturer
+ * and model in every beacon, in cleartext (see pharos_wps.h). That is the
+ * difference between "a TP-Link router", which nobody can look a CVE up
+ * against, and "Archer C7 v2", which they can.
+ *
+ * It is a separate event rather than fields on the beacon because beacons
+ * arrive ten times a second per access point and this changes never - the
+ * radio emits ONE of these the first time it hears a given BSSID advertise a
+ * model, and nothing after. A hundred identical strings an hour would cost the
+ * ring buffer real capacity to say the same thing repeatedly. */
+typedef struct {
+    uint8_t bssid[6];
+    char vendor[24];
+    char model[32];
+    bool pin_exposed; /* WPS 1.0 + PIN + configured + unlocked */
+} pharos_ev_wps_t;
+
 typedef struct pharos_event {
     uint64_t t_us;   /* monotonic, filled by the producer */
     uint8_t type;    /* pharos_ev_type_t */
@@ -159,6 +192,7 @@ typedef struct pharos_event {
         pharos_ev_motion_t motion;
         pharos_ev_acoustic_t acoustic;
         pharos_ev_system_t system;
+        pharos_ev_wps_t wps;
     } u;
 } pharos_event_t;
 

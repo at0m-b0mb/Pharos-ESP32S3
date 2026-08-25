@@ -143,6 +143,28 @@ struct pharos_hud_home {
     uint8_t state[PHAROS_HUD_HOME_MAX];
     uint8_t fade[PHAROS_HUD_HOME_MAX];
     uint8_t score[PHAROS_HUD_HOME_MAX];
+    /* WHICH DOTS GET A NAME.
+     *
+     * Fourteen names do not fit on this dial - pd_ring_capacity() says twelve,
+     * and the two that would not fit were being drawn through the headline.
+     * So the caller decides which are worth naming (whichever holds the radio,
+     * anything with something to report, and whatever is selected) and the
+     * rest stay as bare dots. An instrument does not number every tick. */
+    bool label_on[PHAROS_HUD_HOME_MAX];
+
+    /* THE WIDTH THE CALLER SIZED ITS CHOICE AGAINST.
+     *
+     * Which labels to show is decided from how many fit, and how many fit is
+     * decided from how wide the widest one is. That number was being worked
+     * out twice - once by the caller over every armed watch, once here over
+     * only the ones it had chosen - and two measurements of one quantity
+     * disagree the moment the sets differ. A layout sized for a narrower
+     * label than the capacity assumed puts a name somewhere there is not
+     * room for it.
+     *
+     * The caller measures; the HUD uses what it was given. Zero means "work
+     * it out yourself", for callers that do not care. */
+    int16_t label_w;
     int active;          /* which watch holds the radio, or -1     */
     const char *headline;/* "all quiet", "ALERT", ...              */
     const char *sub;     /* "6 watches armed"                      */

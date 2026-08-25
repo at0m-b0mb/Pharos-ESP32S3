@@ -520,15 +520,31 @@ static bool imu_try(uint8_t addr)
     return true;
 }
 
+static bool s_imu_probing;
+
 static void imu_probe(void)
 {
-    if (s_imu_probed) {
+    /* PROBED IS SET AT THE END, NOT THE START.
+     *
+     * Setting it first published "I have finished probing" while the chip was
+     * still being configured, and a caller arriving in that window read
+     * s_imu_present as false and concluded there was no IMU. That is exactly
+     * what happened on hardware: the sampler task asked during the 200 ms
+     * configure, was told there was no sensor, and deleted itself - on a board
+     * whose IMU had just been found and was about to work. The log recorded
+     * both facts a millisecond apart.
+     *
+     * The in-progress flag is what stops a second caller starting a parallel
+     * probe and adding the I2C device twice. */
+    if (s_imu_probed || s_imu_probing) {
         return;
     }
-    s_imu_probed = true;
+    s_imu_probing = true;
 
     if (!imu_try(QMI_ADDR_LO) && !imu_try(QMI_ADDR_HI)) {
         ESP_LOGW(TAG, "no QMI8658 answered; motion sensing unavailable");
+        s_imu_probed = true;
+        s_imu_probing = false;
         return;
     }
 
@@ -584,6 +600,8 @@ static void imu_probe(void)
     s_imu_present = true;
     if (!pharos_bsp_imu_read(&x, &y, &z)) {
         s_imu_present = false;
+        s_imu_probed = true;
+        s_imu_probing = false;
         ESP_LOGW(TAG, "QMI8658 did not return a sample; motion unavailable");
         return;
     }

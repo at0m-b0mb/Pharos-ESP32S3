@@ -97,6 +97,28 @@ void ptw_report(ptw_state_st *s, const char *id, ptw_state_t state,
     w->score = score;
     w->ceiling = ceiling;
     w->seen_us = now_us;
+
+    /* The high-water mark. A quiet reading never lowers it: the air going
+     * calm again is not evidence that nothing happened, and this is the only
+     * record that it did. */
+    if (state > w->peak_state ||
+        (state == w->peak_state && score > w->peak_score)) {
+        w->peak_state = state;
+        w->peak_score = score;
+        w->peak_us = now_us;
+    }
+}
+
+void ptw_acknowledge(ptw_state_st *s)
+{
+    if (!s) {
+        return;
+    }
+    for (unsigned i = 0; i < s->n; i++) {
+        s->w[i].peak_state = PTW_UNKNOWN;
+        s->w[i].peak_score = 0;
+        s->w[i].peak_us = 0;
+    }
 }
 
 /* One full pass of the ring, in microseconds. Used as the unit for freshness
@@ -314,6 +336,8 @@ void ptw_summarise(const ptw_state_st *s, uint64_t now_us, ptw_summary_t *out)
     }
     memset(out, 0, sizeof(*out));
     out->worst_index = -1;
+    out->latched_index = -1;
+    out->latched_state = PTW_UNKNOWN;
     out->worst = PTW_UNKNOWN;
     if (!s) {
         out->headline = "no watches";
@@ -354,10 +378,36 @@ void ptw_summarise(const ptw_state_st *s, uint64_t now_us, ptw_summary_t *out)
         }
     }
 
+    /* WHAT HAPPENED WHILE NOBODY WAS LOOKING.
+     *
+     * Scanned across every armed watch regardless of freshness, because that
+     * is the entire point: a burst that lasted two seconds four minutes ago is
+     * exactly the thing a rotation exists to catch and a live reading cannot
+     * show. */
+    for (unsigned i = 0; i < s->n; i++) {
+        const ptw_watch_t *w = &s->w[i];
+        if (!w->armed || w->peak_state < PTW_ELEVATED) {
+            continue;
+        }
+        if (w->peak_state > out->latched_state) {
+            out->latched_state = w->peak_state;
+            out->latched_index = (int)i;
+            out->latched_age_s =
+                (now_us > w->peak_us) ? (uint32_t)((now_us - w->peak_us) / 1000000ull)
+                                      : 0u;
+        }
+    }
+
     /* The headline says what is TRUE of the watches that have actually looked
      * recently - never "all quiet" on the strength of watches that have not. */
     if (out->alarms) {
         out->headline = (out->alarms > 1u) ? "ALERTS" : "ALERT";
+    } else if (out->latched_state >= PTW_ALARM) {
+        /* Not happening now, but it happened. Distinguished from a live alarm
+         * in words as well as in the age reported alongside it - somebody
+         * walking up to the device must be able to tell "there is an attack"
+         * from "there was one". */
+        out->headline = "SOMETHING HAPPENED";
     } else if (out->worst == PTW_ELEVATED) {
         out->headline = "something is up";
     } else if (out->worst == PTW_NOTED) {

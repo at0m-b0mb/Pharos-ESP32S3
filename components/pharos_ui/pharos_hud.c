@@ -150,7 +150,8 @@ static lv_obj_t *s_home_hint;
 static lv_obj_t *s_h_tick[PHAROS_HUD_HOME_MAX];
 static lv_point_t s_h_pos[PHAROS_HUD_HOME_MAX];
 static unsigned s_h_n;
-static unsigned s_h_laid; /* how many slots the ring is currently laid out for */
+static unsigned s_h_laid;
+static int16_t s_h_laid_w; /* the label width it was laid out for */
 
 static lv_obj_t *s_page_detail;
 static lv_obj_t *s_d_title;
@@ -1151,19 +1152,54 @@ static uint32_t home_state_colour(uint8_t st)
  * spacing has to be one too.
  *
  * Recomputed only when the count changes, which is almost never. */
-static void home_layout(unsigned n)
+/* THE WIDTH OF THE LABELS ACTUALLY BEING DRAWN.
+ *
+ * Sizing the ring for PD_RING_LABEL_W - the longest name in the project,
+ * FOOTPRINT - assumed every watch on the dial was nine characters wide. With
+ * eleven armed, the longest is HARVEST, and the difference is enough to decide
+ * whether all eleven get a name or one is silently left blank. It was left
+ * blank, and an unnamed dot among named ones reads as a fault.
+ *
+ * Worst-case width AND worst-case count is double-counting. Measure what is
+ * there. */
+static int16_t home_label_w(const struct pharos_hud_home *h, unsigned n)
 {
-    if (n == s_h_laid || !n || n > PHAROS_HUD_HOME_MAX) {
+    unsigned widest = 0;
+    for (unsigned i = 0; i < n; i++) {
+        if (!h->label_on[i] || !h->label[i]) {
+            continue;
+        }
+        unsigned k = 0;
+        while (h->label[i][k]) {
+            k++;
+        }
+        if (k > widest) {
+            widest = k;
+        }
+    }
+    if (!widest) {
+        widest = 7u;
+    }
+    /* Montserrat 12 capitals measure about 7.6 px of advance, plus a little
+     * bearing either side. */
+    return (int16_t)((widest * 76u) / 10u + 4u);
+}
+
+static void home_layout(unsigned n, int16_t label_w)
+{
+    if ((n == s_h_laid && label_w == s_h_laid_w) || !n ||
+        n > PHAROS_HUD_HOME_MAX) {
         return;
     }
     s_h_laid = n;
+    s_h_laid_w = label_w;
 
     /* The geometry is computed, not guessed - see pd_ring_layout(), whose
      * spacing at every count is pinned by test_ring.c. Photographing the
      * screen to find out whether the names fit was how thirteen of them
      * shipped reading as one long word. */
     pd_ring_t g;
-    pd_ring_layout(n, 62, 14, 12, &g);
+    pd_ring_layout(n, label_w, 14, 12, &g);
 
     pd_dial_t d;
     pd_dial_layout(n, -90.0f, 150, 205, &d);
@@ -1191,12 +1227,14 @@ void pharos_hud_home(const struct pharos_hud_home *h)
     zones_mode(false);
 
     s_h_n = (h->n > PHAROS_HUD_HOME_MAX) ? PHAROS_HUD_HOME_MAX : h->n;
-    home_layout(s_h_n);
+    /* The caller's own measurement, so the layout and the choice of which
+     * labels to show are sized against the same number. */
+    home_layout(s_h_n, h->label_w ? h->label_w : home_label_w(h, s_h_n));
 
     for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
         const bool used = (i < s_h_n);
         show(s_h_dot[i], used);
-        show(s_h_lbl[i], used);
+        show(s_h_lbl[i], used && h->label_on[i]);
         show(s_h_tick[i], used);
         if (!used) {
             continue;
@@ -1219,11 +1257,38 @@ void pharos_hud_home(const struct pharos_hud_home *h)
         lv_obj_set_style_border_opa(s_h_dot[i],
                                     hollow ? LV_OPA_70 : LV_OPA_COVER, 0);
 
-        /* The watch that currently holds the radio wears a bigger dot and a
-         * lit label, so "which one am I actually listening to" is answered
-         * without reading anything. */
+        /* THE WATCH HOLDING THE RADIO BREATHES.
+         *
+         * A slightly larger dot says which one is live, and on a ring of
+         * sixteen it is easy to miss - the difference between 16 px and 22 px
+         * is not much when the eye is scanning colours. A slow pulse is not
+         * decoration: it is the one cue on the face that says the device is
+         * WORKING rather than showing a frozen picture, which on a monitor
+         * that spends most of its time reporting "quiet" is worth having.
+         *
+         * Two seconds a cycle, and only ever the active dot - a face where
+         * everything moves is harder to read, not easier. */
         const bool live = ((int)i == h->active);
-        lv_obj_set_size(s_h_dot[i], live ? 22 : 16, live ? 22 : 16);
+        int size = live ? 22 : 16;
+        if (live) {
+            const uint32_t phase = (lv_tick_get() % 2000u);
+            const uint32_t up = (phase < 1000u) ? phase : (2000u - phase);
+            size = 20 + (int)((up * 5u) / 1000u); /* 20..25 and back */
+        }
+        /* DIRTY-CHECKED, like every other write on this face.
+         *
+         * lv_obj_set_size() marks the object for re-layout whether or not the
+         * size differs, and a pulse recomputed every frame therefore forced a
+         * relayout and redraw of the ring ten times a second - which held the
+         * LVGL lock long enough that the next paint could not get it. The
+         * console filled with "Failed to acquire LVGL lock" and the face
+         * started dropping frames, to animate a dot by five pixels.
+         *
+         * The pulse only actually changes size a few times a second; asking
+         * first costs one comparison and gives the rest of the frames back. */
+        if (lv_obj_get_width(s_h_dot[i]) != size) {
+            lv_obj_set_size(s_h_dot[i], size, size);
+        }
         lv_obj_align(s_h_dot[i], LV_ALIGN_CENTER,
                      s_h_pos[i].x - PR_CX, s_h_pos[i].y - PR_CY);
         set_text_colour(s_h_lbl[i], live ? HUD_TEXT

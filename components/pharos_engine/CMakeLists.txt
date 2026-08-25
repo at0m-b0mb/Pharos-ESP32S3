@@ -19,6 +19,8 @@ idf_component_register(
         "pharos_locate.c"
         "pharos_opsec.c"
         "pharos_motion.c"
+        "pharos_roster.c"
+        "pharos_wps.c"
         "pharos_survey.c"
         "pharos_tower.c"
         "pharos_power.c"

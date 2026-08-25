@@ -209,6 +209,7 @@ static bool k_harvest_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_harvest = {
     .id = "wifi.harvest",
+    .purpose = "handshake capture",
     .name = "Harvest",
     .summary = "Catches somebody collecting handshakes to crack offline",
     .glyph = "key",

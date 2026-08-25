@@ -214,8 +214,16 @@ static void rival_event(const pharos_event_t *ev)
     if (!whisper && f->ssid_len == 0) {
         return;
     }
-    prv_observe_beacon(&s_engine, f->a2, f->ssid, f->ssid_len, whisper, f->rssi,
-                       ev->t_us);
+    /* OPEN, from the beacon's own RSN element.
+     *
+     * This is the bit that separates an evil portal from a smart plug: both
+     * are Espressif radios running an access point, and only the portal needs
+     * to be joinable without a key. The radio already parses RSN in the hot
+     * path, so it costs nothing to pass. No RSN element at all means no
+     * encryption advertised - which is what open looks like on the air. */
+    const bool open_network = (f->rsn_flags & PHAROS_RSN_F_PRESENT) == 0;
+    prv_observe_beacon_ex(&s_engine, f->a2, f->ssid, f->ssid_len, whisper,
+                          open_network, f->rssi, ev->t_us);
 }
 
 static void rival_tick(uint32_t dt_ms)
@@ -319,6 +327,23 @@ static bool k_rival_display(struct pharos_lens_display *o)
     o->raw_score = v.raw_score;
     o->ceiling = 100;
     o->has_score = true;
+
+    /* PRESENCE IS NOT AN ATTACK.
+     *
+     * The engine already caps a bare sighting at PRV_CAP_PRESENCE_ONLY,
+     * because owning a Flipper is not an offence - but 55 read off the score
+     * still lands the home ring on "something is up" for somebody sitting
+     * near a colleague's toolkit. A ring that says that all day teaches its
+     * operator to ignore it, which costs exactly the moment the tool is
+     * actually used.
+     *
+     * So presence is "worth knowing" and no more. The step up requires the
+     * engine to have seen the hardware BEING USED - the band it reserves for
+     * address rotation, pairing spam and the rest. */
+    o->has_alert = true;
+    o->alert = (v.band >= PRV_BAND_ACTIVE)  ? 2u
+             : (v.band >= PRV_BAND_CAPABLE) ? 1u
+                                            : 0u;
 
     /* FEED THE SESSION SURVEY.
      *
@@ -476,6 +501,7 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_rival = {
     .id = "rf.rival",
+    .purpose = "hacking hardware",
     .name = "Rival",
     .summary = "Finds the other operator's hardware announcing itself",
     .glyph = "crosshair",

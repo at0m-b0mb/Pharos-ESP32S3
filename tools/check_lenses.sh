@@ -123,6 +123,124 @@ if [ "$ring_bad" -eq 0 ]; then
   printf '%s  ok%s   every ring watch resolves (%s)\n' "$GRN" "$RST" "$(echo $ring_ids | wc -w | tr -d ' ') watches"
 fi
 
+
+# EVERY LENS SAYS WHAT IT IS FOR, IN PLAIN WORDS.
+#
+# The names are evocative and opaque - KARMA and SQUALL mean nothing to
+# somebody who did not write them - and on the home ring a name is all there
+# is room for. `purpose` is the plain-English half shown in the middle of the
+# dial, and a lens without one leaves a dot nobody can identify.
+#
+# The 22-character limit is the width of the core, measured; longer strings
+# were running out over the ring labels.
+echo
+echo "[.] every lens has a plain-English purpose that fits the dial"
+purpose_bad=0
+for f in components/pharos_lens_*/*.c; do
+  ids=$(grep -cE '^\s*\.id = "' "$f" 2>/dev/null || echo 0)
+  purposes=$(grep -cE '^\s*\.purpose = "' "$f" 2>/dev/null || echo 0)
+  if [ "$ids" -gt 0 ] && [ "$purposes" -lt "$ids" ]; then
+    bad "$(basename "$f"): $ids lens(es) but only $purposes purpose(s)"
+    purpose_bad=1
+  fi
+done
+while IFS= read -r pstr; do
+  len=${#pstr}
+  if [ "$len" -gt 22 ]; then
+    bad "purpose too long for the dial ($len > 22): $pstr"
+    purpose_bad=1
+  fi
+done <<< "$(grep -rhoE '\.purpose = "[^"]*"' components/pharos_lens_*/*.c | sed 's/\.purpose = "//; s/"$//')"
+if [ "$purpose_bad" -eq 0 ]; then
+  ok "every lens explains itself in 22 characters or fewer"
+fi
+
+
+# A LENS ON THE HOME RING EITHER MEASURES THREAT OR SAYS IT DOES NOT.
+#
+# The ring puts every watch on one scale and the scores do not share one.
+# Census scores how badly the NEIGHBOURS are configured; Roster scores what
+# share of devices leave something exposed - in an ordinary street, most of
+# them. Read as threat levels those pin the home screen to ALARM permanently,
+# about other people's routers, and a device that shouts all day is one nobody
+# looks at when it matters.
+#
+# So a ring lens whose score is not a threat scale must set has_alert. This
+# lists the ones that do not, and the four that legitimately do not need to -
+# their scores genuinely measure an attack in progress.
+echo
+echo "[.] every ring lens either measures threat or states its own severity"
+alert_bad=0
+# These four score an attack directly: deauth, a radio answering any name,
+# beacon floods, handshake collection. Their numbers ARE threat.
+threat_ok=" watch karma mirage harvest "
+for f in components/pharos_lens_*/*.c; do
+  grep -q "PHAROS_LENS_OBSERVE" "$f" 2>/dev/null || continue
+  grep -q "has_score = true" "$f" 2>/dev/null || continue
+  name=$(basename "$(dirname "$f")"); name=${name#pharos_lens_}
+  case "$threat_ok" in *" $name "*) continue ;; esac
+  if ! grep -q "has_alert" "$f" 2>/dev/null; then
+    bad "$name scores on the ring but never says what the number MEANS"
+    alert_bad=1
+  fi
+done
+if [ "$alert_bad" -eq 0 ]; then
+  ok "no lens lets the ring guess a threat level from a non-threat score"
+fi
+
+# A MUTEX THAT IS NEVER TAKEN IS NOT PROTECTION, IT IS AN ALIBI.
+#
+# Roster created one in its mount function and never used it anywhere. Nothing
+# looked wrong: the field was there, the name was right, and every reviewer -
+# human or otherwise - saw a lens with a lock. Meanwhile its event handler
+# inserted devices on the analytics core while its tick expired them on the UI
+# core, two writers on one table with nothing between them.
+#
+# If a lens declares a lock it must take it. If it does not need one it should
+# not have one.
+echo
+echo "[.] every lens that declares a mutex actually takes it"
+lock_bad=0
+for f in components/pharos_lens_*/*.c; do
+  grep -q "xSemaphoreCreateMutex" "$f" 2>/dev/null || continue
+  name=$(basename "$(dirname "$f")"); name=${name#pharos_lens_}
+  takes=$(grep -c "xSemaphoreTake" "$f" 2>/dev/null || echo 0)
+  gives=$(grep -c "xSemaphoreGive" "$f" 2>/dev/null || echo 0)
+  if [ "$takes" -eq 0 ]; then
+    bad "$name creates a mutex and never takes it"
+    lock_bad=1
+  elif [ "$gives" -lt "$takes" ]; then
+    bad "$name takes its mutex $takes time(s) but releases it only $gives"
+    lock_bad=1
+  fi
+done
+if [ "$lock_bad" -eq 0 ]; then
+  ok "no lens carries a lock it does not use"
+fi
+
+# A LENS NAME LONGER THAN THE RING CAN DRAW GETS SILENTLY CUT.
+#
+# The home ring uppercases each name into a 10-byte buffer - nine characters -
+# and the layout that keeps labels off the headline is solved for exactly that
+# width (PD_RING_LABEL_W). A ten-character name would be truncated with no
+# warning, and an eleven-character one would make the collision arithmetic
+# wrong rather than merely ugly.
+echo
+echo "[.] no lens name is longer than the ring can draw"
+name_bad=0
+for f in components/pharos_lens_*/*.c; do
+  grep -q "PHAROS_LENS_OBSERVE" "$f" 2>/dev/null || continue
+  n=$(sed -nE 's/^[[:space:]]*\.name = "([^"]+)".*/\1/p' "$f" | head -1)
+  [ -n "$n" ] || continue
+  if [ "${#n}" -gt 9 ]; then
+    bad "lens name '$n' is ${#n} characters; the ring draws nine"
+    name_bad=1
+  fi
+done
+if [ "$name_bad" -eq 0 ]; then
+  ok "every ring lens name fits the label the layout was solved for"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   printf '%sLENSES INTACT%s\n' "$GRN" "$RST"

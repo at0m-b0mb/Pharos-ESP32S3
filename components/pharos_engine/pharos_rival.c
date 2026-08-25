@@ -102,7 +102,9 @@ prv_kind_t prv_classify_name(const char *name, uint8_t len, bool ble)
      * modules documented in card skimmers are invisible to this radio anyway.
      * See PRV_NOTE_BREDR_BLIND. */
     static const char *k_bridge[] = { "hc-05", "hc-06", "hc-08", "jdy-",
-                                      "at-09", "mlt-bt05", "hm-10", "bt05" };
+                                      "at-09", "mlt-bt05", "hm-10", "bt05",
+                                      "cc41", "sh-hc-08", "rn487", "bolutek",
+                                      "free2move", "linvor" };
     for (unsigned i = 0; i < sizeof(k_bridge) / sizeof(k_bridge[0]); i++) {
         if (ci_starts(name, len, k_bridge[i])) {
             return PRV_KIND_SERIAL_BRIDGE;
@@ -252,6 +254,21 @@ prv_kind_t prv_classify_adv(const uint8_t *data, uint8_t len,
         if ((type == 0x02 || type == 0x03) && plen >= 2) {
             for (uint8_t k = 0; k + 1u < plen; k += 2u) {
                 const uint16_t uuid = (uint16_t)(p[k] | ((uint16_t)p[k + 1] << 8));
+                /* THE SERIAL PROFILE, WHICH SURVIVES A RENAME.
+                 *
+                 * FFE0 (with its FFE1 characteristic) is the transparent-UART
+                 * service that HM-10, CC41-A, AT-09, JDY and MLT-BT05 clones
+                 * all expose; FFF0 is the same idea on the other common clone
+                 * family. Matching it catches a module whose advertising name
+                 * has been changed - which is a one-line AT command, and the
+                 * first thing anybody deploying one quietly would do.
+                 *
+                 * Still only SERIAL_BRIDGE. The identical part is inside
+                 * hobby electronics, scoreboards and door locks, and calling
+                 * it a skimmer on this evidence would be inventing intent. */
+                if (uuid == 0xFFE0u || uuid == 0xFFF0u) {
+                    return PRV_KIND_SERIAL_BRIDGE;
+                }
                 if (flipper_uuid(uuid, colour)) {
                     return PRV_KIND_FLIPPER;
                 }
@@ -541,6 +558,79 @@ bool prv_is_hak5_oui(const uint8_t addr[6])
     return addr && addr[0] == 0x00 && addr[1] == 0x13 && addr[2] == 0x37;
 }
 
+/* ESPRESSIF'S OUIs - THE SIGNATURE OF A DEV BOARD PRETENDING TO BE A ROUTER.
+ *
+ * Nearly every cheap Wi-Fi attack tool in circulation is an ESP32 or ESP8266:
+ * Marauder, the Deauther family, the evil-portal builds, the beacon spammers.
+ * When any of them stands up an access point - which an evil portal must, to
+ * serve its captive page - the beacon goes out from a radio whose address
+ * Espressif was assigned by the IEEE. No manufactured router uses one.
+ *
+ * That makes an access point on one of these prefixes a genuinely strong
+ * signal, and it is the one thing this engine could not see: a Marauder doing
+ * a deauthentication flood is caught by Watch, doing beacon spam by Mirage -
+ * but sitting there as a rogue access point it looked like any other network.
+ *
+ * WHAT IT IS NOT. It is not proof of an attack, and the honesty matters more
+ * here than usual, because the false positives are somebody's furniture:
+ * ESPHome sensors, Tasmota smart plugs, Shelly relays and a thousand hobby
+ * projects are all ESP32s, and a good number of them run an access point for
+ * setup. So this classifies as DEV_BOARD - "something programmable is here" -
+ * and the presence cap applies exactly as it does to a Flipper. What raises
+ * it is the SHAPE: a dev board running an OPEN network is the arrangement an
+ * evil portal needs and a smart plug does not.
+ *
+ * The list is the common prefixes, not all of them - Espressif holds dozens
+ * and buys more. A miss is a device this test does not fire on, which is the
+ * safe direction: everything else in the engine still applies to it. */
+bool prv_is_devboard_oui(const uint8_t addr[6])
+{
+    static const uint8_t k_espressif[][3] = {
+        { 0x18, 0xFE, 0x34 }, { 0x24, 0x0A, 0xC4 }, { 0x24, 0x6F, 0x28 },
+        { 0x24, 0xB2, 0xDE }, { 0x2C, 0x3A, 0xE8 }, { 0x2C, 0xF4, 0x32 },
+        { 0x30, 0xAE, 0xA4 }, { 0x34, 0xAB, 0x95 }, { 0x3C, 0x61, 0x05 },
+        { 0x3C, 0x71, 0xBF }, { 0x40, 0xF5, 0x20 }, { 0x48, 0x3F, 0xDA },
+        { 0x4C, 0x11, 0xAE }, { 0x50, 0x02, 0x91 }, { 0x54, 0x5A, 0xA6 },
+        { 0x58, 0xBF, 0x25 }, { 0x5C, 0xCF, 0x7F }, { 0x60, 0x01, 0x94 },
+        { 0x68, 0x67, 0x25 }, { 0x68, 0xC6, 0x3A }, { 0x78, 0x21, 0x84 },
+        { 0x7C, 0x9E, 0xBD }, { 0x7C, 0xDF, 0xA1 }, { 0x80, 0x7D, 0x3A },
+        { 0x84, 0x0D, 0x8E }, { 0x84, 0xCC, 0xA8 }, { 0x8C, 0xAA, 0xB5 },
+        { 0x90, 0x97, 0xD5 }, { 0x98, 0xF4, 0xAB }, { 0x9C, 0x9C, 0x1F },
+        { 0xA0, 0x20, 0xA6 }, { 0xA4, 0x7B, 0x9D }, { 0xA4, 0xCF, 0x12 },
+        { 0xAC, 0x67, 0xB2 }, { 0xB4, 0xE6, 0x2D }, { 0xB8, 0xF0, 0x09 },
+        { 0xBC, 0xDD, 0xC2 }, { 0xC0, 0x49, 0xEF }, { 0xC4, 0x4F, 0x33 },
+        { 0xC8, 0x2B, 0x96 }, { 0xC8, 0xC9, 0xA3 }, { 0xCC, 0x50, 0xE3 },
+        { 0xCC, 0xDB, 0xA7 }, { 0xD4, 0xD4, 0xDA }, { 0xD8, 0xA0, 0x1D },
+        { 0xDC, 0x4F, 0x22 }, { 0xE0, 0x98, 0x06 }, { 0xE8, 0x31, 0xCD },
+        { 0xE8, 0xDB, 0x84 }, { 0xEC, 0xFA, 0xBC }, { 0xF0, 0x08, 0xD1 },
+        { 0xF4, 0xCF, 0xA2 }, { 0xFC, 0xF5, 0xC4 },
+    };
+    if (!addr) {
+        return false;
+    }
+    /* A locally-administered address is not a manufacturer's assignment at
+     * all, so an OUI table says nothing about it - and every one of these
+     * tools can set one. Checking anyway would produce confident matches from
+     * a randomised address, which is worse than the miss. */
+    if (addr[0] & 0x02) {
+        return false;
+    }
+    for (unsigned i = 0; i < sizeof(k_espressif) / sizeof(k_espressif[0]); i++) {
+        if (memcmp(addr, k_espressif[i], 3) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool prv_is_implant_oui(const uint8_t addr[6])
+{
+    /* DE:4F:22 - the locally-administered form of Espressif's DC:4F:22, and
+     * the documented signature of the O.MG cable family. See the header for
+     * why this is checked separately from the dev-board table. */
+    return addr && addr[0] == 0xDE && addr[1] == 0x4F && addr[2] == 0x22;
+}
+
 uint64_t prv_expiry_us(const prv_device_t *d)
 {
     /* Under three sightings there is no cadence to measure - one interval
@@ -579,6 +669,13 @@ void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid
                         uint8_t ssid_len, bool whisper, int8_t rssi,
                         uint64_t t_us)
 {
+    prv_observe_beacon_ex(s, bssid, ssid, ssid_len, whisper, false, rssi, t_us);
+}
+
+void prv_observe_beacon_ex(prv_state_t *s, const uint8_t bssid[6],
+                           const char *ssid, uint8_t ssid_len, bool whisper,
+                           bool open_network, int8_t rssi, uint64_t t_us)
+{
     if (!s || !bssid) {
         return;
     }
@@ -602,6 +699,30 @@ void prv_observe_beacon(prv_state_t *s, const uint8_t bssid[6], const char *ssid
     } else if (ssid && ssid_len) {
         kind = prv_classify_name(ssid, ssid_len, false);
     }
+
+    /* THE DEV BOARD RUNNING AN ACCESS POINT.
+     *
+     * Checked after the name, so a board that announces itself keeps the more
+     * specific classification. An Espressif radio beaconing is a programmable
+     * device, not a manufactured router - but it is also every ESPHome sensor
+     * and Tasmota plug in the building, so on its own it is only DEV_BOARD.
+     *
+     * OPEN is what changes it. An evil portal must be joinable without a key,
+     * because its whole purpose is to get a stranger's browser onto a page it
+     * serves; a smart plug that has finished being set up has no reason to be.
+     * A dev board offering an open network is the shape of a captive portal,
+     * and that earns the classification the name-matching path gives a board
+     * that admits what it is. */
+    if (kind == PRV_KIND_NONE && prv_is_implant_oui(bssid)) {
+        /* Checked before the dev-board table: it is the more specific claim,
+         * and the address it matches is one the dev-board test refuses. */
+        kind = PRV_KIND_IMPLANT;
+    }
+
+    if (kind == PRV_KIND_NONE && prv_is_devboard_oui(bssid)) {
+        kind = open_network ? PRV_KIND_ROGUE_AP : PRV_KIND_DEV_BOARD;
+    }
+
     if (kind == PRV_KIND_NONE) {
         return;
     }
@@ -639,7 +760,18 @@ static uint8_t kind_weight(prv_kind_t k)
 {
     switch (k) {
     case PRV_KIND_FLIPPER:       return 40;
+    /* Above the rogue access point and below the purpose-built appliances. A
+     * cable with a radio in it is a serious thing to find, and the address it
+     * is recognised by is one anything could have set - so it does not
+     * outrank hardware that announced itself. */
+    case PRV_KIND_IMPLANT:       return 36;
     case PRV_KIND_PINEAPPLE:     return 38;
+    /* Between the deauther board and the plain dev board, deliberately. An
+     * open network from an Espressif radio is the shape of a captive portal
+     * and is a much stronger signal than "an ESP32 exists here" - but it is
+     * still inference from a shape, not a name the firmware admitted to, so
+     * it does not outrank the boards that say what they are. */
+    case PRV_KIND_ROGUE_AP:      return 32;
     case PRV_KIND_PWNAGOTCHI:    return 36;
     case PRV_KIND_DEAUTHER:      return 34;
     case PRV_KIND_SERIAL_BRIDGE: return 18;
@@ -927,6 +1059,8 @@ const char *prv_kind_name(prv_kind_t k)
     case PRV_KIND_PWNAGOTCHI:    return "Pwnagotchi";
     case PRV_KIND_DEAUTHER:      return "deauther board";
     case PRV_KIND_SERIAL_BRIDGE: return "BLE serial bridge";
+    case PRV_KIND_IMPLANT:       return "cable/plug implant";
+    case PRV_KIND_ROGUE_AP:      return "open dev-board AP";
     case PRV_KIND_DEV_BOARD:     return "dev board";
     case PRV_KIND_NONE:
     default:                     return "--";
@@ -946,6 +1080,10 @@ const char *prv_kind_note(prv_kind_t k)
         return "Firmware named for the attack it performs";
     case PRV_KIND_SERIAL_BRIDGE:
         return "A radio on a serial port. Also in doorbells";
+    case PRV_KIND_IMPLANT:
+        return "A charging cable with a radio and a keyboard in it";
+    case PRV_KIND_ROGUE_AP:
+        return "Open network from a dev board - a portal's shape";
     case PRV_KIND_DEV_BOARD:
         return "A dev board. In a thousand innocent products";
     case PRV_KIND_NONE:

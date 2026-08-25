@@ -523,6 +523,7 @@ static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_watch = {
     .id = "wifi.watch",
+    .purpose = "deauth attacks",
     .name = "Watch",
     .summary = "Listens for deauthentication floods and grades them honestly",
     .glyph = "shield",

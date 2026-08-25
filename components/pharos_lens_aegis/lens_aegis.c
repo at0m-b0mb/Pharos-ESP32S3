@@ -165,6 +165,7 @@ static bool k_aegis_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_aegis = {
     .id = "sys.aegis",
+    .purpose = "the whole picture",
     .name = "Aegis",
     .summary = "Every finding so far, and what it adds up to",
     .glyph = "shield",

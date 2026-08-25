@@ -57,7 +57,7 @@
 extern "C" {
 #endif
 
-#define PTW_MAX_WATCHES 16
+#define PTW_MAX_WATCHES 20
 #define PTW_NAME_MAX 11 /* what fits a rim label on a 466 px circle */
 #define PTW_ID_MAX 23
 
@@ -116,6 +116,23 @@ typedef struct {
     uint32_t visits;  /* how many times it has held the radio    */
     uint8_t period;   /* take a turn every Nth lap; 1 = every lap */
     bool armed;       /* in the rotation at all                  */
+
+    /* THE WORST THING THIS WATCH HAS EVER SEEN, AND WHEN.
+     *
+     * The whole reason the rotation exists is that nobody can sit inside the
+     * right lens at the moment an attack happens. But a watch reports what it
+     * sees DURING its slice, and a deauthentication burst lasts less than one
+     * - so the finding would show on the dial for five seconds, be overwritten
+     * at the next visit, and be gone before anybody looked. The rotation would
+     * have caught the attack and then quietly discarded it.
+     *
+     * So each watch keeps its high-water mark. A later quiet reading never
+     * lowers it; only ptw_acknowledge() clears it. And it is always reported
+     * WITH ITS AGE, because "four minutes ago" and "right now" are different
+     * operational facts and the device has to say which. */
+    ptw_state_t peak_state;
+    uint8_t peak_score;
+    uint64_t peak_us;
 } ptw_watch_t;
 
 typedef struct {
@@ -137,6 +154,14 @@ typedef struct {
     unsigned unknown;   /* not yet looked                         */
     unsigned alarms;    /* at PTW_ALARM                           */
     int worst_index;    /* which watch, or -1                     */
+
+    /* THE WORST THING ANY WATCH HAS SEEN SINCE THE LAST ACKNOWLEDGEMENT, even
+     * if the air has gone quiet since - see ptw_watch_t::peak_state. -1 when
+     * nothing has ever been raised. */
+    int latched_index;
+    ptw_state_t latched_state;
+    uint32_t latched_age_s;
+
     const char *headline;
 } ptw_summary_t;
 
@@ -210,6 +235,11 @@ bool ptw_set_period(ptw_state_st *s, unsigned i, uint8_t period);
 uint32_t ptw_lap_ms(const ptw_state_st *s);
 
 void ptw_summarise(const ptw_state_st *s, uint64_t now_us, ptw_summary_t *out);
+
+/* Clear every latched finding. The operator saying "I have seen it" - the only
+ * thing that clears a high-water mark, because time passing is not the same as
+ * somebody having looked. */
+void ptw_acknowledge(ptw_state_st *s);
 
 const char *ptw_state_name(ptw_state_t st);
 

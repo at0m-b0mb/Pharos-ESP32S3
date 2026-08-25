@@ -392,6 +392,8 @@ int main(void)
     test_survey();
     test_ring();
     test_motion();
+    test_roster();
+    test_wps();
     test_census();
     test_twin();
     test_report();

@@ -647,6 +647,7 @@ static bool k_system_expand(unsigned row, unsigned sub,
 
 static const pharos_lens_t k_system = {
     .id = "sys.audit",
+    .purpose = "battery and settings",
     .name = "System",
     .summary = "Battery, region, and proof the transmit fence is clean",
     .glyph = "gear",

@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "pharos_dot11.h"
+#include "pharos_wps.h"
 #include "pharos_lens.h"
 #include "pharos_region.h"
 
@@ -31,6 +32,21 @@
 #include "host/ble_hs.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+
+/* WHICH ACCESS POINTS HAVE ALREADY ANNOUNCED THEIR MODEL, this capture.
+ *
+ * Reset when the receiver starts, and that is the whole point. It began life
+ * as a static inside the beacon handler, which made it permanent for the
+ * lifetime of the boot - so the watchtower's earlier lenses filled all
+ * twenty-four slots within seconds, and Roster, which starts later in the
+ * rotation and is the only lens that WANTS these events, never received a
+ * single one. The models were being parsed correctly and thrown away before
+ * anything could ask for them.
+ *
+ * Each lens session gets its own bus, so each deserves its own announcement. */
+static uint8_t s_wps_seen[24][6];
+static uint8_t s_wps_n;
+
 #endif
 
 static const char *TAG = "radio";
@@ -238,6 +254,47 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             }
         }
         if (has_fixed) {
+            /* THE MODEL NUMBER, WHICH THE ACCESS POINT VOLUNTEERS.
+             *
+             * Emitted ONCE per BSSID. Beacons arrive about ten times a second
+             * per access point and a model never changes, so re-announcing it
+             * would spend real ring-buffer capacity repeating itself - and the
+             * ring matters most exactly when the air is busy. The seen-set is
+             * small and simply stops growing when full: missing a late
+             * newcomer's model is a lost nicety, while an unbounded table in a
+             * hot path is a fault. */
+            bool already = false;
+            for (uint8_t i = 0; i < s_wps_n; i++) {
+                if (memcmp(s_wps_seen[i], ev.u.dot11.a3, 6) == 0) {
+                    already = true;
+                    break;
+                }
+            }
+            if (!already && s_wps_n < 24u) {
+                pwps_info_t wi;
+                if (pwps_parse(body + 12u, (uint16_t)(blen - 12u), &wi) &&
+                    wi.present) {
+                    memcpy(s_wps_seen[s_wps_n++], ev.u.dot11.a3, 6);
+                    char model[32];
+                    const char *m = pwps_model(&wi, model, sizeof(model));
+                    if ((m && m[0]) || wi.manufacturer[0] ||
+                        pwps_pin_exposed(&wi)) {
+                        pharos_event_t we;
+                        memset(&we, 0, sizeof(we));
+                        we.t_us = ev.t_us;
+                        we.type = PHAROS_EV_WPS;
+                        we.src = ev.src;
+                        memcpy(we.u.wps.bssid, ev.u.dot11.a3, 6);
+                        snprintf(we.u.wps.vendor, sizeof(we.u.wps.vendor),
+                                 "%.23s", wi.manufacturer);
+                        snprintf(we.u.wps.model, sizeof(we.u.wps.model),
+                                 "%.31s", (m && m[0]) ? m : "");
+                        we.u.wps.pin_exposed = pwps_pin_exposed(&wi);
+                        pharos_bus_push(s.bus, &we);
+                    }
+                }
+            }
+
             /* PWNAGOTCHI. A beacon with no SSID and information elements in
              * the 222/224-226 range is the "whisper" advertisement a
              * Pwnagotchi sends to find its peers - a real protocol riding on
@@ -309,6 +366,11 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
      * handshakes. No nonce, MIC or key material is copied; only which message
      * it was, and whether message 1 carried a PMKID. */
     if (ev.u.dot11.type == PHAROS_FT_DATA) {
+        /* The envelope's size - see pharos_ev_dot11_t::frame_len. Clamped
+         * rather than truncated: a frame longer than this is still "large",
+         * and wrapping the value would make the biggest frames look tiny. */
+        ev.u.dot11.frame_len = (len > 0xFFFF) ? 0xFFFFu : (uint16_t)len;
+
         pharos_eapol_t eap;
         if (pharos_dot11_eapol(payload, (size_t)len, &eap)) {
             ev.u.dot11.eapol = eap.msg;
@@ -379,6 +441,9 @@ static void hop_task(void *arg)
 
 bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
 {
+    /* A new capture, so every access point gets to introduce itself again -
+     * see the note on s_wps_seen. */
+    s_wps_n = 0;
     /* Capability gate: no lens may receive without declaring CAP_WIFI_RX,
      * and no lens may hop without CAP_WIFI_CHAN. There is no TX bit to hold. */
     const pharos_caps_t caps = pharos_lens_active_caps();
@@ -472,6 +537,9 @@ void pharos_radio_rx_stop(void)
 
 bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
 {
+    /* A new capture, so every access point gets to introduce itself again -
+     * see the note on s_wps_seen. */
+    s_wps_n = 0;
     if (!(pharos_lens_active_caps() & PHAROS_CAP_WIFI_RX)) return false;
     if (!plan || !bus) return false;
     memset(&s, 0, sizeof(s));

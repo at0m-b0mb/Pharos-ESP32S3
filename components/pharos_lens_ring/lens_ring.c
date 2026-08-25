@@ -228,6 +228,7 @@ static bool k_ring_expand(unsigned row, unsigned sub,
 
 static const pharos_lens_t k_ring = {
     .id = "sys.ring",
+    .purpose = "what the ring watches",
     .name = "Ring",
     .summary = "Choose which watches the home screen carries, and how often",
     .glyph = "gear",

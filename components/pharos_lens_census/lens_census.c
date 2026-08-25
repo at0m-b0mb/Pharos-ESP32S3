@@ -328,13 +328,41 @@ static bool k_census_display(struct pharos_lens_display *o)
     if (!s_lock || xSemaphoreTake(s_lock, 0) != pdTRUE) {
         return false;
     }
-    unsigned worst = 0, n = s_n_aps;
+    /* THE WORST GRADE, AND THE COMPARISON THAT WAS THE WRONG WAY ROUND.
+     *
+     * pc_grade_t counts UPWARD to better: UNGRADED, F, E, D, C, B, A, A+. This
+     * loop started at A_PLUS - the maximum - and looked for a grade GREATER
+     * than it, which nothing can be. It therefore never fired, `worst` stayed
+     * at zero, and the headline reported whichever access point happened to
+     * land at index 0 while the line under it said "worst of N".
+     *
+     * That is the worst class of bug this project can have: not a crash, not a
+     * blank screen, but a confident wrong answer that looks exactly like a
+     * right one. A room containing an open network would show a B because the
+     * first AP heard happened to be a B.
+     *
+     * UNGRADED is skipped rather than treated as the worst: "not enough
+     * observation to say anything" is not a bad grade, and letting it win
+     * would report every room as unassessable the moment a new AP appeared. */
+    unsigned n = s_n_aps;
+    bool have_graded = false;
     pc_grade_t worst_g = PC_GRADE_A_PLUS;
+    unsigned worst = 0;
     for (unsigned i = 0; i < s_n_aps; i++) {
-        if (s_grades[i].grade > worst_g) { worst_g = s_grades[i].grade; worst = i; }
+        const pc_grade_t g = s_grades[i].grade;
+        if (g == PC_GRADE_UNGRADED) {
+            continue;
+        }
+        if (!have_graded || g < worst_g) {
+            have_graded = true;
+            worst_g = g;
+            worst = i;
+        }
     }
-    const pc_verdict_t v = n ? s_grades[worst] : (pc_verdict_t){ 0 };
+    const pc_verdict_t v = have_graded ? s_grades[worst] : (pc_verdict_t){ 0 };
+    const unsigned n_graded = have_graded ? n : 0u;
     xSemaphoreGive(s_lock);
+    n = n_graded;
 
     if (!n) {
         snprintf(o->big, sizeof(o->big), "--");
@@ -368,7 +396,21 @@ static bool k_census_display(struct pharos_lens_display *o)
      * rather than a weak configuration - and even that is ELEVATED, not an
      * attack in progress. */
     o->has_alert = true;
-    o->alert = (v.grade <= PC_GRADE_F && (v.caps_applied & PC_CAP_OPEN)) ? 2u : 1u;
+    if (v.caps_applied & PC_CAP_OPEN) {
+        /* A network with no key at all is a live exposure rather than a weak
+         * configuration - and still not an attack in progress. */
+        o->alert = 2u;
+    } else if (v.caps_applied) {
+        o->alert = 1u;
+    } else {
+        /* NOTHING ACTIONABLE FOUND IS NOT "WORTH KNOWING".
+         *
+         * This was pinned at 1 unconditionally, so Census reported "worth a
+         * look" about a room whose networks were all fine - and about a room
+         * it had not finished grading. A watch with nothing to say must say
+         * nothing, or the ring's amber stops meaning anything. */
+        o->alert = 0u;
+    }
 
     /* FEED THE SESSION SURVEY.
      *
@@ -723,6 +765,7 @@ static bool k_census_expand(unsigned row, unsigned sub,
 
 static const pharos_lens_t k_census = {
     .id = "wifi.census",
+    .purpose = "network security",
     .name = "Census",
     .summary = "Grades every nearby network on what it takes to break in",
     .glyph = "list",
@@ -840,6 +883,7 @@ static bool k_twin_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_twin = {
     .id = "wifi.twin",
+    .purpose = "evil twin APs",
     .name = "Twin",
     .summary = "Finds the radio wearing a name that belongs to somebody else",
     .glyph = "masks",

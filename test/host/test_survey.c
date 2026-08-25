@@ -8,6 +8,7 @@
  */
 #include <string.h>
 
+#include "pharos_census.h"
 #include "pharos_survey.h"
 #include "test_support.h"
 
@@ -56,18 +57,36 @@ static void test_survey_keeps_the_worst_view(void)
     uint8_t a[6];
     mac(a, 1);
 
-    psv_note_network(&s, a, 5, PSV_NET_OPEN, T0);
-    psv_note_network(&s, a, 1, 0, T0 + 1000000ull); /* a rosier later look */
+    /* THIS TEST USED TO ENCODE THE BUG.
+     *
+     * It passed 5 then 1, called the 1 "a rosier later look", and asserted the
+     * engine kept the 5. But these are pc_grade_t values, which count UPWARD to
+     * better - 1 is F and 5 is B - so the "rosier" look was the network getting
+     * WORSE, and the assertion was that the engine discards bad news.
+     *
+     * The engine agreed with the test, the test agreed with the engine, and
+     * between them they shipped a Survey page that displayed every grade
+     * inverted: an open network as a green A. A test written from the same
+     * misunderstanding as the code cannot catch it, which is the whole reason
+     * this now spells the grades out by name. */
+    psv_note_network(&s, a, PC_GRADE_B, PSV_NET_OPEN, T0);
+    psv_note_network(&s, a, PC_GRADE_A_PLUS, 0, T0 + 1000000ull);
 
     psv_report_t r;
     psv_summarise(&s, T0 + MIN, &r);
     CHECK_EQ(r.networks, 1);
-    CHECK_EQ(r.worst_grade, 5);
+    CHECK(r.worst_grade == PC_GRADE_B,
+          "a genuinely rosier later look does not raise the grade");
     CHECK_EQ(r.open, 1);
+
+    /* And hearing something WORSE does lower it - new evidence, not a mood. */
+    psv_note_network(&s, a, PC_GRADE_F, 0, T0 + 1500000ull);
+    psv_summarise(&s, T0 + MIN, &r);
+    CHECK(r.worst_grade == PC_GRADE_F, "and worse news is taken");
 
     /* And flags accumulate rather than replace: two sweeps that each saw one
      * fault should end with both faults known. */
-    psv_note_network(&s, a, 5, PSV_NET_WPS, T0 + 2000000ull);
+    psv_note_network(&s, a, PC_GRADE_F, PSV_NET_WPS, T0 + 2000000ull);
     psv_summarise(&s, T0 + MIN, &r);
     CHECK_EQ(r.open, 1);
     CHECK_EQ(r.wps, 1);
@@ -312,8 +331,81 @@ static void test_survey_quantifiers_are_honest(void)
     }
 }
 
+/* THE GRADE ORDERING, WHICH WAS EXACTLY BACKWARDS.
+ *
+ * pc_grade_t counts UPWARD to better: UNGRADED, F, E, D, C, B, A, A+. The
+ * survey engine kept the LARGER value under a comment promising it kept the
+ * worst, so "worst_grade" was the best grade in the room - and the Survey page
+ * then rendered it through a hand-rolled ladder with the comparisons the wrong
+ * way round too. An open network displayed as a green A; a hardened one as a
+ * red F. On the one screen whose entire job is naming the weakest network.
+ *
+ * Two independent spellings of one rule, both wrong, cancelling into something
+ * that looked plausible. */
+static void test_survey_worst_grade_is_the_worst(void)
+{
+    banner("survey: the worst grade is the WORST one, not the best");
+    psv_t s;
+    psv_reset(&s, 0);
+
+    const uint8_t a[6] = { 0, 0, 0, 0, 0, 1 };
+    const uint8_t b[6] = { 0, 0, 0, 0, 0, 2 };
+    const uint8_t c[6] = { 0, 0, 0, 0, 0, 3 };
+
+    psv_note_network(&s, a, PC_GRADE_A_PLUS, 0, 1000);
+    psv_note_network(&s, b, PC_GRADE_F, 0, 1000);
+    psv_note_network(&s, c, PC_GRADE_B, 0, 1000);
+
+    psv_report_t v;
+    psv_summarise(&s, 2000, &v);
+    CHECK_EQ(v.networks, 3);
+    CHECK(v.worst_grade == PC_GRADE_F,
+          "F is worse than B and A+ (got %u)", (unsigned)v.worst_grade);
+
+    /* And a single network cannot talk its way UP by being heard again more
+     * favourably - the whole point of keeping the worst. */
+    psv_t one;
+    psv_reset(&one, 0);
+    psv_note_network(&one, a, PC_GRADE_D, 0, 1000);
+    psv_note_network(&one, a, PC_GRADE_A_PLUS, 0, 1100);
+    psv_summarise(&one, 2000, &v);
+    CHECK_EQ(v.networks, 1);
+    CHECK(v.worst_grade == PC_GRADE_D, "it keeps the worse of the two");
+
+    /* But it CAN be revised downward, because hearing something worse is new
+     * evidence rather than a better mood. */
+    psv_note_network(&one, a, PC_GRADE_F, 0, 1200);
+    psv_summarise(&one, 2000, &v);
+    CHECK(v.worst_grade == PC_GRADE_F, "and drops when something worse is heard");
+
+    /* UNGRADED is "not enough heard", not "terrible". It must never win, or a
+     * single newly-appeared access point would report the whole estate as
+     * unassessable. */
+    psv_t u;
+    psv_reset(&u, 0);
+    psv_note_network(&u, a, PC_GRADE_B, 0, 1000);
+    psv_note_network(&u, b, PC_GRADE_UNGRADED, 0, 1000);
+    psv_summarise(&u, 2000, &v);
+    CHECK(v.worst_grade == PC_GRADE_B, "ungraded does not count as worst");
+
+    /* Nothing graded at all reports UNGRADED rather than a letter. */
+    psv_t none;
+    psv_reset(&none, 0);
+    psv_note_network(&none, a, PC_GRADE_UNGRADED, 0, 1000);
+    psv_summarise(&none, 2000, &v);
+    CHECK(v.worst_grade == PC_GRADE_UNGRADED, "and nothing graded says so");
+
+    /* THE RENDERING, which was the second half of the bug. Every grade must
+     * come back as itself. */
+    CHECK(strcmp(pc_grade_name(PC_GRADE_F), "F") == 0, "F prints as F");
+    CHECK(strcmp(pc_grade_name(PC_GRADE_A_PLUS), "A+") == 0, "A+ prints as A+");
+    CHECK(strcmp(pc_grade_name(PC_GRADE_F), pc_grade_name(PC_GRADE_A_PLUS)) != 0,
+          "and the two ends of the scale are not the same letter");
+}
+
 void test_survey(void)
 {
+    test_survey_worst_grade_is_the_worst();
     test_survey_quantifiers_are_honest();
     test_survey_counts_addresses_once();
     test_survey_keeps_the_worst_view();

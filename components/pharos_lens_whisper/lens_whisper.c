@@ -294,6 +294,7 @@ static bool k_whisper_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_whisper = {
     .id = "mic.whisper",
+    .purpose = "ultrasonic beacons",
     .name = "Whisper",
     .summary = "Finds inaudible tracking tones. Measures levels, keeps no audio",
     .glyph = "ear",

@@ -1,5 +1,6 @@
 /* Pharos - the Survey. See pharos_survey.h for the rules that keep this from
  * becoming a scare sheet. */
+#include "pharos_census.h"
 #include "pharos_survey.h"
 
 #include <stdio.h>
@@ -32,8 +33,22 @@ void psv_note_network(psv_t *s, const uint8_t bssid[6], uint8_t grade,
             /* Seen before. Take the WORST grade this network has shown and
              * the union of its flags: a network that was briefly heard without
              * its RSN element should not be able to talk its way up by being
-             * heard again more favourably. */
-            if (grade > s->net[i].grade) {
+             * heard again more favourably.
+             *
+             * WORST MEANS SMALLER. `grade` is a pc_grade_t, which counts
+             * UPWARD to better - UNGRADED, F, E, D, C, B, A, A+ - so keeping
+             * the larger value kept the BEST grade under a comment promising
+             * the worst. Everything downstream inherited it: psv_verdict's
+             * "worst_grade" was the best grade in the room, and the Survey
+             * page rendered an open network as a green A and a hardened one
+             * as a red F. Exactly backwards, on the one screen whose whole
+             * job is to say which network is weakest.
+             *
+             * UNGRADED is not a bad grade - it means not enough was heard -
+             * so it never wins. */
+            if (grade != PC_GRADE_UNGRADED &&
+                (s->net[i].grade == PC_GRADE_UNGRADED ||
+                 grade < s->net[i].grade)) {
                 s->net[i].grade = grade;
             }
             s->net[i].flags |= flags;
@@ -123,7 +138,11 @@ void psv_summarise(const psv_t *s, uint64_t now_us, psv_report_t *out)
         if (f & PSV_NET_WEAK)   out->weak++;
         if (f & PSV_NET_HIDDEN) out->hidden++;
         if (f & PSV_NET_MODERN) out->modern++;
-        if (s->net[i].grade > out->worst_grade) {
+        /* Same ordering, same reason: the worst is the SMALLEST graded value,
+         * and UNGRADED never counts as one. */
+        if (s->net[i].grade != PC_GRADE_UNGRADED &&
+            (out->worst_grade == PC_GRADE_UNGRADED ||
+             s->net[i].grade < out->worst_grade)) {
             out->worst_grade = s->net[i].grade;
         }
     }

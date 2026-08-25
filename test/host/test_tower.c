@@ -550,8 +550,86 @@ static void test_tower_disarm_the_active_watch(void)
     CHECK(s.w[next].armed, "onto something that is actually armed");
 }
 
+/* THE FINDING THAT OUTLIVES THE SLICE.
+ *
+ * This is what the rotation is FOR. A deauthentication burst lasts less than
+ * one five-second slice, so a watch that reported only its live state would
+ * show the attack for five seconds, overwrite it on the next visit, and lose
+ * it before anybody looked - having caught it and thrown it away. */
+static void test_tower_latches_what_it_caught(void)
+{
+    banner("tower: a finding survives the air going quiet again");
+    ptw_state_st s;
+    arm_six(&s);
+
+    ptw_summary_t sum;
+    ptw_summarise(&s, T0, &sum);
+    CHECK(sum.latched_index == -1, "nothing latched to begin with");
+
+    /* Watch catches a flood during its slice. */
+    ptw_report(&s, "wifi.watch", PTW_ALARM, 88, 88, T0);
+    ptw_summarise(&s, T0, &sum);
+    CHECK(sum.latched_index == ptw_find(&s, "wifi.watch"), "it is latched");
+    CHECK(sum.latched_state == PTW_ALARM, "at the level it reached");
+    CHECK_EQ(sum.latched_age_s, 0);
+
+    /* The air goes quiet, and the watch says so on its next three visits. */
+    ptw_report(&s, "wifi.watch", PTW_QUIET, 2, 60, T0 + 30ull * SEC);
+    ptw_report(&s, "wifi.watch", PTW_QUIET, 0, 60, T0 + 60ull * SEC);
+    ptw_report(&s, "wifi.watch", PTW_QUIET, 1, 60, T0 + 90ull * SEC);
+
+    ptw_summarise(&s, T0 + 240ull * SEC, &sum);
+    CHECK_EQ(sum.alarms, 0);
+    CHECK(sum.worst <= PTW_QUIET, "nothing is happening NOW");
+    CHECK(sum.latched_state == PTW_ALARM, "but it still knows what happened");
+    CHECK_EQ(sum.latched_age_s, 240);
+    CHECK(strcmp(sum.headline, "SOMETHING HAPPENED") == 0,
+          "and the headline distinguishes it from a live alarm");
+
+    /* A live alarm outranks a remembered one - present tense first. */
+    ptw_report(&s, "wifi.karma", PTW_ALARM, 80, 88, T0 + 240ull * SEC);
+    ptw_summarise(&s, T0 + 240ull * SEC, &sum);
+    CHECK(strcmp(sum.headline, "ALERT") == 0, "a live alarm leads");
+
+    /* Only an acknowledgement clears it. Time passing is not somebody having
+     * looked, which is the entire distinction this exists to preserve. */
+    ptw_acknowledge(&s);
+    ptw_summarise(&s, T0 + 240ull * SEC, &sum);
+    CHECK(sum.latched_index == -1, "acknowledged, and cleared");
+    ptw_acknowledge(NULL);
+}
+
+/* A QUIET READING MUST NEVER LOWER THE MARK. */
+static void test_tower_peak_only_rises(void)
+{
+    banner("tower: calm air is not evidence that nothing happened");
+    ptw_state_st s;
+    arm_six(&s);
+
+    ptw_report(&s, "ble.rival", PTW_ELEVATED, 55, 60, T0);
+    ptw_report(&s, "ble.rival", PTW_QUIET, 0, 60, T0 + 10ull * SEC);
+    ptw_summary_t sum;
+    ptw_summarise(&s, T0 + 10ull * SEC, &sum);
+    CHECK(sum.latched_state == PTW_ELEVATED, "the mark holds");
+
+    /* And it rises to meet something worse. */
+    ptw_report(&s, "ble.rival", PTW_ALARM, 90, 90, T0 + 20ull * SEC);
+    ptw_summarise(&s, T0 + 20ull * SEC, &sum);
+    CHECK(sum.latched_state == PTW_ALARM, "and rises when it should");
+
+    /* Below ELEVATED is not worth remembering - a NOTED reading on every
+     * watch would latch the whole ring permanently and mean nothing. */
+    ptw_state_st q;
+    arm_six(&q);
+    ptw_report(&q, "wifi.census", PTW_NOTED, 30, 70, T0);
+    ptw_summarise(&q, T0, &sum);
+    CHECK(sum.latched_index == -1, "a merely noted reading does not latch");
+}
+
 void test_tower(void)
 {
+    test_tower_latches_what_it_caught();
+    test_tower_peak_only_rises();
     test_tower_arming_is_customisable();
     test_tower_cannot_empty_itself();
     test_tower_period_is_editable();

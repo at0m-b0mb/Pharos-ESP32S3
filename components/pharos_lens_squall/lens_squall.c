@@ -225,6 +225,7 @@ static bool k_squall_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_squall = {
     .id = "wifi.squall",
+    .purpose = "jamming and noise",
     .name = "Squall",
     .summary = "Busy, broken, or jammed - tells the three apart",
     .glyph = "storm",

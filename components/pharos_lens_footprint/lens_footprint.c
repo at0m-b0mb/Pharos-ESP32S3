@@ -320,6 +320,18 @@ static bool k_footprint_display(struct pharos_lens_display *o)
     o->score = r.camped_score;
     o->ceiling = c.ceiling ? c.ceiling : 100;
     o->has_score = true;
+
+    /* THIS SCORE IS ABOUT YOU, NOT ABOUT THE ROOM.
+     *
+     * BLARING means whatever tooling is being run here is highly visible to a
+     * defender - which is a useful thing for its operator to know and is not a
+     * threat to the person holding this. Left to the score, an 88 would put
+     * the home ring at ALARM because the operator's own test was working.
+     *
+     * It caps at "worth knowing", and only says that much when somebody is
+     * actually running something loud enough to be heard. */
+    o->has_alert = true;
+    o->alert = (!drill && frames >= 20u && r.camped_score >= 60u) ? 1u : 0u;
     /* ONLY when it really is one. This lens measures the room by default now,
      * and the banner has to mean something. */
     o->simulated = drill;
@@ -375,6 +387,7 @@ static bool k_footprint_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_footprint = {
     .id = "train.footprint",
+    .purpose = "how loud you are",
     .name = "Footprint",
     .summary = "How loud is what you are running? The red team's mirror",
     .glyph = "eye",

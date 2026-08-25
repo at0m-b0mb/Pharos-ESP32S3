@@ -334,6 +334,7 @@ static bool k_sentinel_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_sentinel = {
     .id = "wifi.sentinel",
+    .purpose = "changes since baseline",
     .name = "Sentinel",
     .summary = "What changed since you last swept this site",
     .glyph = "history",

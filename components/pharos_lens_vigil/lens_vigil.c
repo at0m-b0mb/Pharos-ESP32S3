@@ -27,6 +27,7 @@
 #include "pharos_bus.h"
 #include "pharos_dot11.h"
 #include "pharos_lens.h"
+#include "pharos_sense.h"
 #include "pharos_ui.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
@@ -42,6 +43,11 @@ static pharos_bus_t s_bus;
 
 EXT_RAM_BSS_ATTR static pv_state_t s_engine;
 static pv_verdict_t s_verdict;
+
+/* Steps counted when this lens started looking. Everything Vigil concludes
+ * about "travelling with you" is measured from here. */
+static uint32_t s_step_mark;
+static bool s_motion_gated; /* the last verdict was held back by stillness */
 static SemaphoreHandle_t s_lock;
 static pv_band_t s_last_band;
 
@@ -57,6 +63,8 @@ static bool vigil_mount(void)
     pv_reset(&s_engine);
     memset(&s_verdict, 0, sizeof(s_verdict));
     s_last_band = PV_BAND_CLEAR;
+    s_step_mark = pharos_sense_steps();
+    s_motion_gated = false;
     s_sig_accum = 0;
     s_locale_ms = 0;
     if (!s_lock) {
@@ -144,6 +152,42 @@ static void vigil_tick(uint32_t dt_ms)
     }
 
     pv_evaluate(&s_engine, now, &s_verdict);
+
+    /* THE MOTION GATE.
+     *
+     * "It is travelling with you" is only a finding if YOU travelled. Vigil
+     * infers that from Wi-Fi locale turnover, which is a good signal and a
+     * fallible one in both directions: access points switch off at night and
+     * the locale turns over while you sat still, and a car park has no Wi-Fi
+     * to turn over at all.
+     *
+     * The accelerometer measures the same thing directly and fails in
+     * completely different circumstances, which is the whole reason to have
+     * it. So a FOLLOWING verdict now needs corroboration: if the person
+     * holding this has not actually gone anywhere, the conclusion is refused
+     * rather than scored down. A tracker that has been beside you the whole
+     * time you sat at one table has not followed you anywhere, however many
+     * neighbouring routers rebooted.
+     *
+     * pharos_sense_travelled() returns true when there is no IMU, so a board
+     * without one behaves exactly as it did before this existed. */
+    s_motion_gated = false;
+    if (s_verdict.band >= PV_BAND_FOLLOWING &&
+        !pharos_sense_travelled(s_step_mark)) {
+        s_verdict.band = PV_BAND_PERSISTENT;
+        /* The ceiling, not the score, because this is an observation-quality
+         * limit of exactly the kind the rest of the project already models:
+         * we cannot see far enough to say the stronger thing. */
+        if (s_verdict.ceiling > 55u) {
+            s_verdict.ceiling = 55u;
+        }
+        if (s_verdict.score > s_verdict.ceiling) {
+            s_verdict.score = s_verdict.ceiling;
+        }
+        s_verdict.headline = "seen repeatedly - but you have not moved";
+        s_motion_gated = true;
+    }
+
     if (s_verdict.band != s_last_band) {
         ESP_LOGI(TAG, "%s score=%u/%u tags=%u following=%u locales=%u \"%s\"",
                  pv_band_name(s_verdict.band), s_verdict.score, s_verdict.ceiling,
@@ -270,6 +314,41 @@ static bool k_vigil_display(struct pharos_lens_display *o)
  * lets somebody search a bag. */
 static bool k_vigil_row(unsigned index, struct pharos_lens_row *out)
 {
+    /* Motion first: it is the thing that decides whether anything below it
+     * can be called following. Showing the verdict without showing this would
+     * leave somebody unable to tell a quiet room from a refused conclusion. */
+    if (index == 0) {
+        pm_verdict_t mv;
+        pharos_sense_motion(&mv);
+        snprintf(out->left, sizeof(out->left), "you are");
+        if (!mv.present) {
+            snprintf(out->right, sizeof(out->right), "unknown");
+            out->tone = PHAROS_TONE_DIM;
+        } else {
+            snprintf(out->right, sizeof(out->right), "%.11s",
+                     pm_state_name(mv.state));
+            out->tone = (mv.state == PM_STILL) ? PHAROS_TONE_WARN
+                                               : PHAROS_TONE_GOOD;
+        }
+        return true;
+    }
+    if (index == 1) {
+        snprintf(out->left, sizeof(out->left), "steps since opened");
+        const uint32_t now_steps = pharos_sense_steps();
+        snprintf(out->right, sizeof(out->right), "%u",
+                 (unsigned)(now_steps > s_step_mark ? now_steps - s_step_mark : 0u));
+        out->tone = s_motion_gated ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
+        return true;
+    }
+    if (index == 2 && s_motion_gated) {
+        /* Say the refusal out loud. A capped verdict that does not explain
+         * itself is indistinguishable from a broken one. */
+        snprintf(out->left, sizeof(out->left), "held back: you have not");
+        snprintf(out->right, sizeof(out->right), "moved");
+        out->tone = PHAROS_TONE_WARN;
+        return true;
+    }
+    index -= s_motion_gated ? 3u : 2u;
     pv_verdict_t v;
     if (!pharos_lens_vigil_snapshot(&v)) {
         return false;
@@ -334,6 +413,7 @@ static bool k_vigil_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_vigil = {
     .id = "ble.vigil",
+    .purpose = "trackers following you",
     .name = "Vigil",
     .summary = "Is an item tracker travelling with you?",
     .glyph = "eye",

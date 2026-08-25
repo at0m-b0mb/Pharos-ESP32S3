@@ -32,6 +32,7 @@
 #include "pharos_bus.h"
 #include "pharos_dial.h"
 #include "pharos_hud.h"
+#include "pharos_dial.h"
 #include "pharos_theme.h"
 #include "pharos_motion.h"
 #include "pharos_survey.h"
@@ -325,6 +326,7 @@ static void tower_arm_all(void)
         { "wifi.twin",    1, true  }, /* evil twin / rogue AP              */
         { "wifi.ward",    1, false }, /* one network, guarded specifically */
         { "rf.rival",     1, true  }, /* Flippers and pentest hardware     */
+        { "net.roster",   1, true  }, /* every device here, and what it leaks */
 
         /* Standing facts: every other lap is plenty. */
         { "wifi.census",  2, true  }, /* how safe the neighbours are       */
@@ -338,6 +340,10 @@ static void tower_arm_all(void)
          * something that needs catching in the act. */
         { "wifi.sentinel", 3, false },
         { "wifi.spectrum", 3, false },
+        /* Off by default: it grades how loud YOUR OWN tooling is, which is a
+         * thing somebody switches on deliberately while testing, not a watch
+         * that wants a slice of every lap. */
+        { "train.footprint", 4, false },
     };
     const unsigned want = (unsigned)(sizeof(k_ring) / sizeof(k_ring[0]));
 
@@ -370,7 +376,9 @@ static void tower_arm_all(void)
          * at the top and bottom of the dial have less than that - so the long
          * names ran into their neighbours. Staggered radii (see home_layout)
          * do most of the work; this does the rest. */
-        char up[8];
+        /* Nine, not seven. Fewer labels are drawn now, so there is room for
+         * a name that is actually a name - SENTINEL rather than SENTINE. */
+        char up[10];
         unsigned k = 0;
         for (; l->name[k] && k < sizeof(up) - 1; k++) {
             const char c = l->name[k];
@@ -384,9 +392,17 @@ static void tower_arm_all(void)
             ptw_set_armed(&s_tower, (unsigned)slot, false);
         }
     }
-    ESP_LOGI(TAG, "watchtower: %u watches armed, %ums each (%us a lap)",
-             s_tower.n, (unsigned)s_tower.dwell_ms,
-             (unsigned)((s_tower.n * s_tower.dwell_ms) / 1000u));
+    /* The ARMED count, not the registered one. This said "16 watches armed"
+     * while eleven were, which is how a default that was not being applied
+     * looked exactly like one that was. */
+    unsigned on = 0;
+    for (unsigned i = 0; i < s_tower.n; i++) {
+        if (s_tower.w[i].armed) {
+            on++;
+        }
+    }
+    ESP_LOGI(TAG, "watchtower: %u of %u watches armed by default, %ums a lap",
+             on, s_tower.n, (unsigned)ptw_lap_ms(&s_tower));
 }
 
 /* Open the watch a dot names.
@@ -427,7 +443,13 @@ static void home_open(unsigned i)
 
 static void paint_home(void)
 {
-    if (!pharos_bsp_display_lock(30)) {
+    /* Sixty, not thirty. The LVGL task holds this while it composites, and a
+     * full ring repaint under radio load takes longer than 30 ms - so the
+     * paint that wanted the lock gave up, the vendor adapter logged an error,
+     * and the face dropped the frame. Waiting a little longer costs this loop
+     * nothing it was doing anything else with, and the miss counter below
+     * still reports it if the wait was not enough. */
+    if (!pharos_bsp_display_lock(60)) {
         s_paint_misses++;
         return;
     }
@@ -475,8 +497,78 @@ static void paint_home(void)
             }
         }
     }
+
+    /* WHICH DOTS GET A NAME.
+     *
+     * The dial holds twelve labels (pd_ring_capacity), and fourteen watches
+     * were being drawn anyway - the two that did not fit went through the
+     * headline. Rather than shrink the text until nothing is readable, the
+     * ring names what matters and leaves the rest as dots:
+     *
+     *   1. whichever watch holds the radio, so "what am I listening to" never
+     *      needs a tap;
+     *   2. anything with something to report, because a coloured dot tells you
+     *      something is wrong and the name tells you what;
+     *   3. whatever the side controls have selected, so stepping round the
+     *      ring names each one as you reach it.
+     *
+     * In a quiet room that is one or two labels and the dial is clean. When
+     * something happens, the relevant watches name themselves. */
+    {
+        /* Sized by the names actually on the ring, not by the longest name in
+         * the project. Assuming every watch is nine characters wide - which
+         * only FOOTPRINT is - cost one label at eleven armed, and an unnamed
+         * dot among named ones reads as a fault rather than a decision. */
+        unsigned widest = 0;
+        for (unsigned d = 0; d < s_home_map_n; d++) {
+            const char *nm = s_tower.w[s_home_map[d]].name;
+            unsigned k = 0;
+            while (nm[k]) {
+                k++;
+            }
+            if (k > widest) {
+                widest = k;
+            }
+        }
+        const int16_t lw = (int16_t)((widest ? widest : 7u) * 76u / 10u + 4u);
+        /* Handed to the HUD so it sizes the ring against the same width this
+         * capacity was computed from - see pharos_hud_home::label_w. */
+        h.label_w = lw;
+        const unsigned cap = pd_ring_capacity(lw, 14, 12);
+        unsigned used = 0;
+        if (h.active >= 0 && used < cap) {
+            h.label_on[h.active] = true;
+            used++;
+        }
+        if (s_home_sel < s_home_map_n && !h.label_on[s_home_sel] && used < cap) {
+            h.label_on[s_home_sel] = true;
+            used++;
+        }
+        /* Worst first, so if there are more findings than room the loudest
+         * ones keep their names. */
+        for (unsigned pass = PTW_ALARM; pass >= PTW_NOTED && used < cap; pass--) {
+            for (unsigned d = 0; d < s_home_map_n && used < cap; d++) {
+                if (!h.label_on[d] && h.state[d] == pass) {
+                    h.label_on[d] = true;
+                    used++;
+                }
+            }
+        }
+        /* If everything is quiet there is room to spare, so name as many as
+         * will fit rather than leaving a dial of anonymous dots. */
+        for (unsigned d = 0; d < s_home_map_n && used < cap; d++) {
+            if (!h.label_on[d]) {
+                h.label_on[d] = true;
+                used++;
+            }
+        }
+    }
+
     h.headline = sum.headline;
-    h.worst_state = (uint8_t)sum.worst;
+    /* A room that is quiet NOW but was attacked ten minutes ago must not read
+     * as green. The latched state colours the face; the sub-line says when. */
+    h.worst_state = (uint8_t)((sum.latched_state > sum.worst) ? sum.latched_state
+                                                             : sum.worst);
 
     /* PAUSED IS NOT QUIET.
      *
@@ -505,6 +597,17 @@ static void paint_home(void)
      * And when there is nothing to report it carries the "tap the middle"
      * hint, which used to be a 225 px line of its own drawn straight through
      * the label ring. */
+    /* THE SUB-LINE TEACHES THE DIAL ITS OWN VOCABULARY.
+     *
+     * The names on the rim are evocative and opaque - KARMA and SQUALL tell a
+     * person nothing about what they will see if they press one. Rather than
+     * rename fourteen lenses into something duller, the centre says what the
+     * watch currently holding the radio is FOR, in plain words. The rotation
+     * then walks the operator through the whole vocabulary on its own, one
+     * watch at a time, while it works.
+     *
+     * A finding outranks the lesson: when something is actually up, this line
+     * names the watch that found it instead. */
     static char sub[40];
     if (!s_fence_ok) {
         snprintf(sub, sizeof(sub), "FENCE UNVERIFIED");
@@ -513,8 +616,30 @@ static void paint_home(void)
     } else if (sum.worst_index >= 0 && sum.worst >= PTW_ELEVATED) {
         snprintf(sub, sizeof(sub), "worst: %s",
                  s_tower.w[sum.worst_index].name);
+    } else if (sum.latched_index >= 0) {
+        /* WHAT HAPPENED WHILE NOBODY WAS LOOKING.
+         *
+         * The age is not decoration - it is the difference between "there is
+         * an attack" and "there was one", and somebody walking up to the
+         * device has to be able to tell those apart at a glance. */
+        const uint32_t a = sum.latched_age_s;
+        if (a >= 3600u) {
+            snprintf(sub, sizeof(sub), "%s %uh ago",
+                     s_tower.w[sum.latched_index].name, (unsigned)(a / 3600u));
+        } else if (a >= 60u) {
+            snprintf(sub, sizeof(sub), "%s %um ago",
+                     s_tower.w[sum.latched_index].name, (unsigned)(a / 60u));
+        } else {
+            snprintf(sub, sizeof(sub), "%s %us ago",
+                     s_tower.w[sum.latched_index].name, (unsigned)a);
+        }
     } else {
-        snprintf(sub, sizeof(sub), "%u watches - tap for detail", sum.armed);
+        const pharos_lens_t *live = pharos_lens_active();
+        if (live && live->purpose && live->purpose[0]) {
+            snprintf(sub, sizeof(sub), "%s", live->purpose);
+        } else {
+            snprintf(sub, sizeof(sub), "%u watches - tap one", sum.armed);
+        }
     }
     h.sub = sub;
 
@@ -566,6 +691,16 @@ static void request_apply(void)
     s_req_lens[0] = '\0';
 
     if (lens_switch(id)) {
+        /* CHOOSING A LENS BY HAND STOPS THE ROTATION.
+         *
+         * Same rule as tapping a dot on the ring, and for the same reason:
+         * somebody who asked for Roster did not ask to be moved off it six
+         * seconds later. The console path was missing it, which made `lens`
+         * effectively unusable while the watchtower was running - the tower
+         * simply took the radio back at the next turn, and every attempt to
+         * inspect a lens over USB landed on whatever was next in the rota. */
+        s_tower_on = false;
+        s_tower_pending = NULL;
         s_view = VIEW_LIVE;
         for (unsigned i = 0; i < s_order_n; i++) {
             if (s_order[i] && strcmp(s_order[i]->id, id) == 0) {
@@ -573,7 +708,7 @@ static void request_apply(void)
                 break;
             }
         }
-        ESP_LOGI(TAG, "console started %s", id);
+        ESP_LOGI(TAG, "console started %s (rotation paused)", id);
     } else {
         ESP_LOGW(TAG, "console could not start %s", id);
     }
@@ -696,11 +831,26 @@ static void nav_apply(void)
                 s_home_sel = (s_home_sel + s_home_map_n - 1u) % s_home_map_n;
             }
             return;
-        case PHAROS_NAV_SELECT:
+        case PHAROS_NAV_SELECT: {
+            /* A press in the middle of the ring, with something remembered,
+             * means "I have seen it". Only a person can clear a latched
+             * finding - time passing is not somebody having looked. */
+            ptw_summary_t ack;
+            ptw_summarise(&s_tower, (uint64_t)esp_timer_get_time(), &ack);
+            if (ack.latched_index >= 0 && ack.worst < PTW_ELEVATED) {
+                ptw_acknowledge(&s_tower);
+                ESP_LOGI(TAG, "watchtower: findings acknowledged");
+                if (pharos_bsp_display_lock(30)) {
+                    pharos_hud_toast("acknowledged");
+                    pharos_bsp_display_unlock();
+                }
+                return;
+            }
             if (s_home_sel < s_home_map_n) {
                 home_open(s_home_map[s_home_sel]);
             }
             return;
+        }
         case PHAROS_NAV_DETAIL:
             s_view = VIEW_BROWSE;
             paint_browse();
@@ -1142,7 +1292,14 @@ bool pharos_survey_read(struct psv_report *out)
  * deliberate trade: reordering the ring in a future firmware resets everyone's
  * choice, and that is better than a stale id-keyed map silently arming the
  * wrong watches. The version byte makes that reset explicit. */
-#define RING_NVS_VERSION 1u
+/* Bumped when the ring's SHAPE changes.
+ *
+ * The saved choice is keyed by position, so adding a watch shifts every
+ * position after it. A version bump discards the old map rather than applying
+ * it to the wrong watches - which is a deliberate, visible reset of somebody's
+ * preferences, and far better than silently disarming the two newest sensors,
+ * which is exactly what happened when Roster and Footprint were added. */
+#define RING_NVS_VERSION 2u
 
 static void ring_save(void)
 {
@@ -1175,7 +1332,11 @@ static void ring_load(void)
     }
     uint8_t ver = 0, n = 0;
     uint16_t armed = 0;
-    if (nvs_get_u8(h, "ring_ver", &ver) != ESP_OK || ver != RING_NVS_VERSION ||
+    const esp_err_t vr = nvs_get_u8(h, "ring_ver", &ver);
+    ESP_LOGI(TAG, "ring: stored version %u (want %u), %s", (unsigned)ver,
+             (unsigned)RING_NVS_VERSION,
+             (vr == ESP_OK) ? "present" : "absent");
+    if (vr != ESP_OK || ver != RING_NVS_VERSION ||
         nvs_get_u8(h, "ring_n", &n) != ESP_OK || n != (uint8_t)s_tower.n ||
         nvs_get_u16(h, "ring_on", &armed) != ESP_OK) {
         /* A ring of a different shape than the one saved: the positions no
@@ -1258,6 +1419,21 @@ void pharos_ui_ring_set_running(bool on)
     ESP_LOGI(TAG, "watchtower %s", on ? "running" : "paused");
 }
 
+void pharos_ui_ring_reset(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, "ring_ver");
+        nvs_erase_key(h, "ring_n");
+        nvs_erase_key(h, "ring_on");
+        nvs_erase_key(h, "ring_per");
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    tower_arm_all();
+    ESP_LOGI(TAG, "ring: reset to defaults");
+}
+
 void pharos_ui_tower_dump(char *buf, size_t cap)
 {
     if (!buf || !cap) {
@@ -1281,11 +1457,32 @@ void pharos_ui_tower_dump(char *buf, size_t cap)
         const ptw_freshness_t f = ptw_freshness(&s_tower, i, now);
         const uint32_t age_s =
             w->seen_us ? (uint32_t)((now - w->seen_us) / 1000000ull) : 0u;
+        /* A disarmed watch reads "off" rather than "not yet". They looked
+         * identical in this dump - both never-run, both expired, both zero
+         * visits - and telling a watch that is switched off from one that has
+         * simply not had its turn yet is the first thing anybody asks of it. */
+        if (!w->armed) {
+            k += (size_t)snprintf(buf + k, (k < cap) ? cap - k : 0,
+                                  "   %-11s off\n", w->name);
+            continue;
+        }
+        /* And what it CAUGHT, which a live reading cannot show - see
+         * ptw_watch_t::peak_state. */
+        char latched[40];
+        latched[0] = '\0';
+        if (w->peak_state >= PTW_ELEVATED) {
+            const uint32_t pa = (now > w->peak_us)
+                                    ? (uint32_t)((now - w->peak_us) / 1000000ull)
+                                    : 0u;
+            snprintf(latched, sizeof(latched), "  [caught %s %us ago]",
+                     ptw_state_name(w->peak_state), (unsigned)pa);
+        }
         k += (size_t)snprintf(buf + k, (k < cap) ? cap - k : 0,
-                              "%s %-11s %-9s %3u/%-3u  %-7s %us ago  visits=%u\n",
+                              "%s %-11s %-9s %3u/%-3u  %-7s %us ago  visits=%u%s\n",
                               (i == s_tower.cursor) ? " >" : "  ", w->name,
                               ptw_state_name(w->state), w->score, w->ceiling,
-                              fresh[f], (unsigned)age_s, (unsigned)w->visits);
+                              fresh[f], (unsigned)age_s, (unsigned)w->visits,
+                              latched);
     }
     if (k < cap) {
         buf[k] = '\0';

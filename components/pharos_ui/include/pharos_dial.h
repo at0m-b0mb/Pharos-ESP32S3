@@ -75,16 +75,34 @@ unsigned pd_dial_selected(const pd_dial_t *d, float rotation_deg);
  * `gap` is the clear space WANTED between two labels; the layout reports what
  * it actually achieved in `gap_px` and never refuses, because the ring is
  * something the operator configures and must be drawn as well as possible
- * whatever they chose. It, and it is the whole
- * difference between a ring that passes a test and one that looks right. The
- * first version of this checked only for overlap, and thirteen names at one
- * radius passed it - with five pixels between them, which reads as one long
- * word on the glass. Not overlapping is not the same as legible. */
+ * whatever they chose.
+ *
+ * Clear space is the whole difference between a ring that passes a test and
+ * one that looks right: the first version checked only for overlap, and
+ * thirteen names at one radius passed it - with five pixels between them,
+ * which reads as one long word on the glass. Not overlapping is not the same
+ * as legible.
+ *
+ * And labels must clear the CORE, the disc in the middle that carries the
+ * headline. Missing that check is what put CENSUS, WARD and SENTINEL straight
+ * through "worth a look" on the shipped dial. */
+#define PD_RING_CORE_R 100
+
+/* THE WIDEST A RING LABEL CAN ACTUALLY BE.
+ *
+ * Nine capitals of montserrat_12 - FOOTPRINT is the longest name on the dial -
+ * which measures about 73 px, not the 68 the layout was being told. Four
+ * pixels of lie is enough: the layout believed a staggered arrangement fitted,
+ * the renderer drew wider text than that, and SENTINEL, CENSUS and SQUALL ended
+ * up written through the middle of the face. The number lives here so the
+ * layout and the renderer cannot disagree about it again. */
+#define PD_RING_LABEL_W 74
 typedef struct {
     int16_t r_even, r_odd; /* label radius for even / odd items */
     int16_t r_dot;         /* where the dots sit                */
     bool staggered;        /* true when the two radii differ    */
     int16_t gap_px;        /* clear space it managed between labels */
+    unsigned capacity;     /* how many labels this dial can carry   */
 } pd_ring_t;
 
 /* Lay out a ring of n labelled dots. `label_w` and `label_h` are the widest
@@ -100,6 +118,19 @@ int16_t pd_ring_label_r(const pd_ring_t *r, unsigned i);
  * assert it too if anybody ever wants to. */
 bool pd_ring_fits(const pd_ring_t *r, unsigned n, int16_t label_w,
                   int16_t label_h, int16_t gap);
+
+/* HOW MANY LABELS THIS DIAL CAN ACTUALLY CARRY.
+ *
+ * Fourteen names do not fit on a 466 px circle at any radius, and no amount of
+ * shuffling changes that - the arc is only so long and the letters only so
+ * small. Pretending otherwise produced a dial with SENTINEL written through
+ * WHISPER and both written through the headline.
+ *
+ * So the layout is allowed to say no. The caller then labels the ones that
+ * MATTER - whichever watch holds the radio, and anything with something to
+ * report - and leaves the rest as bare dots. That is how an instrument is
+ * normally drawn: not every tick is numbered. */
+unsigned pd_ring_capacity(int16_t label_w, int16_t label_h, int16_t gap);
 
 /* ---- the evidence gauge --------------------------------------------- */
 

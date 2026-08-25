@@ -26,6 +26,7 @@
 #include "pharos_lens.h"
 #include "pharos_region.h"
 #include "pharos_audio.h"
+#include "pharos_sense.h"
 #include "pharos_theme.h"
 #include "pharos_ui.h"
 
@@ -114,6 +115,12 @@ void app_main(void)
      * booting in Beacon and snapping to Nightwatch a second later is the
      * device forgetting in public. */
     pharos_theme_load();
+
+    /* The motion sampler. Started here rather than by a lens because the
+     * question it answers - "have you moved since you started watching this?"
+     * - cannot be answered by a sensor that only runs while one screen is
+     * open. See pharos_sense.h. */
+    pharos_sense_start();
 
     pharos_ui_run(&bsp, fence_ok);
 }

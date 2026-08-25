@@ -22,6 +22,7 @@
 #include "esp_log.h"
 
 #include "pharos_lens.h"
+#include "pharos_census.h"
 #include "pharos_survey.h"
 #include "pharos_survey_hook.h"
 
@@ -119,17 +120,19 @@ static bool k_survey_row(unsigned index, struct pharos_lens_row *out)
         return true;
     case 1:
         snprintf(out->left, sizeof(out->left), "worst grade seen");
+        /* pc_grade_name() is the ONE place a grade becomes a letter. This was
+         * a hand-rolled ladder of its own, with the comparisons the wrong way
+         * round, so it printed every grade inverted - an open network as "A".
+         * A second spelling of a shared rule is a second thing to get wrong;
+         * there is now only the one. */
         snprintf(out->right, sizeof(out->right), "%s",
-                 r.networks ? (r.worst_grade >= 5   ? "F"
-                               : r.worst_grade >= 4 ? "D"
-                               : r.worst_grade >= 3 ? "C"
-                               : r.worst_grade >= 2 ? "B"
-                               : r.worst_grade >= 1 ? "A"
-                                                    : "A+")
-                            : "--");
-        out->tone = (r.worst_grade >= 4) ? PHAROS_TONE_BAD
-                  : (r.worst_grade >= 2) ? PHAROS_TONE_WARN
-                                         : PHAROS_TONE_GOOD;
+                 (r.networks && r.worst_grade != PC_GRADE_UNGRADED)
+                     ? pc_grade_name((pc_grade_t)r.worst_grade)
+                     : "--");
+        out->tone = (r.worst_grade == PC_GRADE_UNGRADED) ? PHAROS_TONE_DIM
+                  : (r.worst_grade <= PC_GRADE_D)        ? PHAROS_TONE_BAD
+                  : (r.worst_grade <= PC_GRADE_B)        ? PHAROS_TONE_WARN
+                                                         : PHAROS_TONE_GOOD;
         return true;
     case 2:
         snprintf(out->left, sizeof(out->left), "hidden names");
@@ -155,6 +158,7 @@ static bool k_survey_row(unsigned index, struct pharos_lens_row *out)
 
 static const pharos_lens_t k_survey = {
     .id = "sys.survey",
+    .purpose = "a full site survey",
     .name = "Survey",
     .summary = "What this place is like: every network and device seen so far",
     .glyph = "list",
