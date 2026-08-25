@@ -135,6 +135,7 @@ static lv_obj_t *s_b_pos, *s_b_go, *s_b_go_txt, *s_b_rim;
 static lv_obj_t *s_d_title, *s_d_hl, *s_d_hr, *s_d_page, *s_d_empty;
 static lv_obj_t *s_d_card[PHAROS_HUD_ROWS];
 static lv_obj_t *s_d_left[PHAROS_HUD_ROWS], *s_d_right[PHAROS_HUD_ROWS];
+static lv_obj_t *s_d_chev[PHAROS_HUD_ROWS], *s_d_stripe[PHAROS_HUD_ROWS];
 
 /* GUIDE */
 static lv_obj_t *s_g_ghost;                 /* outline of the zone taught  */
@@ -871,7 +872,7 @@ bool pharos_hud_create(void)
              * PS_TYPE_BODY, which covers every grade and count the row
              * contract can carry. */
             const int pad = 12;
-            const int val_w = 112;
+            const int val_w = 104;
             const int lab_w = w - val_w - pad * 2 - 8;
 
             s_d_left[i] = lv_label_create(s_d_card[i]);
@@ -898,6 +899,18 @@ bool pharos_hud_create(void)
             lv_label_set_text(s_d_left[i], "");
             lv_obj_align(s_d_left[i], LV_ALIGN_LEFT_MID, pad, 0);
 
+            /* A control announces itself twice: an accent stripe down the
+             * leading edge, and a chevron where a value that can change
+             * lives. Both are children of the card, so neither can drift. */
+            s_d_stripe[i] = mk_surface(s_d_card[i], 4, PS_CARD_H - 18, 0, 0,
+                                       C_ACCENT, LV_OPA_COVER, 2);
+            lv_obj_align(s_d_stripe[i], LV_ALIGN_LEFT_MID, 5, 0);
+            show(s_d_stripe[i], false);
+
+            s_d_chev[i] = mk_label(s_d_card[i], PS_TYPE_LABEL, C_ACCENT, 0, 0, ">");
+            lv_obj_align(s_d_chev[i], LV_ALIGN_RIGHT_MID, -12, 0);
+            show(s_d_chev[i], false);
+
             s_d_right[i] = lv_label_create(s_d_card[i]);
             lv_obj_remove_flag(s_d_right[i], LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_remove_flag(s_d_right[i], LV_OBJ_FLAG_CLICKABLE);
@@ -913,7 +926,9 @@ bool pharos_hud_create(void)
             lv_label_set_long_mode(s_d_right[i], LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_align(s_d_right[i], LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(s_d_right[i], "");
-            lv_obj_align(s_d_right[i], LV_ALIGN_RIGHT_MID, -pad, 0);
+            /* Clear of the chevron, not merely beside it: at -12 the
+             * value and the chevron rendered as one token, "Beacon>". */
+            lv_obj_align(s_d_right[i], LV_ALIGN_RIGHT_MID, -pad - 20, 0);
         }
         s_d_page  = mk_label(p, PS_TYPE_MICRO, C_DIMMER, 0, PS_Y_PAGE, "");
         s_d_empty = mk_label(p, PS_TYPE_BODY, C_DIMMER, 0, 0, "Nothing found yet");
@@ -1420,8 +1435,18 @@ void pharos_hud_detail(const char *lens, const char *head_left,
         if (!have) continue;
         set_text(s_d_left[i], rows[i].left);
         set_text(s_d_right[i], rows[i].right);
-        set_fg(s_d_right[i], tone_colour(rows[i].tone));
         set_fg(s_d_left[i], C_TEXT);
+
+        /* A control's VALUE is drawn in the accent, because the accent is
+         * what this device uses for "you can act on this" everywhere else. A
+         * reading keeps its tone, which is the verdict contract and is not a
+         * theme's to borrow. */
+        const bool act = rows[i].tappable;
+        show(s_d_stripe[i], act);
+        show(s_d_chev[i], act);
+        set_fg(s_d_right[i],
+               (act && rows[i].tone == PHAROS_TONE_NEUTRAL) ? C_ACCENT
+                                                            : tone_colour(rows[i].tone));
         /* The focused row lifts rather than outlines: a border on a rounded
          * card at this size reads as a rendering artefact. */
         const bool hot = ((int)i == focus);

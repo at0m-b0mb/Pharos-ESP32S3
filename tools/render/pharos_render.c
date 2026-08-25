@@ -1261,6 +1261,45 @@ static void screen_lumen_detail_named(const char *name, const char *title,
     lumen_tell();
 }
 
+/* ---- LUMEN: SETTINGS --------------------------------------------------
+ *
+ * The same component as a sensor's evidence page, which is exactly why it
+ * needed its own affordances: on a page that mixes controls with readings,
+ * nothing told you which rows would respond. A stripe and a chevron do. */
+static void screen_lumen_settings(void)
+{
+    screen("settings");
+    lumen_base();
+
+    text(PR_CX, PR_CY - 196, 16, 'c', C_DIMMER, "System");
+    text(PR_CX - 72, PR_CY - 164, 14, 'c', C_DIMMER, "SETTING");
+    text(PR_CX + 72, PR_CY - 164, 14, 'c', C_DIMMER, "STATE");
+
+    const char *L[4] = { "theme", "brightness", "how to use this", "wrap traps linked" };
+    const char *R[4] = { "Beacon", "100%", "show me", "yes" };
+    const int act[4] = { 1, 1, 1, 0 };   /* the last is a reading */
+
+    const int stack = 4 * PS_CARD_H + 3 * PS_CARD_GAP;
+    for (unsigned i = 0; i < 4; i++) {
+        const int dy = -stack / 2 + (int)i * (PS_CARD_H + PS_CARD_GAP)
+                     + PS_CARD_H / 2 + 8;
+        const int top = PR_CY + dy - PS_CARD_H / 2;
+        const int w = card_width(top, PS_CARD_H, PR_SAFE_R) - 12;
+        roundrect(PR_CX - w / 2, top, w, PS_CARD_H, 14,
+                  i == 0 ? tint_hex(0x21B6C6, 30) : "#0B1A21");
+
+        if (act[i]) {
+            roundrect(PR_CX - w / 2 + 5, top + 9, 4, PS_CARD_H - 18, 2, C_CYAN);
+            text(PR_CX + w / 2 - 12, PR_CY + dy + 6, 16, 'r', C_CYAN, ">");
+        }
+        text(PR_CX - w / 2 + 16, PR_CY + dy + 6, 16, 'l', C_TEXT, L[i]);
+        text(PR_CX + w / 2 - 32, PR_CY + dy + 6, 16, 'r',
+             act[i] ? C_CYAN : C_DIM, R[i]);
+    }
+    text(PR_CX, PR_CY + PS_Y_PAGE, 14, 'c', C_DIMMER, "1 / 5");
+    lumen_tell();
+}
+
 /* ---- LUMEN: SPLASH ---------------------------------------------------- */
 static void screen_lumen_splash(void)
 {
@@ -1357,6 +1396,7 @@ static void lumen_screens(void)
     screen_lumen_home();
     screen_lumen_browse();
     screen_lumen_detail();
+    screen_lumen_settings();
 
     screen_lumen_live("watch_camped", "DEAUTH WATCH", "FLOOD LIKELY", 88, 96,
                       "camped ch6   107/s   840 obs",

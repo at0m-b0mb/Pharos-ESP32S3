@@ -248,6 +248,12 @@ static const uint8_t k_vol_steps[] = { 25, 50, 75, 100 };
 
 static bool k_system_row(unsigned index, struct pharos_lens_row *out)
 {
+    /* The five controls at the top plus the guide are the rows that respond;
+     * everything from ROW_EDITABLE_N down is the device reporting on itself.
+     * Set once here rather than on each case, so a row added to the editable
+     * block cannot forget to say so. */
+    out->tappable = (index < ROW_EDITABLE_N);
+
     pwr_battery_t b;
     const bool have_batt = pharos_bsp_battery(&b);
     const esp_app_desc_t *app = esp_app_get_description();

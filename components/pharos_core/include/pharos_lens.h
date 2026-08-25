@@ -131,6 +131,19 @@ struct pharos_lens_row {
     char left[26];  /* the thing          */
     char right[12]; /* the judgement      */
     pharos_tone_t tone;
+
+    /* DOES PRESSING THIS DO ANYTHING?
+     *
+     * The settings page and a sensor's evidence page are the same component,
+     * and every row was drawn identically - so a control the operator can
+     * change looked exactly like a number the device is reporting about
+     * itself. On a page that mixes both, which Settings does, there was no way
+     * to tell by looking which five of eighteen rows would respond.
+     *
+     * The lens says; the HUD draws the affordance. Left false, a row is a
+     * reading, which is the right default for the sensor pages where nothing
+     * is editable. */
+    bool tappable;
 };
 
 typedef struct pharos_lens {

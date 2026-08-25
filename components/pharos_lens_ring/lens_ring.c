@@ -83,6 +83,9 @@ static const char *period_word(uint8_t p)
 
 static bool k_ring_row(unsigned index, struct pharos_lens_row *out)
 {
+    /* Every watch row toggles; the lap-time row is a reading. */
+    out->tappable = true;
+
     if (index == RING_ROW_RUN) {
         snprintf(out->left, sizeof(out->left), "rotation");
         snprintf(out->right, sizeof(out->right), "%s",
@@ -100,6 +103,7 @@ static bool k_ring_row(unsigned index, struct pharos_lens_row *out)
         /* Then the lap time, which is what all of the above adds up to. */
         if (i == pharos_ui_ring_count()) {
             const uint32_t lap = pharos_ui_ring_lap_ms();
+            out->tappable = false; /* a reading, not a control */
             snprintf(out->left, sizeof(out->left), "one lap takes");
             snprintf(out->right, sizeof(out->right), "%u.%us",
                      (unsigned)(lap / 1000u), (unsigned)((lap % 1000u) / 100u));
