@@ -157,6 +157,7 @@ static lv_obj_t *s_bar_patch[6], *s_bar_name[6];
 static lv_obj_t *s_zone_main[4];
 static lv_obj_t *s_zone_row[PHAROS_HUD_ROWS];
 static lv_obj_t *s_zone_page[2];
+static lv_obj_t *s_zone_start;
 static int s_zones_detail = -1;
 
 static pharos_hud_nav_cb_t s_nav_cb;
@@ -490,6 +491,7 @@ static void page_show(hud_page_t want)
     for (unsigned i = 0; i < AURA_N; i++) show(s_aura[i], aura_on);
     show(s_tell, want != PAGE_SPLASH && want != PAGE_BARS);
     zones_mode(want == PAGE_DETAIL);
+    show(s_zone_start, want == PAGE_BROWSE);
     s_current = want;
 
     /* Whichever labels carry this page's meaning. Deliberately few. */
@@ -617,6 +619,8 @@ static void zones_mode(bool detail)
     for (unsigned i = 0; i < 4; i++) show(s_zone_main[i], !detail);
     for (unsigned i = 0; i < PHAROS_HUD_ROWS; i++) show(s_zone_row[i], detail);
     for (unsigned i = 0; i < 2; i++) show(s_zone_page[i], detail);
+    /* The START target is owned by page_show, which knows whether BROWSE is
+     * up; zones_mode only knows detail-or-not and would clobber it. */
 }
 
 /* ---- build ------------------------------------------------------------ */
@@ -1048,6 +1052,25 @@ bool pharos_hud_create(void)
         s_zone_row[i] = mk_zone(scr, 380, PS_CARD_H + PS_CARD_GAP, 0, dy, row_event, i);
         show(s_zone_row[i], false);
     }
+    /* THE BUTTON THAT COULD NOT BE PRESSED.
+     *
+     * START is drawn at dy +130 and is 56 tall, so it occupies +102..+158.
+     * The SELECT zone - the one that actually launches a lens - is 190x190 at
+     * the centre, so it stops at +95. The two never overlapped. Pressing the
+     * only thing on the page that looks like a button therefore did nothing,
+     * or, in its lower half, hit the bottom strip and opened the detail page
+     * instead. The centre of the screen worked, which is what the guide
+     * teaches, but nothing on the glass said so and the button said otherwise.
+     *
+     * A drawn control that is not a target where it is drawn is worse than no
+     * control at all: it teaches the operator the device is broken. So the
+     * button gets a zone of its own, created after the others so it sits above
+     * the bottom strip it overlaps, and shown only where the button is. The
+     * centre still works too - it is the larger target, and one-handed that
+     * matters. */
+    s_zone_start = mk_zone(scr, 210, 72, 0, 130, nav_event, PHAROS_NAV_SELECT);
+    show(s_zone_start, false);
+
     s_zone_page[0] = mk_zone(scr, 300, 74, 0, -186, nav_event, PHAROS_NAV_PREV);
     s_zone_page[1] = mk_zone(scr, 300, 74, 0,  186, nav_event, PHAROS_NAV_NEXT);
     show(s_zone_page[0], false);
