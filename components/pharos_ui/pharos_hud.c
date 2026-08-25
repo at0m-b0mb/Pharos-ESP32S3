@@ -58,6 +58,14 @@
 
 #ifdef ESP_PLATFORM
 
+/* Before any ESP header. ESP-IDF does not force-include this, so a CONFIG_
+ * test without it silently evaluates false and a whole branch disappears from
+ * the build with no diagnostic - which is exactly how the panel was once never
+ * touched while sdkconfig said it should be. tools/check_display.sh enforces
+ * the ordering; this file has no CONFIG_ test today, and will be correct on
+ * the day somebody adds one. */
+#include "sdkconfig.h"
+
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "lvgl.h"

@@ -2,6 +2,12 @@
 #define PHAROS_TEST_SUPPORT_H
 
 #include <math.h>
+
+/* M_PI is POSIX, not ISO C, and gcc -std=c11 therefore does not define it.
+ * Apple's libc does regardless, so this only ever breaks in CI. */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <stdio.h>
 #include <string.h>
 

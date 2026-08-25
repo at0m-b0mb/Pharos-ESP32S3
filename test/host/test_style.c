@@ -106,7 +106,7 @@ void test_style(void)
          * A band that cannot hold its content is a clipped label in the
          * field, and this is the cheapest possible place to find that out. */
         const struct { const char *what; int16_t dy; ps_type_t t; unsigned chars; } b[] = {
-            { "status",  PS_Y_STATUS,  PS_TYPE_LABEL, 10 },
+            { "clock",   PS_Y_CLOCK,   PS_TYPE_LABEL, 10 },
             { "context", PS_Y_CONTEXT, PS_TYPE_LABEL, 18 },
             { "hero",    PS_Y_HERO,    PS_TYPE_HERO,  12 },
             { "metric",  PS_Y_METRIC,  PS_TYPE_METRIC, 3 },

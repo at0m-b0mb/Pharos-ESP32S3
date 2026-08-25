@@ -85,7 +85,18 @@ BIN := test_pharos
 .PHONY: all run clean
 all: run
 
-$(BIN): $(SRCS)
+# HEADERS ARE PREREQUISITES TOO.
+#
+# This rule used to list only $(SRCS), so editing a header did NOT rebuild -
+# make saw every .c file older than the binary and did nothing. A rename in
+# pharos_style.h then "passed" locally against a stale binary and failed in CI,
+# which is the worst possible order to find out. Everything under the audited
+# include dirs is a prerequisite now; a full rebuild here takes seconds.
+HEADERS := $(wildcard \
+  $(ROOT)/components/*/include/*.h \
+  $(ROOT)/test/host/*.h)
+
+$(BIN): $(SRCS) $(HEADERS)
 	$(CC) $(CFLAGS) $(INCLUDES) $(SRCS) -lm -o $@
 
 run: $(BIN)
