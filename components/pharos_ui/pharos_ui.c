@@ -222,6 +222,21 @@ static ptw_state_t tower_state_of(const struct pharos_lens_display *d)
     return PTW_QUIET;
 }
 static unsigned s_cursor;
+/* HOW LONG A PAINT WILL WAIT FOR THE DISPLAY.
+ *
+ * 30 ms was tuned against a steady face, where the lock is almost always
+ * free. It is too tight across a PAGE CHANGE: that invalidates the whole
+ * 466x466 surface, and the arriving page's headline fades in on top of it, so
+ * LVGL's timer task legitimately holds the lock for longer than one paint
+ * period. The paint then failed - and a failed acquire is not silent, it logs
+ * "Failed to acquire LVGL lock", so a transition that was working correctly
+ * printed errors and counted dropped frames while doing so.
+ *
+ * Waiting is free here. The paint runs every 100 ms, so a 70 ms ceiling still
+ * cannot make it late, and a wait that succeeds beats a miss that has to be
+ * explained. */
+#define PHAROS_PAINT_LOCK_MS 70
+
 static view_t s_view = VIEW_HOME;
 static unsigned s_detail_page;
 /* Which row the centre tap would open, as an absolute index across the whole
@@ -421,7 +436,7 @@ static void home_open(unsigned i)
         return;
     }
     if (!lens_launchable(l)) {
-        if (pharos_bsp_display_lock(30)) {
+        if (pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
             pharos_hud_toast("radio locked");
             pharos_bsp_display_unlock();
         }
@@ -441,6 +456,17 @@ static void home_open(unsigned i)
     }
 }
 
+/* Last charge reading, applied by whichever paint holds the lock next. */
+static pwr_battery_t s_batt;
+static bool s_batt_ok;
+
+static void batt_apply(void)
+{
+    if (s_batt_ok) {
+        pharos_hud_battery(s_batt.soc_pct, s_batt.charging, s_batt.present);
+    }
+}
+
 static void paint_home(void)
 {
     /* Sixty, not thirty. The LVGL task holds this while it composites, and a
@@ -456,6 +482,7 @@ static void paint_home(void)
     s_paints++;
     pharos_hud_create();
     theme_sync();
+    batt_apply();
 
     const uint64_t now = (uint64_t)esp_timer_get_time();
     ptw_summary_t sum;
@@ -659,7 +686,7 @@ static void paint_home(void)
 /* Paint the browse card for wherever the cursor is. */
 static void paint_browse(void)
 {
-    if (!s_order_n || !pharos_bsp_display_lock(30)) {
+    if (!s_order_n || !pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
         return;
     }
     pharos_hud_create();
@@ -879,13 +906,14 @@ static unsigned s_guide_step;
 
 static void paint_guide(void)
 {
-    if (!pharos_bsp_display_lock(30)) {
+    if (!pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
         s_paint_misses++;
         return;
     }
     s_paints++;
     pharos_hud_create();
     theme_sync();
+    batt_apply();
     pharos_hud_guide(&k_guide[s_guide_step < GUIDE_STEPS ? s_guide_step : 0]);
     pharos_bsp_display_unlock();
 }
@@ -993,7 +1021,7 @@ static void nav_apply(void)
             if (ack.latched_index >= 0 && ack.worst < PTW_ELEVATED) {
                 ptw_acknowledge(&s_tower);
                 ESP_LOGI(TAG, "watchtower: findings acknowledged");
-                if (pharos_bsp_display_lock(30)) {
+                if (pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
                     pharos_hud_toast("acknowledged");
                     pharos_bsp_display_unlock();
                 }
@@ -1042,7 +1070,7 @@ static void nav_apply(void)
             return;
         }
         if (s_view == VIEW_LIVE) {
-            if (pharos_bsp_display_lock(30)) {
+            if (pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
                 pharos_hud_toast("no detail here");
                 pharos_bsp_display_unlock();
             }
@@ -1112,7 +1140,7 @@ static void nav_apply(void)
             return;
         }
         if (!lens_launchable(l)) {
-            if (pharos_bsp_display_lock(30)) {
+            if (pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
                 pharos_hud_toast("radio locked");
                 pharos_bsp_display_unlock();
             }
@@ -1123,7 +1151,7 @@ static void nav_apply(void)
             ESP_LOGI(TAG, "started %s", l->id);
         } else {
             ESP_LOGW(TAG, "could not start %s", l->id);
-            if (pharos_bsp_display_lock(30)) {
+            if (pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
                 pharos_hud_toast("would not start");
                 pharos_bsp_display_unlock();
             }
@@ -1846,7 +1874,7 @@ static void paint(const pharos_lens_t *active)
         return; /* the browse card is painted when the cursor moves */
     }
     if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
-        if (!pharos_bsp_display_lock(30)) {
+        if (!pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
             s_paint_misses++;
             return;
         }
@@ -1857,7 +1885,7 @@ static void paint(const pharos_lens_t *active)
         pharos_bsp_display_unlock();
         return;
     }
-    if (!pharos_bsp_display_lock(30)) {
+    if (!pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
         /* Counted, not ignored: a paint that never lands is exactly what a
          * black screen looks like from in here, and the heartbeat below
          * reports it so a boot log alone is enough to diagnose. */
@@ -2097,6 +2125,20 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
         if (since_paint >= 100) {
             since_paint = 0;
             paint(active);
+        }
+
+        /* Charge, once every twelve seconds or so - a battery does not move
+         * fast enough to be worth more.
+         *
+         * READ HERE, DRAW LATER. The first version took the display lock
+         * itself, which made it a second contender for a lock the paint
+         * already wants; a failed acquire is not silent, it logs
+         * "Failed to acquire LVGL lock", so the poll manufactured exactly the
+         * error it should have been avoiding. The I2C read needs no display
+         * lock at all, so it happens out here and the value is applied inside
+         * whichever paint next holds the lock. */
+        if ((heartbeat % 250u) == 0u) {
+            s_batt_ok = pharos_bsp_battery(&s_batt);
         }
 
         if ((++heartbeat % 100) == 0 && active) {

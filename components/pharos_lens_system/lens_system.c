@@ -226,8 +226,17 @@ enum {
     ROW_ALARM,
     ROW_VOLUME,
     ROW_REGION,
+    ROW_GUIDE,
     ROW_EDITABLE_N, /* everything from here down is read-only */
 };
+
+/* THE READ-ONLY ROWS ARE NUMBERED FROM ROW_EDITABLE_N, NOT FROM 5.
+ *
+ * They used to be written as bare `case 5:` ... `case 18:`, which silently
+ * encoded "there are exactly five editable rows above me" into fourteen
+ * places. Adding this one would have collided with `case 5` and quietly
+ * renumbered every reading on the page. Relative cases make the block move by
+ * itself. */
 
 /* Four steps, not a slider: a round screen has no slider, and on an AMOLED the
  * difference between 100 and 90 is not worth a tap. */
@@ -282,6 +291,16 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
                                                : PHAROS_TONE_DIM;
         }
         return true;
+    case ROW_GUIDE:
+        /* Reachable without a laptop. The tour is shown once on a first boot
+         * and is otherwise unfindable, which makes it useless the moment the
+         * device is handed to somebody else - the exact person it was written
+         * for. */
+        snprintf(out->left, sizeof(out->left), "how to use this");
+        snprintf(out->right, sizeof(out->right), "show me");
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+
     case ROW_REGION: {
         snprintf(out->left, sizeof(out->left), "region");
         /* The right column is 12 bytes; "World (1-13)" does not fit and was
@@ -297,17 +316,17 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
         out->tone = PHAROS_TONE_NEUTRAL;
         return true;
     }
-    case 5:
+    case ROW_EDITABLE_N + 0:
         snprintf(out->left, sizeof(out->left), "transmit fence");
         snprintf(out->right, sizeof(out->right), "%s", s.fence_ok ? "CLEAN" : "BROKEN");
         out->tone = s.fence_ok ? PHAROS_TONE_GOOD : PHAROS_TONE_BAD;
         return true;
-    case 6:
+    case ROW_EDITABLE_N + 1:
         snprintf(out->left, sizeof(out->left), "transmit attempts");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)s.fence.tx_attempts);
         out->tone = s.fence.tx_attempts ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
         return true;
-    case 7:
+    case ROW_EDITABLE_N + 2:
         snprintf(out->left, sizeof(out->left), "battery");
         if (have_batt && b.present) {
             snprintf(out->right, sizeof(out->right), "%u%%", (unsigned)b.soc_pct);
@@ -318,7 +337,7 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
             out->tone = PHAROS_TONE_DIM;
         }
         return true;
-    case 8:
+    case ROW_EDITABLE_N + 3:
         snprintf(out->left, sizeof(out->left), "pack voltage");
         if (have_batt && b.mv) {
             snprintf(out->right, sizeof(out->right), "%u.%02uV",
@@ -329,25 +348,25 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
             out->tone = PHAROS_TONE_DIM;
         }
         return true;
-    case 9:
+    case ROW_EDITABLE_N + 4:
         snprintf(out->left, sizeof(out->left), "channels");
         snprintf(out->right, sizeof(out->right), "1-%u",
                  (unsigned)pharos_region_max_channel());
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 10:
+    case ROW_EDITABLE_N + 5:
         snprintf(out->left, sizeof(out->left), "bands heard");
         snprintf(out->right, sizeof(out->right), "2.4 only");
         /* Amber on purpose: a defender who forgets this device is deaf above
          * 2.4 GHz will read a quiet screen as a quiet building. */
         out->tone = PHAROS_TONE_WARN;
         return true;
-    case 11:
+    case ROW_EDITABLE_N + 6:
         snprintf(out->left, sizeof(out->left), "screen rotation");
         snprintf(out->right, sizeof(out->right), "%d deg", pharos_bsp_rotation());
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 12: {
+    case ROW_EDITABLE_N + 7: {
         snprintf(out->left, sizeof(out->left), "internal RAM");
         const unsigned kb =
             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) / 1024);
@@ -358,13 +377,13 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
                   : (kb < 48u) ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
         return true;
     }
-    case 13:
+    case ROW_EDITABLE_N + 8:
         snprintf(out->left, sizeof(out->left), "PSRAM free");
         snprintf(out->right, sizeof(out->right), "%u KB",
                  (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 14: {
+    case ROW_EDITABLE_N + 9: {
         snprintf(out->left, sizeof(out->left), "uptime");
         const uint32_t sec = (uint32_t)(esp_timer_get_time() / 1000000ull);
         if (sec >= 3600u) {
@@ -377,17 +396,17 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
         out->tone = PHAROS_TONE_DIM;
         return true;
     }
-    case 15:
+    case ROW_EDITABLE_N + 10:
         snprintf(out->left, sizeof(out->left), "firmware");
         snprintf(out->right, sizeof(out->right), "%.11s", app ? app->version : "?");
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 16:
+    case ROW_EDITABLE_N + 11:
         snprintf(out->left, sizeof(out->left), "lenses");
         snprintf(out->right, sizeof(out->right), "%u", pharos_lens_count());
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 17: {
+    case ROW_EDITABLE_N + 12: {
         /* The IMU the vendor BSP declares as absent. Worth a row because when
          * it is missing, Vigil quietly loses a whole evidence family - and a
          * capability that silently is not there is the kind of thing an
@@ -405,7 +424,7 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
         }
         return true;
     }
-    case 18: {
+    case ROW_EDITABLE_N + 13: {
         snprintf(out->left, sizeof(out->left), "steps this session");
         uint32_t steps = 0;
         if (!pharos_ui_motion(NULL, &steps, NULL)) {
@@ -450,6 +469,11 @@ static bool k_system_row_edit(unsigned row)
         pharos_theme_set_brightness(k_bright_steps[(i + 1u) % BRIGHT_N]);
         return true;
     }
+
+    case ROW_GUIDE:
+        pharos_ui_guide_start();
+        ESP_LOGI(TAG, "replaying the guide from settings");
+        return true;
 
     case ROW_ALARM:
         if (!pharos_audio_present()) {
@@ -528,6 +552,21 @@ static bool k_system_expand(unsigned row, unsigned sub,
         return true;
     }
 
+    case ROW_GUIDE:
+        if (sub == 0) {
+            snprintf(out->left, sizeof(out->left), "nine steps, one minute");
+            out->right[0] = '\0';
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        }
+        if (sub == 1) {
+            snprintf(out->left, sizeof(out->left), "touch, colours, the ring");
+            out->right[0] = '\0';
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        }
+        return false;
+
     case ROW_BRIGHT:
         /* One row per step with the one in force marked, so the cycle stops
          * being blind - the same shape as the theme and region lists. */
@@ -556,32 +595,32 @@ static bool k_system_expand(unsigned row, unsigned sub,
     case ROW_ALARM:
     case ROW_VOLUME:
         switch (sub) {
-        case 0:
+        case ROW_EDITABLE_N + -5:
             snprintf(out->left, sizeof(out->left), "codec");
             snprintf(out->right, sizeof(out->right), "%s",
                      pharos_audio_present() ? "ES8311" : "absent");
             out->tone = pharos_audio_present() ? PHAROS_TONE_GOOD
                                                : PHAROS_TONE_BAD;
             return true;
-        case 1:
+        case ROW_EDITABLE_N + -4:
             snprintf(out->left, sizeof(out->left), "state");
             snprintf(out->right, sizeof(out->right), "%s",
                      pharos_audio_enabled() ? "sounding" : "MUTED");
             out->tone = pharos_audio_enabled() ? PHAROS_TONE_GOOD
                                                : PHAROS_TONE_WARN;
             return true;
-        case 2:
+        case ROW_EDITABLE_N + -3:
             snprintf(out->left, sizeof(out->left), "volume");
             snprintf(out->right, sizeof(out->right), "%u%%",
                      (unsigned)pharos_audio_volume());
             out->tone = PHAROS_TONE_NEUTRAL;
             return true;
-        case 3:
+        case ROW_EDITABLE_N + -2:
             snprintf(out->left, sizeof(out->left), "alerts it can play");
             snprintf(out->right, sizeof(out->right), "5");
             out->tone = PHAROS_TONE_DIM;
             return true;
-        case 4:
+        case ROW_EDITABLE_N + -1:
             snprintf(out->left, sizeof(out->left), "remembered");
             snprintf(out->right, sizeof(out->right), "yes");
             out->tone = PHAROS_TONE_DIM;
@@ -603,35 +642,35 @@ static bool k_system_expand(unsigned row, unsigned sub,
         return true;
     }
 
-    case 5: /* transmit fence */
+    case ROW_EDITABLE_N + 0: /* transmit fence */
         switch (sub) {
-        case 0:
+        case ROW_EDITABLE_N + -5:
             snprintf(out->left, sizeof(out->left), "wrap traps linked");
             snprintf(out->right, sizeof(out->right), "%s",
                      s.fence.wrap_linked ? "yes" : "NO");
             out->tone = s.fence.wrap_linked ? PHAROS_TONE_GOOD : PHAROS_TONE_BAD;
             return true;
-        case 1:
+        case ROW_EDITABLE_N + -4:
             snprintf(out->left, sizeof(out->left), "BLE observer only");
             snprintf(out->right, sizeof(out->right), "%s",
                      s.fence.ble_observer_only ? "yes" : "NO");
             out->tone = s.fence.ble_observer_only ? PHAROS_TONE_GOOD
                                                   : PHAROS_TONE_BAD;
             return true;
-        case 2:
+        case ROW_EDITABLE_N + -3:
             snprintf(out->left, sizeof(out->left), "no TX symbol in image");
             snprintf(out->right, sizeof(out->right), "%s",
                      s.fence.tx_symbols_absent ? "yes" : "NO");
             out->tone = s.fence.tx_symbols_absent ? PHAROS_TONE_GOOD
                                                   : PHAROS_TONE_BAD;
             return true;
-        case 3:
+        case ROW_EDITABLE_N + -2:
             snprintf(out->left, sizeof(out->left), "attempts since boot");
             snprintf(out->right, sizeof(out->right), "%u",
                      (unsigned)s.fence.tx_attempts);
             out->tone = s.fence.tx_attempts ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
             return true;
-        case 4:
+        case ROW_EDITABLE_N + -1:
             snprintf(out->left, sizeof(out->left), "checked every tick");
             snprintf(out->right, sizeof(out->right), "yes");
             out->tone = PHAROS_TONE_DIM;

@@ -383,3 +383,111 @@ const char *pac_band_hint(pac_verdict_band_t b)
     default:                  return "";
     }
 }
+
+/* ---- holding the verdict still --------------------------------------- */
+
+void pac_hold_reset(pac_hold_t *h)
+{
+    if (h) {
+        memset(h, 0, sizeof(*h));
+    }
+}
+
+/* THE BAND EDGES, WITH A KERB.
+ *
+ * The confirm counter stops a verdict that flickers randomly. It cannot help
+ * a score that genuinely SITS on a boundary: 38, 42, 38, 42 crosses 40 every
+ * time, agrees with itself for four evaluations, and is dutifully adopted -
+ * so TRACE and TONE PRESENT still traded places every few seconds on real
+ * hardware.
+ *
+ * That is what hysteresis is for. Leaving the band you are in costs a few
+ * points more than entering it did, so a reading parked on a threshold stays
+ * where it is instead of rattling between two names for the same room. */
+#define PAC_HYST 5u
+
+static pac_verdict_band_t band_with_kerb(uint8_t score, pac_verdict_band_t shown)
+{
+    /* Lower edge of each band; index by pac_verdict_band_t. */
+    static const uint8_t lo[] = { 0u, 20u, 40u, 60u, 75u };
+    const unsigned n = (unsigned)(sizeof(lo) / sizeof(lo[0]));
+
+    pac_verdict_band_t nat = PAC_BAND_QUIET;
+    for (unsigned i = 0; i < n; i++) {
+        if (score >= lo[i]) {
+            nat = (pac_verdict_band_t)i;
+        }
+    }
+    if (nat == shown || (unsigned)shown >= n) {
+        return shown;
+    }
+
+    /* Climbing: clear the band's own floor by the margin. Falling: drop
+     * clear of the floor of the band being left. */
+    if ((unsigned)nat > (unsigned)shown) {
+        return (score >= (unsigned)lo[nat] + PAC_HYST) ? nat : shown;
+    }
+    return (score + PAC_HYST <= lo[shown]) ? nat : shown;
+}
+
+bool pac_hold_apply(pac_hold_t *h, pac_verdict_t *v)
+{
+    if (!h || !v) {
+        return false;
+    }
+
+    /* Apply the kerb before anything else, so the confirm counter is only
+     * ever asked about changes that already cleared the margin. */
+    if (h->primed) {
+        v->band = band_with_kerb(v->score, h->shown);
+    }
+
+    /* The first verdict is shown immediately. Making somebody wait four
+     * evaluations to see anything at all would look like a lens that had not
+     * started. */
+    if (!h->primed) {
+        h->primed = true;
+        h->shown = v->band;
+        h->shown_band = v->strongest;
+        h->candidate = v->band;
+        h->cand_band = v->strongest;
+        h->agree = 0;
+        return true;
+    }
+
+    /* Agreeing with what is already displayed cancels any pending change:
+     * a challenger has to be sustained, not merely frequent. */
+    if (v->band == h->shown) {
+        h->agree = 0;
+        h->candidate = h->shown;
+        /* The named frequency may still drift while the severity holds, so
+         * it is only adopted once it too has settled. */
+        if (v->strongest == h->shown_band) {
+            h->cand_band = h->shown_band;
+        }
+        v->strongest = h->shown_band;
+        return false;
+    }
+
+    if (v->band == h->candidate && v->strongest == h->cand_band) {
+        h->agree++;
+    } else {
+        h->candidate = v->band;
+        h->cand_band = v->strongest;
+        h->agree = 1;
+    }
+
+    if (h->agree >= PAC_CONFIRM) {
+        h->shown = h->candidate;
+        h->shown_band = h->cand_band;
+        h->agree = 0;
+        v->band = h->shown;
+        v->strongest = h->shown_band;
+        return true;
+    }
+
+    /* Not yet convinced: keep showing what is on the glass. */
+    v->band = h->shown;
+    v->strongest = h->shown_band;
+    return false;
+}

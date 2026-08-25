@@ -232,6 +232,83 @@ static void test_acoustic_ceiling_never_exceeded(void)
     }
 }
 
+static void test_acoustic_verdict_is_held_still(void)
+{
+    banner("acoustic: a flickering verdict never reaches the glass");
+
+    /* This is the hardware bug. On the device the raw evaluate printed QUIET,
+     * TRACE, TONE PRESENT and PERSISTENT within one second, repeatedly, and
+     * named a different frequency each time - because it re-decides from the
+     * rolling window every tick with no memory of what it last said. */
+    pac_hold_t h;
+    pac_hold_reset(&h);
+
+    /* Scores are set on every fixture: the kerb derives the band FROM the
+     * score, so a verdict naming a band its score does not support is not a
+     * case worth testing - it cannot occur. */
+    pac_verdict_t first = { .band = PAC_BAND_QUIET, .score = 10,
+                            .strongest = PAC_BAND_19K };
+    CHECK(pac_hold_apply(&h, &first), "the first verdict shows at once");
+
+    unsigned changes = 0;
+    for (unsigned i = 0; i < 40u; i++) {
+        pac_verdict_t f = {
+            .band = (i & 1u) ? PAC_BAND_PERSISTENT : PAC_BAND_QUIET,
+            .score = (uint8_t)((i & 1u) ? 65u : 10u),
+            .strongest = (i & 1u) ? PAC_BAND_20K : PAC_BAND_19K,
+        };
+        if (pac_hold_apply(&h, &f)) changes++;
+    }
+    CHECK(changes == 0, "alternating noise never reaches the display");
+
+    /* A tone that genuinely settles still gets through, once. */
+    changes = 0;
+    for (unsigned i = 0; i < PAC_CONFIRM + 2u; i++) {
+        pac_verdict_t f = { .band = PAC_BAND_BEACON, .score = 88,
+                            .strongest = PAC_BAND_19K };
+        if (pac_hold_apply(&h, &f)) changes++;
+    }
+    CHECK(changes == 1, "a sustained verdict is adopted exactly once");
+
+    pac_verdict_t g = { .band = PAC_BAND_BEACON, .score = 88,
+                        .strongest = PAC_BAND_19K };
+    pac_hold_apply(&h, &g);
+    CHECK(g.band == PAC_BAND_BEACON, "and then it stays");
+    CHECK(g.strongest == PAC_BAND_19K, "with the frequency it settled on");
+
+    /* A SCORE PARKED ON A BOUNDARY.
+     *
+     * The confirm counter alone cannot fix this one: 38/42 straddles the
+     * TRACE|PRESENT edge at 40, agrees with itself four times running, and
+     * gets adopted. It is what the device actually did after the counter
+     * went in. The kerb is what stops it. */
+    pac_hold_t k;
+    pac_hold_reset(&k);
+    pac_verdict_t seed = { .band = PAC_BAND_TRACE, .score = 38,
+                           .strongest = PAC_BAND_19K };
+    pac_hold_apply(&k, &seed);
+
+    unsigned straddle = 0;
+    for (unsigned i = 0; i < 60u; i++) {
+        pac_verdict_t f = {
+            .band = (i & 1u) ? PAC_BAND_PRESENT : PAC_BAND_TRACE,
+            .score = (uint8_t)((i & 1u) ? 42u : 38u),
+            .strongest = PAC_BAND_19K,
+        };
+        if (pac_hold_apply(&k, &f)) straddle++;
+    }
+    CHECK(straddle == 0, "a score sitting on a band edge does not rattle");
+
+    /* But a reading that clears the kerb is still believed. */
+    unsigned rose = 0;
+    for (unsigned i = 0; i < PAC_CONFIRM + 2u; i++) {
+        pac_verdict_t f = { .band = PAC_BAND_PRESENT, .score = 52,
+                            .strongest = PAC_BAND_19K };
+        if (pac_hold_apply(&k, &f)) rose++;
+    }
+    CHECK(rose == 1, "a score clear of the edge is adopted");
+}
+
 void test_acoustic(void)
 {
     test_acoustic_quiet_room();
@@ -242,4 +319,5 @@ void test_acoustic(void)
     test_acoustic_edge_of_hearing_is_capped();
     test_acoustic_vocabulary();
     test_acoustic_ceiling_never_exceeded();
+    test_acoustic_verdict_is_held_still();
 }

@@ -57,6 +57,7 @@ static const char *TAG = "lens.whisper";
 
 EXT_RAM_BSS_ATTR static pac_engine_t s_engine;
 static pac_verdict_t s_verdict;
+static pac_hold_t s_hold;
 static SemaphoreHandle_t s_lock;
 
 #if !defined(PHAROS_HOST) && defined(CONFIG_PHAROS_HAS_VENDOR_BSP)
@@ -157,6 +158,7 @@ static bool whisper_start(void)
         esp_codec_dev_close(s_mic);
         return false;
     }
+    pac_hold_reset(&s_hold);
     ESP_LOGI(TAG, "listening at %u Hz for inaudible tones; no audio is kept",
              WHISPER_RATE);
     return true;
@@ -187,7 +189,12 @@ static void whisper_tick(uint32_t dt_ms)
     }
     pac_verdict_t v;
     pac_evaluate(&s_engine, &v);
-    if (v.band != s_verdict.band) {
+
+    /* Hold it still before anybody sees it. Raw evaluate re-decides from the
+     * rolling window every tick, so a tone sitting near a band boundary made
+     * the glass flicker between QUIET and PERSISTENT several times a second
+     * and named a different frequency each time. */
+    if (pac_hold_apply(&s_hold, &v)) {
         ESP_LOGI(TAG, "%s %u/%u  %s  duty=%u%%  fams=0x%02x  notes=0x%02x",
                  pac_band_name(v.band), v.score, v.ceiling,
                  pac_probe_name(v.strongest), v.duty_pct, v.families, v.notes);

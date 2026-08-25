@@ -101,7 +101,9 @@ static hud_page_t s_current = PAGE_SPLASH;
 static bool s_built;
 
 /* Shared chrome */
-static lv_obj_t *s_tell;   /* the permanent receive-only pip */
+static lv_obj_t *s_tell;
+static lv_obj_t *s_batt_track, *s_batt_fill;
+static int s_batt_last = -2;   /* the permanent receive-only pip */
 static lv_obj_t *s_toast;
 
 /* The aura: three nested discs whose COLOUR is the verdict. Opacity is fixed
@@ -269,6 +271,46 @@ static void arc_anim_cb(void *obj, int32_t v) { lv_arc_set_value((lv_obj_t *)obj
 static void opa_anim_cb(void *obj, int32_t v)
 {
     lv_obj_set_style_bg_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+
+static void text_opa_anim_cb(void *obj, int32_t v)
+{
+    lv_obj_set_style_text_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+
+/* A PAGE ARRIVES BY FADING ITS OWN HEADLINE UP, AND NOT BY ANY OTHER MEANS.
+ *
+ * The obvious implementation - animate the page container's opacity - is a
+ * trap on this board. LVGL renders any object with opa < COVER into a LAYER,
+ * and a layer for a full-screen container is 466*466*2 = 434 KB. There are 49
+ * KB of internal DMA RAM free. It would either spill to PSRAM and crawl, or
+ * fail outright as ESP_ERR_NO_MEM - which is exactly the "Draw bitmap failed"
+ * this project has already been bitten by once.
+ *
+ * text_opa needs no layer: glyphs are blended straight into the frame with
+ * their own alpha. So the transition is carried by two or three labels per
+ * page rather than by the whole surface, which is also all the eye follows. */
+static void fade_in(lv_obj_t *const *objs, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++) {
+        if (!objs[i]) continue;
+        lv_anim_delete(objs[i], text_opa_anim_cb);
+        lv_obj_set_style_text_opa(objs[i], 0, 0);
+
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, objs[i]);
+        lv_anim_set_exec_cb(&a, text_opa_anim_cb);
+        lv_anim_set_values(&a, 0, 255);
+        lv_anim_set_duration(&a, PS_MS_PAGE);
+        /* Staggered, so it reads as one movement rather than a flash - but
+         * only just: 45 ms each stretched a 260 ms fade to 395 ms of
+         * continuous invalidation, and every frame of that competes with the
+         * repaint of the page underneath it. */
+        lv_anim_set_delay(&a, i * 25u);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
+    }
 }
 
 static void set_arc_value(lv_obj_t *o, int v)
@@ -448,6 +490,37 @@ static void page_show(hud_page_t want)
     show(s_tell, want != PAGE_SPLASH && want != PAGE_BARS);
     zones_mode(want == PAGE_DETAIL);
     s_current = want;
+
+    /* Whichever labels carry this page's meaning. Deliberately few. */
+    switch (want) {
+    case PAGE_HOME: {
+        lv_obj_t *const o[] = { s_h_word, s_h_sub };
+        fade_in(o, 2);
+        break;
+    }
+    case PAGE_BROWSE: {
+        lv_obj_t *const o[] = { s_b_name, s_b_l1, s_b_l2 };
+        fade_in(o, 3);
+        break;
+    }
+    case PAGE_LIVE: {
+        lv_obj_t *const o[] = { s_l_word, s_l_score };
+        fade_in(o, 2);
+        break;
+    }
+    case PAGE_DETAIL: {
+        lv_obj_t *const o[] = { s_d_title, s_d_hl, s_d_hr };
+        fade_in(o, 3);
+        break;
+    }
+    case PAGE_GUIDE: {
+        lv_obj_t *const o[] = { s_g_title, s_g_l1, s_g_l2 };
+        fade_in(o, 3);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 /* ---- touch ------------------------------------------------------------ */
@@ -457,8 +530,34 @@ static void log_touch(const char *what, unsigned tag)
     ESP_LOGI(TAG, "touch: %s %u", what, tag);
 }
 
+/* PRESS AND HOLD IS THE WAY OUT, AND UNTIL NOW IT DID NOT EXIST.
+ *
+ * Only LV_EVENT_CLICKED was ever registered, so PHAROS_NAV_HOME could not be
+ * raised by touch at all - it was reachable only from the console. That left
+ * no way off a page with the finger, and the two that toggle (the bottom
+ * strip swaps LIVE and DETAIL) oscillated forever instead of escaping. A user
+ * who opened the ring's settings was simply trapped there.
+ *
+ * Worse, the guide taught this gesture. Step five said "press and hold to
+ * stop and step back out" - a tutorial teaching a control that was never
+ * implemented, which is how somebody ends up certain the hardware is broken.
+ *
+ * LVGL still delivers CLICKED on release after a long press, so the hold sets
+ * a flag that the next click consumes; otherwise one gesture would fire two
+ * actions - leave the page, then immediately act on whatever it landed on. */
+static bool s_long_fired;
+
+static void long_event(lv_event_t *e)
+{
+    (void)e;
+    s_long_fired = true;
+    log_touch("hold", (unsigned)PHAROS_NAV_HOME);
+    if (s_nav_cb) s_nav_cb(PHAROS_NAV_HOME);
+}
+
 static void nav_event(lv_event_t *e)
 {
+    if (s_long_fired) { s_long_fired = false; return; }
     const unsigned which = (unsigned)(uintptr_t)lv_event_get_user_data(e);
     log_touch("nav", which);
     if (!s_nav_cb) return;
@@ -484,6 +583,7 @@ static void nav_event(lv_event_t *e)
 
 static void row_event(lv_event_t *e)
 {
+    if (s_long_fired) { s_long_fired = false; return; }
     const unsigned row = (unsigned)(uintptr_t)lv_event_get_user_data(e);
     log_touch("row", row);
     if (s_row_cb) s_row_cb(row);
@@ -501,6 +601,10 @@ static lv_obj_t *mk_zone(lv_obj_t *parent, int w, int h, int dx, int dy,
     lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
     lv_obj_add_event_cb(z, cb, LV_EVENT_CLICKED, (void *)(uintptr_t)tag);
+    /* Every zone is also a way out. Whichever one the finger happens to be
+     * over, holding it means "back" - so escaping never depends on having
+     * found the right part of the glass first. */
+    lv_obj_add_event_cb(z, long_event, LV_EVENT_LONG_PRESSED, NULL);
     return z;
 }
 
@@ -541,6 +645,21 @@ bool pharos_hud_create(void)
 
     /* The permanent receive-only tell, on the rim where it is always true.
      * Green, small, and never animated - it is a fact, not an alert. */
+    /* CHARGE, ON THE RIM, OUTSIDE EVERYTHING ELSE.
+     *
+     * A handheld that goes flat mid-sweep with no warning is a tool nobody
+     * trusts, and until now the only way to ask was over the console - which
+     * is exactly where somebody holding the device is not looking.
+     *
+     * It sits at r=220, outside the score arc's 206 and the browse rim's 212,
+     * so it cannot collide with any page's content, and it spans only the 60
+     * degrees at the top where no page draws. Persistent chrome, like the
+     * receive-only pip at the bottom: present on every page, owned by none. */
+    s_batt_track = mk_arc(scr, 440, 3, C_TRACK, 100, 240, 60);
+    s_batt_fill  = mk_arc(scr, 440, 3, C_DIM,   100, 240, 60);
+    show(s_batt_track, false);
+    show(s_batt_fill, false);
+
     s_tell = mk_surface(scr, 10, 10, 0, PS_Y_TELL, PS_GOOD, LV_OPA_COVER,
                         LV_RADIUS_CIRCLE);
     show(s_tell, false);
@@ -1316,6 +1435,43 @@ void pharos_hud_detail(const char *lens, const char *head_left,
     (void)openable;
 }
 
+/* ---- charge ---------------------------------------------------------- */
+
+void pharos_hud_battery(uint8_t pct, bool charging, bool present)
+{
+    if (!s_built) return;
+
+    if (!present) {
+        if (s_batt_last != -1) {
+            show(s_batt_track, false);
+            show(s_batt_fill, false);
+            s_batt_last = -1;
+        }
+        return;
+    }
+    if (pct > 100u) pct = 100u;
+
+    /* Charging is a state, not a level, so it gets its own key rather than
+     * sharing the level's. Packed into the dirty check so a steady battery
+     * costs nothing per frame. */
+    const int key = (int)pct + (charging ? 1000 : 0);
+    if (key == s_batt_last) return;
+    s_batt_last = key;
+
+    show(s_batt_track, true);
+    show(s_batt_fill, true);
+    set_arc_value(s_batt_fill, pct);
+
+    /* Green while it fills, then the ordinary chrome colour, and the warning
+     * hues only when they are earned - the same contract every other reading
+     * on this device follows. */
+    const uint32_t rgb = charging ? PS_GOOD
+                       : (pct <= 10u) ? PS_BAD
+                       : (pct <= 25u) ? PS_WARN
+                       : C_DIM;
+    set_arc_rgb(s_batt_fill, rgb);
+}
+
 /* ---- the guide -------------------------------------------------------
  *
  * The animations are the content. A sentence that says "press and hold to go
@@ -1567,6 +1723,7 @@ void pharos_hud_splash(const char *version, bool fence_clean)
     (void)version; (void)fence_clean;
 }
 void pharos_hud_colourbars(void) {}
+void pharos_hud_battery(uint8_t p, bool c, bool q) { (void)p; (void)c; (void)q; }
 void pharos_hud_guide(const struct pharos_hud_guide *g) { (void)g; }
 
 #endif /* ESP_PLATFORM */

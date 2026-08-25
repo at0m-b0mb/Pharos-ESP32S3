@@ -204,7 +204,7 @@ uint32_t ps_alert_colour(uint8_t alert);
  */
 #define PS_MS_FAST   180 /* a chip lighting, a row highlighting     */
 #define PS_MS_MOVE   420 /* an arc travelling to a new value        */
-#define PS_MS_PAGE   260 /* a page fading in over another           */
+#define PS_MS_PAGE   200 /* a page fading in over another           */
 #define PS_MS_BREATH 4000
 
 /* ---- component geometry ---------------------------------------------- */

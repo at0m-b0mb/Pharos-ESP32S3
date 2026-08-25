@@ -263,6 +263,10 @@ struct pharos_hud_guide {
  * and are only restarted when the step actually changes. */
 void pharos_hud_guide(const struct pharos_hud_guide *g);
 
+/* Charge, drawn on the rim above every page. `present` false hides it, which
+ * is the honest answer on a board running from USB with no pack fitted. */
+void pharos_hud_battery(uint8_t pct, bool charging, bool present);
+
 /* The boot splash and the `screen test` command. */
 void pharos_hud_splash(const char *version, bool fence_clean);
 void pharos_hud_toast(const char *msg);

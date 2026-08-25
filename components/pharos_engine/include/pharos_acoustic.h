@@ -149,6 +149,40 @@ void pac_observe(pac_engine_t *e, const int16_t *samples, unsigned n,
 
 void pac_evaluate(const pac_engine_t *e, pac_verdict_t *out);
 
+/* ---- holding the verdict still --------------------------------------
+ *
+ * pac_evaluate() is a pure function of the rolling window, with no memory of
+ * what it last said. When the score sits near a band boundary - which is
+ * exactly where a weak or intermittent tone puts it - the answer flips on
+ * noise. On hardware this printed QUIET, TRACE, TONE PRESENT and PERSISTENT
+ * within one second, repeatedly, and named a different frequency each time.
+ *
+ * A reading nobody can read is not a reading. This is the same confirm-counter
+ * Locate uses on its needle: a NEW verdict has to say the same thing several
+ * evaluations running before it replaces the one on the glass. Noise cannot
+ * hold an opinion that long; a real tone can.
+ *
+ * Held separately from the engine so that the engine stays a pure measurement
+ * and this stays a pure display decision - and so both remain host-testable
+ * on their own. */
+#define PAC_CONFIRM 4u
+
+typedef struct {
+    pac_verdict_band_t shown;     /* what the operator is being told    */
+    pac_verdict_band_t candidate; /* what evaluate keeps saying instead */
+    pac_band_t shown_band;    /* the named frequency, held with it  */
+    pac_band_t cand_band;
+    uint8_t agree;            /* consecutive evaluations agreeing   */
+    bool primed;              /* false until the first verdict      */
+} pac_hold_t;
+
+void pac_hold_reset(pac_hold_t *h);
+
+/* Fold a fresh verdict into the held one, rewriting v->band and v->strongest
+ * to what should actually be displayed. Returns true when the displayed
+ * verdict changed, which is the caller's cue to log it. */
+bool pac_hold_apply(pac_hold_t *h, pac_verdict_t *v);
+
 const char *pac_band_name(pac_verdict_band_t b);
 const char *pac_band_hint(pac_verdict_band_t b);
 const char *pac_probe_name(pac_band_t b);
