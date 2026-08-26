@@ -88,6 +88,20 @@ typedef struct {
     uint8_t a3[6]; /* BSSID, usually         */
     uint16_t seq;  /* 12-bit sequence number */
     uint16_t reason_or_status;
+
+    /* THE DURATION FIELD, WHICH IS WHERE TOOLS GIVE THEMSELVES AWAY.
+     *
+     * Bytes 2-3 of every 802.11 header: how long the sender is reserving the
+     * medium for, in microseconds. A real access point computes it from the
+     * frame it is about to send and the rate it will use, so across a normal
+     * capture it VARIES.
+     *
+     * An attack tool usually does not compute anything. It ships a template
+     * with the field baked in, so every frame carries the same value -
+     * 0x013A is the Marauder / Evil-M5 family, and a flat 0 is common in
+     * hand-rolled injectors. It is two bytes we were already walking past,
+     * and it is one of the few fields a tool has no reason to randomise. */
+    uint16_t duration;
     int8_t rssi;
     uint8_t channel;
     uint8_t type;    /* PHAROS_FT_*  */

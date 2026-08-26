@@ -387,6 +387,7 @@ int main(void)
     test_watch();
     test_rival();
     test_acoustic();
+    test_attrib();
     test_theme();
     test_style();
     test_tower();

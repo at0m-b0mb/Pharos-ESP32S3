@@ -37,6 +37,10 @@ bool pharos_dot11_parse_header(const uint8_t *buf, size_t len, pharos_ev_dot11_t
     if (fc & (1u << 11)) out->flags |= PHAROS_DOT11_F_RETRY;
     if (fc & (1u << 14)) out->flags |= PHAROS_DOT11_F_PROTECTED;
 
+    /* Bytes 2-3, straight off the header. See the note in pharos_event.h:
+     * a real AP varies this, a template does not. */
+    out->duration = rd16(buf + 2);
+
     memcpy(out->a1, buf + 4, 6);
     memcpy(out->a2, buf + 10, 6);
     memcpy(out->a3, buf + 16, 6);

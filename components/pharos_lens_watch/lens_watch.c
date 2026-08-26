@@ -23,6 +23,7 @@
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
+#include "pharos_attrib.h"
 #include "pharos_watch.h"
 
 static const char *TAG = "lens.watch";
@@ -32,6 +33,7 @@ static const char *TAG = "lens.watch";
 EXT_RAM_BSS_ATTR static pharos_event_t s_slots[WATCH_RING];
 static pharos_bus_t s_bus;
 EXT_RAM_BSS_ATTR static pw_engine_t s_engine;
+EXT_RAM_BSS_ATTR static pat_engine_t s_attrib;
 static pw_verdict_t s_verdict;
 static SemaphoreHandle_t s_lock;
 static bool s_camp_requested;
@@ -64,6 +66,7 @@ static uint32_t s_log_accum_ms;
 static bool watch_mount(void)
 {
     pw_reset(&s_engine);
+    pat_reset(&s_attrib);
     memset(&s_verdict, 0, sizeof(s_verdict));
     s_lock_ms = 0;
     s_survey_ms = 0;
@@ -96,6 +99,33 @@ static void watch_event(const pharos_event_t *ev)
         return;
     }
     pw_observe(&s_engine, &ev->u.dot11, ev->t_us);
+
+    /* ATTRIBUTION RUNS ALONGSIDE, NOT INSIDE.
+     *
+     * Every frame builds the room's level profile, whoever sent it - that is
+     * the reference the forgery is later matched against, and it has to exist
+     * BEFORE the attack starts to be worth anything.
+     *
+     * A disconnect frame that Watch has decided is forged also feeds the
+     * attacker's own profile and the tool tells. The address it claims is not
+     * used for either: that address is the forgery. */
+    const pharos_ev_dot11_t *d = &ev->u.dot11;
+    pat_observe(&s_attrib, d->a2, d->rssi);
+
+    /* EVERY disconnect frame, not only the ones already proved forged.
+     *
+     * Asking Watch for a verdict per frame would mean running the whole
+     * evaluation in the hot path, and it is not needed: the exclusion rule
+     * does the same work for free. If these frames are GENUINE they arrive at
+     * the real access point's level, the only radio that matches is the
+     * address they claim to be, and that address is excluded - so a healthy
+     * network produces no lead at all. A forgery arrives at somebody else's
+     * level and matches somebody else. */
+    if (d->type == PHAROS_FT_MGMT &&
+        (d->subtype == PHAROS_ST_DEAUTH || d->subtype == PHAROS_ST_DISASSOC)) {
+        pat_observe_forged(&s_attrib, d->rssi, d->seq, d->duration,
+                           d->reason_or_status);
+    }
 }
 
 /* Stop hopping and hold `channel`. Called only from the UI task. */
@@ -516,6 +546,94 @@ static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "%u/%u", v.raw_score, v.ceiling);
         out->tone = (v.raw_score > v.score) ? PHAROS_TONE_WARN : PHAROS_TONE_DIM;
         return true;
+
+    /* ---- who, and what were they running ---- */
+    case 15: {
+        pat_verdict_t a;
+        pat_evaluate(&s_attrib, v.src, &a);
+        snprintf(out->left, sizeof(out->left), "tool");
+        snprintf(out->right, sizeof(out->right), "%s",
+                 a.tool == PAT_TOOL_UNKNOWN ? "-" : pat_tool_name(a.tool));
+        out->tone = (a.tool == PAT_TOOL_UNKNOWN) ? PHAROS_TONE_DIM
+                                                 : PHAROS_TONE_BAD;
+        return true;
+    }
+
+    case 16: {
+        pat_verdict_t a;
+        pat_evaluate(&s_attrib, v.src, &a);
+        snprintf(out->left, sizeof(out->left), "same radio as");
+        if (a.have_lead) {
+            snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
+                     a.lead_mac[3], a.lead_mac[4], a.lead_mac[5]);
+            out->tone = PHAROS_TONE_BAD;
+        } else if (a.ambiguous) {
+            /* Said plainly rather than left blank: "too many" is a finding
+             * about the room, and it tells the operator that moving would
+             * make the question answerable. */
+            snprintf(out->right, sizeof(out->right), "%u alike", a.candidates);
+            out->tone = PHAROS_TONE_WARN;
+        } else if (a.forged_n_seen) {
+            /* WHY there is no lead, rather than a blank.
+             *
+             * A dash reads as "not implemented". The real answer is usually
+             * that the attacking radio transmits NOTHING except the attack -
+             * a card in monitor mode injecting frames never sends anything
+             * under its own address, so there is no profile to match it
+             * against. That is a fact about the attacker's setup and worth
+             * saying. */
+            snprintf(out->right, sizeof(out->right), "not heard");
+            out->tone = PHAROS_TONE_DIM;
+        } else {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        }
+        return true;
+    }
+
+    case 17: {
+        pat_verdict_t a;
+        pat_evaluate(&s_attrib, v.src, &a);
+        snprintf(out->left, sizeof(out->left), "how sure of that");
+        if (a.have_lead) {
+            snprintf(out->right, sizeof(out->right), "%u%%", a.confidence);
+        } else {
+            snprintf(out->right, sizeof(out->right), "-");
+        }
+        out->tone = PHAROS_TONE_DIM;
+        return true;
+    }
+
+    case 18: {
+        pat_verdict_t a;
+        pat_evaluate(&s_attrib, v.src, &a);
+        snprintf(out->left, sizeof(out->left), "attacker level");
+        if (a.forged_n_seen) {
+            snprintf(out->right, sizeof(out->right), "%ddBm", a.forged_rssi);
+            out->tone = PHAROS_TONE_WARN;
+        } else {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        }
+        return true;
+    }
+
+    case 19: {
+        /* The raw tell, so the operator can check the reasoning rather than
+         * take "templated" on trust. */
+        pat_verdict_t a;
+        pat_evaluate(&s_attrib, v.src, &a);
+        snprintf(out->left, sizeof(out->left), "duration field");
+        if (a.forged_n_seen) {
+            snprintf(out->right, sizeof(out->right), "%s0x%04x",
+                     a.duration_constant ? "=" : "~", a.first_duration);
+            out->tone = a.duration_constant ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
+        } else {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        }
+        return true;
+    }
     default:
         return false;
     }
