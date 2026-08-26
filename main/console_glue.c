@@ -46,6 +46,8 @@ unsigned pharos_lens_roster_count(void);
 
 /* Provided by the Watch, Locate and Sentinel lens components. */
 extern void pharos_lens_watch_camp(uint8_t channel);
+extern void pharos_lens_harvest_camp(uint8_t channel);
+extern void pharos_lens_harvest_survey(void);
 extern void pharos_lens_watch_survey(void);
 extern void pharos_lens_locate_set_target(const uint8_t bssid[6], uint8_t channel);
 extern unsigned pharos_lens_sentinel_adopt(void);
@@ -61,15 +63,47 @@ extern bool pharos_lens_vigil_mark_known(void);
  * here would run Wi-Fi initialisation on the REPL task's small stack, and would
  * race the analytics loop that is walking the current lens. See
  * pharos_ui_request_lens(). */
-static bool glue_activate(const char *id) { return pharos_ui_request_lens(id); }
+/* WHICH LENS THE CAMP IS MEANT FOR.
+ *
+ * run_scan() activates a lens and then immediately sets its channel, but
+ * activation is DEFERRED - it is a request the UI loop picks up later, for
+ * the stack and race reasons above. So at the moment set_channel() runs, the
+ * lens that is actually active is still the previous one, and dispatching on
+ * it sent `harvest camp 6` to nobody: Harvest started hopping, on channel 13,
+ * having just printed "camped on channel 6".
+ *
+ * Remembering what was asked for closes the gap. It affects `watch camp` in
+ * exactly the same way whenever Watch was not already the running lens. */
+static char s_pending_lens[24];
+
+static bool glue_activate(const char *id)
+{
+    if (id) {
+        snprintf(s_pending_lens, sizeof(s_pending_lens), "%s", id);
+    }
+    return pharos_ui_request_lens(id);
+}
 static void glue_deactivate(void) { pharos_ui_request_stop(); }
 
 static void glue_set_channel(int channel)
 {
+    /* Dispatched by whichever lens is up. Harvest needs this more than Watch
+     * does - a handshake lasts about a hundred milliseconds, so a hopping
+     * receiver misses it twelve times out of thirteen - and until now only
+     * Watch was wired to it. */
+    /* The lens just REQUESTED, falling back to the running one for a bare
+     * `camp` typed at an already-active lens. */
     const pharos_lens_t *a = pharos_lens_active();
-    if (a && strcmp(a->id, "wifi.watch") == 0) {
+    const char *id = s_pending_lens[0] ? s_pending_lens : (a ? a->id : 0);
+    if (!id) {
+        return;
+    }
+    if (strcmp(id, "wifi.watch") == 0) {
         if (channel < 0) pharos_lens_watch_survey();
         else pharos_lens_watch_camp((uint8_t)channel);
+    } else if (strcmp(id, "wifi.harvest") == 0) {
+        if (channel < 0) pharos_lens_harvest_survey();
+        else pharos_lens_harvest_camp((uint8_t)channel);
     }
 }
 

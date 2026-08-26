@@ -49,16 +49,59 @@ static bool harvest_mount(void)
     return s_lock != NULL && pharos_bus_init(&s_bus, s_slots, HARVEST_RING);
 }
 
+/* CAMPING IS NOT A LUXURY FOR THIS LENS, IT IS THE DIFFERENCE BETWEEN
+ * CATCHING THE ATTACK AND NOT.
+ *
+ * A four-way handshake completes in about a hundred milliseconds. Hopping
+ * thirteen channels at 900 ms means this lens is on any given channel for
+ * roughly eight per cent of the time, so it would miss the very thing it
+ * exists to see about twelve times out of thirteen - and the FORCED family
+ * needs the ORDER of a disconnect and the handshake that follows it, so a hop
+ * landing between the two destroys the evidence even when both are in range.
+ *
+ * Watch has had an operator camp since v2. Harvest, which needs it more, did
+ * not. */
+static bool s_camp_requested;
+static uint8_t s_camp_channel;
+
 static bool harvest_start(void)
 {
-    pharos_scan_plan_t plan = pharos_scan_plan_survey();
-    /* Handshakes are brief and the ordering is the evidence, so this lens
-     * camps longer than the survey lenses do: a hop mid-handshake loses the
-     * very sequence it is looking for. */
-    plan.dwell_ms = 900;
+    pharos_scan_plan_t plan;
+    if (s_camp_requested) {
+        plan = pharos_scan_plan_camp(s_camp_channel);
+    } else {
+        plan = pharos_scan_plan_survey();
+        /* Handshakes are brief and the ordering is the evidence, so this lens
+         * camps longer than the survey lenses do: a hop mid-handshake loses
+         * the very sequence it is looking for. */
+        plan.dwell_ms = 900;
+    }
     plan.want_mgmt = true;
     plan.want_data = true; /* the handshake itself rides in data frames */
     return pharos_radio_rx_start(&plan, &s_bus);
+}
+
+void pharos_lens_harvest_camp(uint8_t channel)
+{
+    s_camp_requested = true;
+    s_camp_channel = channel;
+    if (pharos_lens_active() &&
+        strcmp(pharos_lens_active()->id, "wifi.harvest") == 0) {
+        pharos_radio_rx_stop();
+        harvest_start();
+        ESP_LOGI(TAG, "camping on channel %u (operator)", channel);
+    }
+}
+
+void pharos_lens_harvest_survey(void)
+{
+    s_camp_requested = false;
+    if (pharos_lens_active() &&
+        strcmp(pharos_lens_active()->id, "wifi.harvest") == 0) {
+        pharos_radio_rx_stop();
+        harvest_start();
+        ESP_LOGI(TAG, "surveying all channels (operator)");
+    }
 }
 
 static void harvest_stop(void)

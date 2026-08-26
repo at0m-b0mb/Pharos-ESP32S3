@@ -185,8 +185,9 @@ static void cmd_probe(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
 
 static void cmd_harvest(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
 {
-    (void)argc; (void)argv;
-    run_scan(ops, "wifi.harvest", 0, NULL, out);
+    /* Passes its arguments on, unlike the survey lenses: Harvest can camp,
+     * and a handshake is over in a hundred milliseconds. */
+    run_scan(ops, "wifi.harvest", argc - 1, argv + 1, out);
 }
 
 static void cmd_squall(const pc_ops_t *ops, int argc, char **argv, pc_out_t *out)
@@ -407,7 +408,7 @@ static const pc_cmd_t k_cmds[] = {
     { "mirage",   "mirage",                          "beacon / SSID-spam flood detector",      PC_CAT_SCAN,     0, 0, cmd_mirage },
     { "probe",    "probe",                           "what devices leak in probe requests",    PC_CAT_SCAN,     0, 0, cmd_probe },
     { "sentinel", "sentinel [adopt]",                "what changed since your site baseline",  PC_CAT_SCAN,     0, 1, cmd_sentinel },
-    { "harvest",  "harvest",                         "catch handshake/PMKID collection",       PC_CAT_SCAN,     0, 0, cmd_harvest },
+    { "harvest",  "harvest [camp <ch>|survey]",      "catch handshake/PMKID collection",       PC_CAT_SCAN,     0, 2, cmd_harvest },
     { "squall",   "squall [camp <ch>|survey]",       "busy, broken, or jammed?",               PC_CAT_SCAN,     0, 2, cmd_squall },
     { "vigil",    "vigil [mine]",                    "is a tracker travelling with you?",      PC_CAT_SCAN,     0, 1, cmd_vigil },
     { "aegis",    "aegis [ack]",                     "the whole picture: every finding so far",PC_CAT_ANALYSE,  0, 1, cmd_aegis },
