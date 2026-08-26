@@ -21,6 +21,7 @@
 
 #include "pharos_bus.h"
 #include "pharos_harvest.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
@@ -65,11 +66,17 @@ static void harvest_stop(void)
     pharos_radio_rx_stop();
 }
 
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void harvest_event(const pharos_event_t *ev)
 {
     if (!ev || ev->type != PHAROS_EV_DOT11) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     ph_observe(&s_engine, &ev->u.dot11, ev->t_us);
 }
 
@@ -158,6 +165,15 @@ static bool k_harvest_display(struct pharos_lens_display *o)
              (unsigned)v.forced_cycles, (unsigned)v.pmkid_orphans, v.ceiling);
     snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    /* WHY it thinks so, on the glass. The engine has computed these families
+     * all along; nothing was carrying them to the face, so this lens lit no
+     * chips at all and its score had to be taken on trust. */
+    o->families = v.families;
+    o->fam_label[0] = "FORCED";
+    o->fam_label[1] = "PMKID";
+    o->fam_label[2] = "REPEAT";
+    o->fam_label[3] = "SPREAD";
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

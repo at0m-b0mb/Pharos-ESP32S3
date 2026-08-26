@@ -453,8 +453,10 @@ static void test_rival_switched_off_everywhere(void)
     }
 
     /* Switched off. Past the window, BOTH must let go - and the score must
-     * come back down, because the score is what raises the alarm. */
+     * come back down, because the score is what raises the alarm. Listening
+     * throughout: that is what makes the silence mean something. */
     const uint64_t cold = last + win + 1000000ull;
+    prv_listen(&s, win + 1000000ull);
     prv_evaluate(&s, cold, &v);
     CHECK_EQ(v.n_devices, 0);
     CHECK_EQ(v.n_flipper, 0);
@@ -504,6 +506,11 @@ static void test_rival_expiry_follows_cadence(void)
         prv_state_t s; prv_verdict_t v;
         prv_reset(&s);
         for (int i = 0; i < 120; i++) {
+            /* Listening throughout, which is what the wall clock in these
+             * fixtures is standing in for. Staleness is measured on the
+             * listening clock now, so a test that does not advance it is
+             * modelling a receiver with its ears shut. */
+            prv_listen(&s, 500000ull);
             prv_observe_ble_adv(&s, addr, "R3ghon", fz, (uint8_t)sizeof(fz), -57,
                                 T0 + (uint64_t)i * 500000ull);
         }
@@ -513,15 +520,21 @@ static void test_rival_expiry_follows_cadence(void)
         CHECK_EQ(v.n_devices, 1);
 
         /* Five seconds of silence from something heard twice a second is
-         * eight missed advertisements over. It is gone. */
+         * eight missed advertisements over. It is gone - but only because we
+         * were still listening through those five seconds. */
+        prv_listen(&s, 6000000ull);
         prv_evaluate(&s, last + 6000000ull, &v);
         CHECK_EQ(v.n_devices, 0);
         prv_device_t d;
         CHECK(!prv_device_at_now(&s, 0, last + 6000000ull, &d),
               "and the list agrees");
 
-        /* But not so twitchy that a single missed advert drops it. */
-        prv_evaluate(&s, last + 2000000ull, &v);
+        /* But not so twitchy that a single missed advert drops it. Re-heard,
+         * so the clocks line up again. */
+        prv_observe_ble_adv(&s, addr, "R3ghon", fz, (uint8_t)sizeof(fz), -57,
+                            last + 6500000ull);
+        prv_listen(&s, 2000000ull);
+        prv_evaluate(&s, last + 8500000ull, &v);
         CHECK_EQ(v.n_devices, 1);
     }
 
@@ -539,6 +552,7 @@ static void test_rival_expiry_follows_cadence(void)
         }
         const uint64_t last = T0 + 50000000ull;
 
+        prv_listen(&s, 12000000ull);
         prv_evaluate(&s, last + 12000000ull, &v);
         CHECK_EQ(v.n_devices, 1);
         CHECK_EQ(v.n_pwnagotchi, 1);
@@ -546,6 +560,7 @@ static void test_rival_expiry_follows_cadence(void)
               "a ten-second cadence keeps the full window");
 
         /* And it does eventually go. */
+        prv_listen(&s, PRV_STALE_US + 1000000ull);
         prv_evaluate(&s, last + PRV_STALE_US + 1000000ull, &v);
         CHECK_EQ(v.n_devices, 0);
     }
@@ -1198,6 +1213,117 @@ static void test_rival_one_address_repeating_is_not_a_flood(void)
     CHECK(v.cohere_addrs <= 1, "and counts as one");
 }
 
+static void test_rival_ios_flood_varies_nothing(void)
+{
+    banner("rival: an iOS flood varies neither payload nor address");
+
+    /* MEASURED ON HARDWARE AND SCORED CLEAR. Three action codes from one
+     * address defeats both diversity tests; eighty-eight popup-triggering
+     * advertisements in four seconds is the attack regardless. */
+    prv_state_t s;
+    prv_reset(&s);
+
+    const uint8_t one[6] = { 0x7c, 0x33, 0xe0, 0x7e, 0xbc, 0x1f };
+    uint64_t t = 1000000ull;
+    for (unsigned i = 0; i < 90u; i++) {
+        /* company 0x004C, type 0x0F (Nearby Action), three action codes */
+        uint8_t adv[8] = { 0x07, 0xFF, 0x4C, 0x00, 0x0F,
+                           (uint8_t)(0x05 + (i % 3u)), 0x00, 0x00 };
+        prv_observe_ble_adv(&s, one, "", adv, 8, -45, t);
+        t += 45000ull; /* ~22 a second */
+    }
+
+    prv_verdict_t v;
+    prv_evaluate(&s, t, &v);
+
+    CHECK(v.pair_worst_addr >= PRV_SPAM_PAIR_RATE,
+          "one address is doing all of it (%u)", (unsigned)v.pair_worst_addr);
+    CHECK(v.pair_models < PRV_SPAM_MODELS, "payload diversity alone says no");
+    CHECK(v.pair_addrs < PRV_SPAM_ADDRS, "address diversity alone says no");
+    CHECK(v.notes & PRV_NOTE_PAIR_SPAM, "but the flood is still seen");
+    CHECK(v.families & PRV_FAM_ACTIVE, "as something being DONE");
+    CHECK(v.score >= 70, "and it reaches the ACTIVE band");
+}
+
+static void test_rival_an_accessory_burst_is_not_a_flood(void)
+{
+    banner("rival: a case being opened is not an attack");
+
+    /* THE NEGATIVE. Real AirPods burst proximity-pairing when the case opens
+     * and then STOP. The test is a sustained rate across the window, so a
+     * short burst must not reach it. */
+    prv_state_t s;
+    prv_reset(&s);
+
+    const uint8_t pods[6] = { 0x4c, 0x00, 0x11, 0x22, 0x33, 0x44 };
+    uint64_t t = 1000000ull;
+    for (unsigned i = 0; i < 12u; i++) {
+        uint8_t adv[8] = { 0x07, 0xFF, 0x4C, 0x00, 0x07, 0x0E, 0x20, 0x00 };
+        prv_observe_ble_adv(&s, pods, "", adv, 8, -55, t);
+        t += 50000ull;
+    }
+    t += 4000000ull; /* then silence, as a real case does */
+
+    prv_verdict_t v;
+    prv_evaluate(&s, t, &v);
+    CHECK(!(v.notes & PRV_NOTE_PAIR_SPAM), "a short burst is not a flood");
+}
+
+static void test_rival_a_turn_on_another_band_is_not_absence(void)
+{
+    banner("rival: silence while not listening is not evidence of absence");
+
+    /* THE BUG, AS REPORTED: "my flipper zero is turned on but it sometimes
+     * says there is nothing in the room".
+     *
+     * One radio serves every watch. On the home ring the watchtower hands it
+     * round, so while another watch has it this lens hears nothing at all -
+     * and staleness was measured on the WALL clock, so a Flipper sitting on
+     * the desk was declared gone after ten seconds of somebody else's turn.
+     * Absence of evidence taken as evidence of absence, by a lens that had
+     * not noticed its own ears were shut. */
+    /* The real advertisement: a Flipper is recognised by the Flipper service
+     * UUID 0x3082, not by its name - which is exactly why a renamed one is
+     * still found. */
+    static const uint8_t fz[] = {
+        0x02, 0x01, 0x06,
+        0x07, 0x09, 0x52, 0x33, 0x67, 0x68, 0x6f, 0x6e, /* "R3ghon" */
+        0x03, 0x02, 0x82, 0x30,                          /* UUID 0x3082 */
+    };
+    const uint8_t addr[6] = { 0x88, 0x27, 0x90, 0x26, 0xe1, 0x80 };
+
+    prv_state_t s;
+    prv_verdict_t v;
+    prv_reset(&s);
+
+    /* Heard twice a second for a minute while this lens holds the radio. */
+    uint64_t t = 1000000ull;
+    for (unsigned i = 0; i < 120u; i++) {
+        prv_listen(&s, 500000ull);
+        prv_observe_ble_adv(&s, addr, "R3ghon", fz, (uint8_t)sizeof(fz), -53, t);
+        t += 500000ull;
+    }
+    prv_evaluate(&s, t, &v);
+    CHECK_EQ(v.n_flipper, 1);
+
+    /* Now a full minute passes on ANOTHER watch's band. The wall clock runs;
+     * the listening clock does not, because nothing was received. */
+    t += 60000000ull;
+    prv_evaluate(&s, t, &v);
+    CHECK_EQ(v.n_flipper, 1);
+    CHECK(v.n_devices == 1, "the Flipper is still in the room");
+    {
+        prv_device_t d;
+        CHECK(prv_device_at_now(&s, 0, t, &d), "and still on the list");
+    }
+
+    /* But once this lens IS listening again and still hears nothing, it lets
+     * go exactly as before. The rule did not get weaker, it got honest. */
+    prv_listen(&s, 30000000ull);
+    prv_evaluate(&s, t + 30000000ull, &v);
+    CHECK_EQ(v.n_flipper, 0);
+}
+
 void test_rival(void)
 {
     test_rival_devboard_access_points();
@@ -1219,5 +1345,6 @@ void test_rival(void)
     test_rival_busy_room_is_not_a_flood();
     test_rival_listing_and_vocabulary();    test_rival_payload_independent_spam();
     test_rival_a_busy_room_is_not_a_spammer();
-    test_rival_one_address_repeating_is_not_a_flood();
+    test_rival_one_address_repeating_is_not_a_flood();    test_rival_ios_flood_varies_nothing();
+    test_rival_an_accessory_burst_is_not_a_flood();    test_rival_a_turn_on_another_band_is_not_absence();
 }

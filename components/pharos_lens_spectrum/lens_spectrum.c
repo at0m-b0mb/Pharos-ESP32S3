@@ -18,6 +18,7 @@
 #include "freertos/semphr.h"
 
 #include "pharos_bus.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_region.h"
@@ -87,11 +88,17 @@ static bool spectrum_start(void)
 
 static void spectrum_stop(void) { pharos_radio_rx_stop(); }
 
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void spectrum_event(const pharos_event_t *ev)
 {
     if (!ev) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     /* The receiver has left a channel: that visit is now a complete
      * observation, so publish it and start the next one clean. */
     if (ev->type == PHAROS_EV_DWELL) {
@@ -225,6 +232,7 @@ static bool k_spectrum_display(struct pharos_lens_display *o)
      * a watch that raises anything. See pharos_lens_display::alert. */
     o->has_alert = true;
     o->alert = (o->score >= 80u) ? 1u : 0u;
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 
 #include "pharos_bus.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_rival.h"
@@ -157,11 +158,17 @@ static void rival_stop(void)
 }
 
 /* Analytics core. */
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void rival_event(const pharos_event_t *ev)
 {
     if (!ev) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     if (ev->type == PHAROS_EV_BLE_ADV) {
         /* Pull the local name out of the advertisement, if it carries one.
          * AD structures are [len][type][payload]; 0x08 is a shortened local
@@ -228,10 +235,16 @@ static void rival_event(const pharos_event_t *ev)
 
 static void rival_tick(uint32_t dt_ms)
 {
-    (void)dt_ms;
     if (xSemaphoreTake(s_lock, 0) != pdTRUE) {
         return;
     }
+    /* THE ONLY PLACE THAT KNOWS WE ARE ACTUALLY LISTENING.
+     *
+     * on_tick runs while this lens holds the radio and does not run while
+     * another watch has it, so this is exactly the clock staleness should be
+     * measured on. Feeding wall time instead is what made a Flipper sitting
+     * on the desk vanish during somebody else's turn on the ring. */
+    prv_listen(&s_engine, (uint64_t)dt_ms * 1000ull);
     prv_verdict_t v;
     prv_evaluate(&s_engine, (uint64_t)esp_timer_get_time(), &v);
     if (v.band != s_last_band) {
@@ -319,10 +332,21 @@ static bool k_rival_display(struct pharos_lens_display *o)
         snprintf(o->why, sizeof(o->why), "%.47s", prv_kind_note(v.worst_kind));
     }
     o->families = v.families;
-    o->fam_label[0] = "HERE";
+    /* FOUR FAMILIES, FOUR CHIPS.
+     *
+     * The fourth was left NULL when the coherence family was added, so the
+     * new detection - the only one that sees a payload-less flood - lit
+     * nothing on the glass. A finding the face cannot show is a finding the
+     * operator does not have.
+     *
+     * Six characters is what a chip holds at this diameter (ps_chip_w over
+     * four), so the labels are short by necessity; they are chosen to say
+     * what the family MEANS rather than to abbreviate its internal name.
+     * "FLOOD" is what one radio wearing many addresses actually is. */
+    o->fam_label[0] = "SEEN";
     o->fam_label[1] = "ABLE";
-    o->fam_label[2] = "INUSE";
-    o->fam_label[3] = NULL;
+    o->fam_label[2] = "IN USE";
+    o->fam_label[3] = "FLOOD";
     o->score = v.score;
     o->raw_score = v.raw_score;
     o->ceiling = 100;
@@ -375,6 +399,7 @@ static bool k_rival_display(struct pharos_lens_display *o)
         }
     }
     }
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

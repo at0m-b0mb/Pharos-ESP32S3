@@ -18,6 +18,7 @@
 #include "freertos/semphr.h"
 
 #include "pharos_bus.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
@@ -63,11 +64,17 @@ static void squall_stop(void)
     pharos_radio_rx_stop();
 }
 
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void squall_event(const pharos_event_t *ev)
 {
     if (!ev || ev->type != PHAROS_EV_DWELL) {
         return; /* this lens listens to visits, not to frames */
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     const pharos_ev_dwell_t *d = &ev->u.dwell;
     pq_dwell_t in = {
         .channel = d->channel,
@@ -176,6 +183,15 @@ static bool k_squall_display(struct pharos_lens_display *o)
              : (v.worst == PQ_STATE_DEGRADED)  ? 2u
              : (v.worst == PQ_STATE_CONGESTED) ? 1u
                                                      : 0u;
+    /* WHY it thinks so, on the glass. The engine has computed these families
+     * all along; nothing was carrying them to the face, so this lens lit no
+     * chips at all and its score had to be taken on trust. */
+    o->families = v.families;
+    o->fam_label[0] = "ENERGY";
+    o->fam_label[1] = "RETRY";
+    o->fam_label[2] = "SPREAD";
+    o->fam_label[3] = NULL;
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

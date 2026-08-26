@@ -347,6 +347,7 @@ static prv_device_t *admit(prv_state_t *s, const uint8_t addr[6],
     d->in_use = true;
     d->first_us = t_us;
     d->last_us = t_us;
+    d->last_listen_us = s->listen_us;
     d->best_rssi = rssi;
     d->addresses = 1;
     return d;
@@ -564,12 +565,16 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
                 for (uint8_t k = 0; k < s->pair_n_addrs; k++) {
                     if (s->pair_addr_h[k] == h) {
                         s->pair_addr_us[k] = t_us;
+                        if (s->pair_addr_cnt[k] < 0xFFFFu) {
+                            s->pair_addr_cnt[k]++;
+                        }
                         known = true;
                         break;
                     }
                 }
                 if (!known) {
                     if (s->pair_n_addrs < PRV_PAIR_ADDR_SLOTS) {
+                        s->pair_addr_cnt[s->pair_n_addrs] = 1;
                         s->pair_addr_h[s->pair_n_addrs] = h;
                         s->pair_addr_us[s->pair_n_addrs] = t_us;
                         s->pair_n_addrs++;
@@ -583,6 +588,7 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
                                 oldest = k;
                             }
                         }
+                        s->pair_addr_cnt[oldest] = 1;
                         s->pair_addr_h[oldest] = h;
                         s->pair_addr_us[oldest] = t_us;
                     }
@@ -639,6 +645,7 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
     d->ble = true;
     d->kind = kind;
     d->last_us = t_us;
+    d->last_listen_us = s->listen_us;
     d->sightings++;
     if (rssi > d->best_rssi) {
         d->best_rssi = rssi;
@@ -787,6 +794,24 @@ uint64_t prv_expiry_us(const prv_device_t *d)
     return win;
 }
 
+void prv_listen(prv_state_t *s, uint64_t dt_us)
+{
+    if (s) {
+        s->listen_us += dt_us;
+    }
+}
+
+/* `listen_now` is the engine's listening clock, not the wall clock. A device
+ * is stale when we RECEIVED for longer than its own cadence allows without
+ * hearing it - so a turn spent on another watch's band ages nothing. */
+static bool stale_on_listen(const prv_device_t *d, uint64_t listen_now)
+{
+    if (!d || listen_now <= d->last_listen_us) {
+        return false;
+    }
+    return (listen_now - d->last_listen_us) > prv_expiry_us(d);
+}
+
 bool prv_is_stale(const prv_device_t *d, uint64_t now_us)
 {
     if (!d || !now_us || now_us <= d->last_us) {
@@ -869,6 +894,7 @@ void prv_observe_beacon_ex(prv_state_t *s, const uint8_t bssid[6],
     d->ble = false;
     d->kind = kind;
     d->last_us = t_us;
+    d->last_listen_us = s->listen_us;
     d->sightings++;
     if (rssi > d->best_rssi) {
         d->best_rssi = rssi;
@@ -967,7 +993,7 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
          * that contradicts itself is worse than either half alone - the
          * operator has to decide which line to believe, and there is no way
          * for them to tell. One staleness rule, applied in both places. */
-        if (prv_is_stale(d, now_us)) {
+        if (stale_on_listen(d, s->listen_us)) {
             continue;
         }
         /* FLOOD DEBRIS IS NOT A DEVICE.
@@ -1062,9 +1088,26 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
     /* Either shape counts. Diversity catches the tools that cycle payloads;
      * address churn catches the ones that hammer a single payload, which the
      * diversity test scores as one model and would otherwise miss entirely. */
+    /* Three shapes now. Diversity of payload, diversity of address, or sheer
+     * rate - because an iOS-targeted flood varies neither of the first two
+     * and was therefore scored CLEAR while raising dialogs twenty-two times a
+     * second. */
+    /* The busiest single address inside the window. */
+    for (uint8_t k = 0; k < s->pair_n_addrs; k++) {
+        if (now_us >= s->pair_addr_us[k] &&
+            now_us - s->pair_addr_us[k] <= PRV_SPAM_WINDOW_US &&
+            s->pair_addr_cnt[k] > out->pair_worst_addr) {
+            out->pair_worst_addr = s->pair_addr_cnt[k];
+        }
+    }
+
+    /* Three shapes. Diversity of payload, diversity of address, or one
+     * address hammering - because an iOS-targeted flood varies neither of the
+     * first two and was scored CLEAR while raising dialogs 22 times a second. */
     const bool pair_spam = (out->pair_advs >= PRV_SPAM_ADVS) &&
                            (out->pair_models >= PRV_SPAM_MODELS ||
-                            out->pair_addrs >= PRV_SPAM_ADDRS);
+                            out->pair_addrs >= PRV_SPAM_ADDRS ||
+                            out->pair_worst_addr >= PRV_SPAM_PAIR_RATE);
 
     /* THE EARLY EXIT THAT MADE THE LENS BLIND.
      *
@@ -1221,7 +1264,7 @@ bool prv_device_at_now(const prv_state_t *s, unsigned index, uint64_t now_us,
             }
             /* The list must agree with the count above it: a device the
              * verdict has dropped as stale cannot still have a row. */
-            if (prv_is_stale(d, now_us)) {
+            if (stale_on_listen(d, s->listen_us)) {
                 continue;
             }
             /* ...and neither can one the verdict discarded as flood debris.

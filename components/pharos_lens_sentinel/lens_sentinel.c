@@ -25,6 +25,7 @@
 #include "pharos_bus.h"
 #include "pharos_census.h"
 #include "pharos_dot11.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
@@ -101,11 +102,17 @@ static void sentinel_stop(void)
     pharos_radio_rx_stop();
 }
 
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void sentinel_event(const pharos_event_t *ev)
 {
     if (!ev || ev->type != PHAROS_EV_DOT11) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     const pharos_ev_dot11_t *f = &ev->u.dot11;
     if (f->type != PHAROS_FT_MGMT) {
         return;
@@ -288,6 +295,7 @@ static bool k_sentinel_display(struct pharos_lens_display *o)
     o->alert = (v.band >= PS_BAND_INVESTIGATE) ? 2u
              : (v.band >= PS_BAND_NOTABLE)     ? 1u
                                                : 0u;
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

@@ -22,6 +22,7 @@
 #include "pharos_bus.h"
 #include "pharos_census.h"
 #include "pharos_dot11.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_lens_census.h"
 #include "pharos_survey.h"
@@ -100,11 +101,17 @@ static void census_stop(void)
 
 /* Analytics core. The fixed header arrived on the bus; the element chain is
  * walked here, off the radio's hot path, exactly as the architecture says. */
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void census_event(const pharos_event_t *ev)
 {
     if (!ev || ev->type != PHAROS_EV_DOT11) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     const pharos_ev_dot11_t *f = &ev->u.dot11;
     if (f->type != PHAROS_FT_MGMT) {
         return;
@@ -451,6 +458,7 @@ static bool k_census_display(struct pharos_lens_display *o)
         xSemaphoreGive(s_lock);
     }
     }
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

@@ -21,6 +21,7 @@
 #include "pharos_bus.h"
 #include "pharos_dot11.h"
 #include "pharos_flood.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_report.h"
@@ -55,11 +56,17 @@ static bool mirage_start(void)
 
 static void mirage_stop(void) { pharos_radio_rx_stop(); }
 
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void mirage_event(const pharos_event_t *ev)
 {
     if (!ev || ev->type != PHAROS_EV_DOT11) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     const pharos_ev_dot11_t *f = &ev->u.dot11;
     if (f->type != PHAROS_FT_MGMT || f->subtype != PHAROS_ST_BEACON) {
         return;
@@ -160,6 +167,15 @@ static bool k_mirage_display(struct pharos_lens_display *o)
              (unsigned)v.distinct_ssids, v.ceiling);
     snprintf(o->advice, sizeof(o->advice), "%s", pf_band_advice(v.band));
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+    /* WHY it thinks so, on the glass. The engine has computed these families
+     * all along; nothing was carrying them to the face, so this lens lit no
+     * chips at all and its score had to be taken on trust. */
+    o->families = v.families;
+    o->fam_label[0] = "VOLUME";
+    o->fam_label[1] = "NEW";
+    o->fam_label[2] = "SYNTH";
+    o->fam_label[3] = NULL;
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

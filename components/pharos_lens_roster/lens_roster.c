@@ -18,6 +18,7 @@
 #include "freertos/semphr.h"
 
 #include "pharos_bus.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_radio.h"
 #include "pharos_roster.h"
@@ -76,11 +77,17 @@ static void roster_stop(void)
  * anything. It works now. The timeout on this side is short and a miss simply
  * drops the observation: losing one advertisement out of thousands is free,
  * and blocking the analytics core is not. */
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void roster_event(const pharos_event_t *ev)
 {
     if (!ev) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(2)) != pdTRUE) {
         return;
     }
@@ -224,6 +231,7 @@ static bool k_roster_display(struct pharos_lens_display *o)
      * merely because the percentage is high. */
     o->has_alert = true;
     o->alert = actionable ? 1u : 0u;
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

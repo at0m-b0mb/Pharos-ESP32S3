@@ -26,6 +26,7 @@
 
 #include "pharos_bus.h"
 #include "pharos_dot11.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_sense.h"
 #include "pharos_ui.h"
@@ -96,11 +97,17 @@ static void vigil_stop(void)
     pharos_radio_rx_stop();
 }
 
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void vigil_event(const pharos_event_t *ev)
 {
     if (!ev) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     if (ev->type == PHAROS_EV_BLE_ADV) {
         pv_observe_adv(&s_engine, ev->u.ble.addr, ev->u.ble.addr_type,
                        ev->u.ble.rssi, ev->u.ble.data, ev->u.ble.data_len,
@@ -306,6 +313,7 @@ static bool k_vigil_display(struct pharos_lens_display *o)
              : (v.band >= PV_BAND_PERSISTENT) ? 2u
              : (v.band >= PV_BAND_SEEN)       ? 1u
                                               : 0u;
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 

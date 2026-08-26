@@ -9,6 +9,7 @@ idf_component_register(
     SRCS
         "pharos_acoustic.c"
         "pharos_attrib.c"
+        "pharos_pulse.c"
         "pharos_aegis.c"
         "pharos_census.c"
         "pharos_chain.c"

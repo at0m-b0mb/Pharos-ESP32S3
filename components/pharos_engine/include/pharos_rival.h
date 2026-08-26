@@ -159,6 +159,38 @@ typedef enum {
 #define PRV_SPAM_ADDRS    8
 #define PRV_PAIR_ADDR_SLOTS 24
 
+/* ---- AND THE SPAM THAT VARIES NEITHER PAYLOAD NOR ADDRESS -------------
+ *
+ * Both tests above are DIVERSITY tests: how many models, or how many
+ * addresses. An iOS-targeted flood measured on hardware satisfied neither -
+ * three action codes from a single address - and was scored CLEAR.
+ *
+ * It was, at the same moment, sending eighty-eight popup-triggering
+ * advertisements in a four-second window. Twenty-two a second.
+ *
+ * Volume is weak evidence for most of what this device looks at, because busy
+ * rooms are busy. It is not weak here, and the reason is worth stating: an
+ * Apple Continuity advertisement of type 0x0F or 0x07 exists to raise a
+ * DIALOG on a stranger's phone. Twenty-two a second is not a chatty
+ * accessory, it is the attack itself - the volume IS the mechanism. A real
+ * accessory bursts briefly when a case opens and then stops; it does not
+ * sustain this across a whole window.
+ *
+ * MEASURED PER ADDRESS, AND THAT PART IS LOAD-BEARING.
+ *
+ * A first attempt tested the total rate and a standing test caught it: three
+ * headphones in a cafe, each advertising the one model it actually is as
+ * often as it likes, also produce ninety advertisements in four seconds. That
+ * room is not an attack, and calling it one is how an operator learns to
+ * ignore the screen.
+ *
+ * Both ends of the distribution are suspicious and the middle is not. Many
+ * addresses is rotation (the test above). One address hammering is a single
+ * radio raising dialogs as fast as it can. Three addresses at thirty each is
+ * three accessories. So the number that matters is the busiest SINGLE
+ * address: thirty in the cafe, eighty-eight in the measured attack. */
+#define PRV_SPAM_PAIR_RATE 60  /* pairing payloads from ONE address */
+
 /* ---- THE SPAM THAT CARRIES NO PAYLOAD WE RECOGNISE -------------------
  *
  * Both tests above need a PAIRING PAYLOAD: one counts distinct model codes,
@@ -248,6 +280,21 @@ typedef enum {
  * A Flipper heard twice a second is dropped about five seconds after it stops.
  * A beacon heard every ten seconds still gets the full thirty. Neither number
  * had to be chosen for the other. */
+/* ...AND SILENCE ONLY COUNTS WHILE SOMEBODY WAS LISTENING.
+ *
+ * The window above is measured against the wall clock, which is right only if
+ * this lens is always receiving. It is not. One radio serves every watch, and
+ * on the home ring the watchtower hands it round - so while another watch has
+ * it, Rival hears nothing at all. After ten seconds of somebody else's turn a
+ * Flipper sitting on the desk was declared gone, and the screen said the room
+ * was empty while the thing was still in it.
+ *
+ * That is the same error this engine already refuses elsewhere in a different
+ * costume: it was treating an absence of evidence as evidence of absence,
+ * having failed to notice it had its ears shut.
+ *
+ * So staleness is measured on a clock that ONLY ADVANCES WHILE SCANNING. A
+ * device is gone when we listened long enough to have heard it and did not. */
 #define PRV_SILENCE_MULTIPLE 8ull
 #define PRV_STALE_MIN_US 5000000ull /* never twitchier than five seconds */
 
@@ -288,6 +335,7 @@ typedef struct {
     uint32_t sightings;
     uint16_t addresses; /* distinct addresses this kind was heard from */
     uint64_t first_us, last_us;
+    uint64_t last_listen_us; /* the listen clock when last heard */
     bool ble;      /* seen over Bluetooth rather than Wi-Fi */
     bool in_use;
 } prv_device_t;
@@ -329,6 +377,7 @@ typedef struct {
      * storing identifying material for no purpose. */
     uint32_t pair_addr_h[PRV_PAIR_ADDR_SLOTS];
     uint64_t pair_addr_us[PRV_PAIR_ADDR_SLOTS];
+    uint16_t pair_addr_cnt[PRV_PAIR_ADDR_SLOTS]; /* how loud each one is */
     uint8_t pair_n_addrs;
 
     /* Payload-independent spam: addresses bucketed by the signal level they
@@ -343,6 +392,10 @@ typedef struct {
     uint64_t coh_name_us[PRV_NAME_SLOTS];
     uint8_t coh_n_names;
     uint64_t coh_flood_us;  /* when the cluster last cleared the bar */
+
+    /* Time spent actually receiving, advanced by the lens. Staleness is
+     * measured on this, never on the wall clock. */
+    uint64_t listen_us;
 
     uint64_t first_us, last_us;
 } prv_state_t;
@@ -362,6 +415,7 @@ typedef struct {
 
     /* What the coherence test found, reported so the operator can check the
      * reasoning rather than take "one radio" on trust. */
+    uint16_t pair_worst_addr; /* advertisements from the busiest address */
     uint8_t cohere_addrs;   /* addresses inside the level cluster */
     uint8_t cohere_names;   /* distinct names inside it           */
     int8_t cohere_rssi;     /* the level they clustered at        */
@@ -463,6 +517,10 @@ uint64_t prv_expiry_us(const prv_device_t *d);
 
 /* True when `d` has been silent past its own window at `now_us`. */
 bool prv_is_stale(const prv_device_t *d, uint64_t now_us);
+
+/* Advance the listening clock by dt_us. The lens calls this only while the
+ * receiver is actually on this lens' band; see PRV_SILENCE_MULTIPLE. */
+void prv_listen(prv_state_t *s, uint64_t dt_us);
 
 void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out);
 

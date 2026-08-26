@@ -52,6 +52,7 @@
 
 #include "pharos_bus.h"
 #include "pharos_lens_census.h"
+#include "pharos_pulse.h"
 #include "pharos_lens.h"
 #include "pharos_lens_census.h"
 #include "pharos_radio.h"
@@ -122,11 +123,17 @@ static bool frame_is_mine(const pharos_ev_dot11_t *d)
            memcmp(d->a1, s_target, 6) == 0;
 }
 
+/* The shared activity ribbon: one call per event in, one call per repaint
+ * out. Before this, every lens but Watch drew an empty timeline. */
+static pharos_pulse_t s_pulse;
+
 static void ward_event(const pharos_event_t *ev)
 {
     if (!ev || ev->type != PHAROS_EV_DOT11) {
         return;
     }
+
+    pharos_pulse_note(&s_pulse, ev->t_us);
     s_frames_seen++;
     if (!s_have_target) {
         return; /* nothing to filter for; grade nothing */
@@ -311,6 +318,7 @@ static bool k_ward_display(struct pharos_lens_display *o)
     o->has_score = true;
     /* This one IS a threat scale - it is the deauthentication engine, pointed
      * at one network - so the ring may read it off the score. */
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
 
