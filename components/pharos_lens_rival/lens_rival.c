@@ -378,6 +378,9 @@ static bool k_rival_display(struct pharos_lens_display *o)
     return true;
 }
 
+/* How many rows precede the per-device list. */
+#define RIVAL_FIXED_ROWS 10u
+
 static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
 {
     prv_verdict_t v;
@@ -434,6 +437,48 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
         out->tone = (v.n_addresses > v.n_devices * 4u && v.n_devices)
                         ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
         return true;
+    case 7:
+        /* THE PAYLOAD-INDEPENDENT FINDING.
+         *
+         * How many addresses arrived at one signal level. This is the row
+         * that answers a flood carrying nothing the other tests recognise. */
+        snprintf(out->left, sizeof(out->left), "one radio, addresses");
+        if (v.notes & PRV_NOTE_COHERENT) {
+            /* Clamped so the width is PROVABLE - right[] is twelve bytes and
+             * -Werror=format-truncation will not accept a width it has to
+             * take on trust. */
+            unsigned na = v.cohere_addrs > 99u ? 99u : v.cohere_addrs;
+            int rs = v.cohere_rssi < -99 ? -99 : v.cohere_rssi;
+            snprintf(out->right, sizeof(out->right), "%u@%ddB", na, rs);
+            out->tone = PHAROS_TONE_BAD;
+        } else {
+            snprintf(out->right, sizeof(out->right), "%u",
+                     (unsigned)v.cohere_addrs);
+            out->tone = PHAROS_TONE_DIM;
+        }
+        return true;
+
+    case 8:
+        snprintf(out->left, sizeof(out->left), "names it is wearing");
+        snprintf(out->right, sizeof(out->right), "%u",
+                 (unsigned)v.cohere_names);
+        out->tone = (v.notes & PRV_NOTE_MANY_NAMES) ? PHAROS_TONE_BAD
+                                                    : PHAROS_TONE_DIM;
+        return true;
+
+    case 9:
+        /* Said out loud, because during a flood this lens can be made to
+         * report any hardware the attacker feels like naming. */
+        snprintf(out->left, sizeof(out->left), "names in view are");
+        if (v.notes & PRV_NOTE_NAMES_FORGED) {
+            snprintf(out->right, sizeof(out->right), "ATTACKER'S");
+            out->tone = PHAROS_TONE_BAD;
+        } else {
+            snprintf(out->right, sizeof(out->right), "announced");
+            out->tone = PHAROS_TONE_DIM;
+        }
+        return true;
+
     default:
         break;
     }
@@ -450,7 +495,10 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
      *
      * The capability note now rides on the live face instead, under the score,
      * where it is context about a finding rather than an item in a list. */
-    const unsigned k = index - 7u;
+    /* Ten fixed rows now, not seven: the three coherence findings were added
+     * above. This offset and the `case` labels are the same fact written
+     * twice, so it is named rather than repeated as a literal. */
+    const unsigned k = index - RIVAL_FIXED_ROWS;
     prv_device_t d;
     /* Stale-aware, so the list cannot show hardware the count above it has
      * already dropped - a Flipper that has been switched off must stop being

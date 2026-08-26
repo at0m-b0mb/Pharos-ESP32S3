@@ -377,6 +377,146 @@ static void note_time(prv_state_t *s, uint64_t t_us)
     s->last_us = t_us;
 }
 
+/* FNV-1a. Both spam tests answer only "how many DIFFERENT ones", never
+ * "which", so addresses and names are stored as hashes - keeping the values
+ * would be retaining identifying material for no purpose. Zero is reserved to
+ * mark an empty slot. */
+static uint32_t fnv_bytes(const uint8_t *p, unsigned n)
+{
+    uint32_t h = 2166136261u;
+    for (unsigned i = 0; i < n; i++) {
+        h ^= p[i];
+        h *= 16777619u;
+    }
+    return h ? h : 1u;
+}
+
+static uint32_t addr_hash(const uint8_t addr[6])
+{
+    return fnv_bytes(addr, 6);
+}
+
+static uint32_t str_hash(const char *s)
+{
+    unsigned n = 0;
+    while (s[n] && n < 64u) n++;
+    return fnv_bytes((const uint8_t *)s, n);
+}
+
+/* ---- payload-independent spam: one radio wearing many addresses -------
+ *
+ * See the long note in pharos_rival.h. The short version: an attacker writes
+ * the address, the world writes the signal level, so a flood of addresses
+ * from one transmitter arrives in a tight level band and a room full of real
+ * accessories does not.
+ */
+static void cohere_expire(prv_state_t *s, uint64_t now_us)
+{
+    unsigned w = 0;
+    for (unsigned i = 0; i < s->coh_n; i++) {
+        if (now_us - s->coh_us[i] < PRV_COHERE_WINDOW_US) {
+            s->coh_addr_h[w] = s->coh_addr_h[i];
+            s->coh_rssi[w] = s->coh_rssi[i];
+            s->coh_us[w] = s->coh_us[i];
+            w++;
+        }
+    }
+    s->coh_n = (uint8_t)w;
+
+    w = 0;
+    for (unsigned i = 0; i < s->coh_n_names; i++) {
+        if (now_us - s->coh_name_us[i] < PRV_COHERE_WINDOW_US) {
+            s->coh_name_h[w] = s->coh_name_h[i];
+            s->coh_name_us[w] = s->coh_name_us[i];
+            w++;
+        }
+    }
+    s->coh_n_names = (uint8_t)w;
+}
+
+static unsigned cohere_peak(const prv_state_t *s, int8_t *at_rssi);
+
+static void cohere_note(prv_state_t *s, const uint8_t addr[6], const char *name,
+                        int8_t rssi, uint64_t t_us)
+{
+    cohere_expire(s, t_us);
+
+    /* NO EARLY RETURNS PAST THIS POINT.
+     *
+     * Both the address and the name lookups below used to `return` on a hit,
+     * which meant the latch at the bottom was reached only by the FIRST
+     * sighting of each - so a steady flood, whose addresses and names are
+     * quickly all known, stopped latching almost immediately. The verdict
+     * then oscillated between IN USE and CAPABLE while nothing changed. */
+    bool fresh_addr = true;
+    const uint32_t h = addr_hash(addr);
+    for (unsigned i = 0; i < s->coh_n; i++) {
+        if (s->coh_addr_h[i] == h) {
+            s->coh_us[i] = t_us; /* same address again: refresh, do not add */
+            fresh_addr = false;
+            break;
+        }
+    }
+    if (fresh_addr && s->coh_n < PRV_COHERE_SLOTS) {
+        s->coh_addr_h[s->coh_n] = h;
+        s->coh_rssi[s->coh_n] = rssi;
+        s->coh_us[s->coh_n] = t_us;
+        s->coh_n++;
+    }
+
+    /* Names are tracked alongside, not per-address: the question is how many
+     * DIFFERENT names the flood is wearing. An empty name is not one. */
+    if (name && name[0]) {
+        bool fresh_name = true;
+        const uint32_t nh = str_hash(name);
+        for (unsigned i = 0; i < s->coh_n_names; i++) {
+            if (s->coh_name_h[i] == nh) {
+                s->coh_name_us[i] = t_us;
+                fresh_name = false;
+                break;
+            }
+        }
+        if (fresh_name && s->coh_n_names < PRV_NAME_SLOTS) {
+            s->coh_name_h[s->coh_n_names] = nh;
+            s->coh_name_us[s->coh_n_names] = t_us;
+            s->coh_n_names++;
+        }
+    }
+
+    /* Latch here, where the state is writable, rather than deciding afresh in
+     * every evaluation. See PRV_FLOOD_HOLD_US. */
+    if (cohere_peak(s, 0) >= PRV_COHERE_ADDRS) {
+        s->coh_flood_us = t_us;
+    }
+}
+
+/* The densest PRV_COHERE_DB-wide band of levels, and how many addresses sit
+ * in it. A sliding window over a small array - forty entries, so the obvious
+ * quadratic scan is cheaper than sorting and easier to be sure of. */
+static unsigned cohere_peak(const prv_state_t *s, int8_t *at_rssi)
+{
+    unsigned best = 0;
+    int8_t best_r = 0;
+    for (unsigned i = 0; i < s->coh_n; i++) {
+        const int lo = s->coh_rssi[i];
+        unsigned n = 0;
+        for (unsigned j = 0; j < s->coh_n; j++) {
+            const int d = (int)s->coh_rssi[j] - lo;
+            if (d >= 0 && d < PRV_COHERE_DB) {
+                n++;
+            }
+        }
+        if (n > best) {
+            best = n;
+            best_r = s->coh_rssi[i];
+        }
+    }
+    if (at_rssi) {
+        *at_rssi = best_r;
+    }
+    return best;
+}
+
 void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name,
                          const uint8_t *adv, uint8_t adv_len, int8_t rssi,
                          uint64_t t_us)
@@ -397,6 +537,9 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
     }
     s->adv_distinct[s->adv_slot]++;
 
+    /* Every advertisement feeds the coherence test, whatever it carries. */
+    cohere_note(s, addr, name, rssi, t_us);
+
     /* Pairing-popup spam, into a window that slides. Each model carries its
      * own last-seen stamp and the advertisements go into per-second buckets;
      * nothing is reset wholesale, so a steady attack produces a steady
@@ -416,14 +559,7 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
              * obvious here: real accessories keep an address for minutes,
              * these tools draw a fresh one per advertisement. */
             {
-                uint32_t h = 2166136261u; /* FNV-1a over the six bytes */
-                for (uint8_t b = 0; b < 6; b++) {
-                    h ^= addr[b];
-                    h *= 16777619u;
-                }
-                if (h == 0u) {
-                    h = 1u; /* zero marks an empty slot */
-                }
+                const uint32_t h = addr_hash(addr);
                 bool known = false;
                 for (uint8_t k = 0; k < s->pair_n_addrs; k++) {
                     if (s->pair_addr_h[k] == h) {
@@ -782,6 +918,22 @@ static uint8_t kind_weight(prv_kind_t k)
 
 void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
 {
+    /* MEASURED FIRST, BECAUSE IT CHANGES WHAT THE NAMES MEAN.
+     *
+     * The device loop below identifies hardware by announced name, and during
+     * a rotation flood those names belong to the attacker. So whether a flood
+     * is in view has to be known before any identification is trusted, not
+     * after - which is where this test originally sat. */
+    int8_t coh_at = 0;
+    unsigned coh_tight = 0;
+    bool flood_in_view = false;
+    if (s) {
+        coh_tight = cohere_peak(s, &coh_at);
+        flood_in_view = s->coh_flood_us &&
+                        (now_us >= s->coh_flood_us) &&
+                        (now_us - s->coh_flood_us) < PRV_FLOOD_HOLD_US;
+    }
+
     if (!out) {
         return;
     }
@@ -816,6 +968,19 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
          * operator has to decide which line to believe, and there is no way
          * for them to tell. One staleness rule, applied in both places. */
         if (prv_is_stale(d, now_us)) {
+            continue;
+        }
+        /* FLOOD DEBRIS IS NOT A DEVICE.
+         *
+         * A rotation flood advertises whatever names its author chose, and one
+         * of the four measured here was "Flipper". Aggregated by name, that
+         * became a confident "Flipper Zero present, 245 addresses" - an
+         * identification manufactured by the attack itself, while the
+         * operator's real Flipper was not advertising at all. A genuine
+         * device does not wear two hundred addresses. */
+        if (flood_in_view && d->addresses >= PRV_COHERE_NAMES &&
+            (uint32_t)d->sightings * PRV_STEADY_DEN <
+                (uint32_t)d->addresses * PRV_STEADY_NUM) {
             continue;
         }
         if (d->kind < PRV_KIND_COUNT && !kind_seen[d->kind]) {
@@ -901,7 +1066,21 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
                            (out->pair_models >= PRV_SPAM_MODELS ||
                             out->pair_addrs >= PRV_SPAM_ADDRS);
 
-    if (out->n_devices == 0 && out->peak_adv_per_s < 60u && !pair_spam) {
+    /* THE EARLY EXIT THAT MADE THE LENS BLIND.
+     *
+     * Three ways to be interesting, and a flood that satisfies none of them
+     * left through this door before anything else could look at it: no device
+     * NAMED (the names are junk, or the flood's debris has just been
+     * discarded), under sixty advertisements a second (a steady eight-a-second
+     * rotation is not), and no pairing payload (a name-rotation flood carries
+     * none). That is exactly the attack measured on hardware, and it was
+     * returned as "nothing announced itself to this receiver" while 244
+     * addresses were in view.
+     *
+     * The coherence test is a fourth way, and it has to be consulted HERE
+     * rather than fifty lines further down where it used to sit. */
+    if (out->n_devices == 0 && out->peak_adv_per_s < 60u && !pair_spam &&
+        !flood_in_view) {
         return;
     }
 
@@ -944,6 +1123,43 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
          * band rather than nudging a total that had nothing else in it. */
         if (score < 60u) {
             score = 60u;
+        }
+    }
+
+    /* ---- one radio wearing many addresses ----------------------------
+     *
+     * The payload-independent test. It is deliberately evaluated LAST and on
+     * its own terms: it does not need a pairing payload, a known model code,
+     * or a recognisable name, so it is the only one of these that can see a
+     * flood nobody has catalogued yet.
+     *
+     * Measured against a real name-rotation flood the other two scored it
+     * CAPABLE - "a tool is present" - while 244 addresses at one signal level
+     * sat in plain view. */
+    {
+        const unsigned tight = coh_tight;
+        out->cohere_addrs = (uint8_t)(tight > 255u ? 255u : tight);
+        out->cohere_names = s->coh_n_names;
+        out->cohere_rssi = coh_at;
+
+        if (tight >= PRV_COHERE_ADDRS) {
+            out->notes |= PRV_NOTE_COHERENT;
+            /* Every name in view is now the attacker's to choose. */
+            out->notes |= PRV_NOTE_NAMES_FORGED;
+            out->families |= PRV_FAM_ONE_RADIO;
+            out->families |= PRV_FAM_ACTIVE;
+            if (score < 66u) {
+                score = 66u;
+            }
+            /* Several names from one radio is the second half of the same
+             * observation, and it is what separates a rotation flood from a
+             * single device that merely re-randomises often. */
+            if (s->coh_n_names >= PRV_COHERE_NAMES) {
+                out->notes |= PRV_NOTE_MANY_NAMES;
+                if (score < 74u) {
+                    score = 74u;
+                }
+            }
         }
     }
 
@@ -1006,6 +1222,21 @@ bool prv_device_at_now(const prv_state_t *s, unsigned index, uint64_t now_us,
             /* The list must agree with the count above it: a device the
              * verdict has dropped as stale cannot still have a row. */
             if (prv_is_stale(d, now_us)) {
+                continue;
+            }
+            /* ...and neither can one the verdict discarded as flood debris.
+             *
+             * Measured on hardware: "hardware identified 0" sat three rows
+             * above "Flipper Zero  215 addr". A screen that contradicts
+             * itself is worse than either half alone, because the operator
+             * has to decide which line to believe and nothing tells them
+             * which. One suppression rule, applied in both places - exactly
+             * as the staleness rule above already is. */
+            if (s->coh_flood_us && now_us >= s->coh_flood_us &&
+                (now_us - s->coh_flood_us) < PRV_FLOOD_HOLD_US &&
+                d->addresses >= PRV_COHERE_NAMES &&
+                (uint32_t)d->sightings * PRV_STEADY_DEN <
+                    (uint32_t)d->addresses * PRV_STEADY_NUM) {
                 continue;
             }
             present = true;

@@ -1112,6 +1112,92 @@ static void test_rival_implant(void)
           (unsigned)v.score);
 }
 
+static void test_rival_payload_independent_spam(void)
+{
+    banner("rival: one radio wearing many addresses, whatever it advertises");
+
+    /* THE ATTACK THE OTHER TWO TESTS CANNOT SEE.
+     *
+     * Measured on hardware: a name-rotation flood produced 244 distinct
+     * addresses and "popup models / advs" of 0/0, because it carries no Apple
+     * pairing payload at all. Both existing tests need one. This one reads no
+     * payload: the attacker writes the address, the world writes the level. */
+    prv_state_t s;
+    prv_reset(&s);
+
+    static const char *k_names[4] = { "MNTM-FW", "YAPYAPYAP", "Flipper", "hi" };
+    uint64_t t = 1000000ull;
+    for (unsigned i = 0; i < 30u; i++) {
+        uint8_t a[6] = { 0x02, 0x00, 0x00, 0x00, (uint8_t)(i >> 8), (uint8_t)i };
+        /* One radio: every advertisement lands within a couple of dB. */
+        const int8_t rssi = (int8_t)(-52 + (int)(i % 3u));
+        prv_observe_ble_adv(&s, a, k_names[i % 4u], 0, 0, rssi, t);
+        t += 120000ull; /* ~8 a second */
+    }
+
+    prv_verdict_t v;
+    prv_evaluate(&s, t, &v);
+
+    CHECK(v.notes & PRV_NOTE_COHERENT, "a coherent address flood is seen");
+    CHECK(v.families & PRV_FAM_ONE_RADIO, "and attributed to one radio");
+    CHECK(v.families & PRV_FAM_ACTIVE, "which is something being DONE");
+    CHECK(v.notes & PRV_NOTE_MANY_NAMES, "wearing several names");
+    CHECK(v.cohere_addrs >= PRV_COHERE_ADDRS, "the count is reported");
+    CHECK(v.score >= 74, "and it reaches the ACTIVE band");
+    CHECK(v.band == PRV_BAND_ACTIVE, "explicitly");
+}
+
+static void test_rival_a_busy_room_is_not_a_spammer(void)
+{
+    banner("rival: many accessories at many distances is not one radio");
+
+    /* THE NEGATIVE THIS EXISTS FOR. A cafe full of headphones, watches and
+     * beacons also produces a lot of addresses - but they are at different
+     * DISTANCES, so their levels are spread across tens of dB. Accusing that
+     * room of running an attack is how an operator learns to ignore the
+     * screen. */
+    prv_state_t s;
+    prv_reset(&s);
+
+    uint64_t t = 1000000ull;
+    for (unsigned i = 0; i < 30u; i++) {
+        uint8_t a[6] = { 0x02, 0x00, 0x00, 0x00, (uint8_t)(i >> 8), (uint8_t)i };
+        /* -30 down to -88: a real room, not one transmitter. */
+        const int8_t rssi = (int8_t)(-30 - (int)(i * 2u));
+        prv_observe_ble_adv(&s, a, "Headphones", 0, 0, rssi, t);
+        t += 120000ull;
+    }
+
+    prv_verdict_t v;
+    prv_evaluate(&s, t, &v);
+
+    CHECK(!(v.notes & PRV_NOTE_COHERENT), "a spread of levels is not a flood");
+    CHECK(!(v.families & PRV_FAM_ONE_RADIO), "and is not blamed on one radio");
+    CHECK(v.cohere_addrs < PRV_COHERE_ADDRS, "the cluster never forms");
+}
+
+static void test_rival_one_address_repeating_is_not_a_flood(void)
+{
+    banner("rival: a chatty beacon is not a rotation flood");
+
+    /* A single accessory advertising fast keeps ONE address. The test counts
+     * DISTINCT addresses, so it must be unmoved however talkative it is. */
+    prv_state_t s;
+    prv_reset(&s);
+
+    uint8_t a[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    uint64_t t = 1000000ull;
+    for (unsigned i = 0; i < 60u; i++) {
+        prv_observe_ble_adv(&s, a, "Beacon", 0, 0, -52, t);
+        t += 60000ull;
+    }
+
+    prv_verdict_t v;
+    prv_evaluate(&s, t, &v);
+    CHECK(!(v.notes & PRV_NOTE_COHERENT), "one address is not many");
+    CHECK(v.cohere_addrs <= 1, "and counts as one");
+}
+
 void test_rival(void)
 {
     test_rival_devboard_access_points();
@@ -1131,5 +1217,7 @@ void test_rival(void)
     test_rival_presence_is_capped();
     test_rival_spam_is_active();
     test_rival_busy_room_is_not_a_flood();
-    test_rival_listing_and_vocabulary();
+    test_rival_listing_and_vocabulary();    test_rival_payload_independent_spam();
+    test_rival_a_busy_room_is_not_a_spammer();
+    test_rival_one_address_repeating_is_not_a_flood();
 }

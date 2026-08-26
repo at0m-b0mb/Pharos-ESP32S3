@@ -72,12 +72,52 @@ typedef enum {
 #define PRV_FAM_PRESENT  (1u << 0) /* a tool is here                      */
 #define PRV_FAM_CAPABLE  (1u << 1) /* and it is a highly capable one      */
 #define PRV_FAM_ACTIVE   (1u << 2) /* and something is being DONE with it */
+#define PRV_FAM_ONE_RADIO (1u << 3) /* many addresses, one signal level    */
 
 #define PRV_NOTE_BREDR_BLIND (1u << 0) /* classic Bluetooth is invisible  */
 #define PRV_NOTE_SUBGHZ_BLIND (1u << 1)/* a Flipper's other radios too    */
 #define PRV_NOTE_FULL        (1u << 2) /* more devices than the table holds */
 #define PRV_NOTE_SPAM        (1u << 3) /* raw advertisement flood in view   */
 #define PRV_NOTE_PAIR_SPAM   (1u << 4) /* pairing-popup spam specifically   */
+#define PRV_NOTE_COHERENT    (1u << 5) /* one radio behind many addresses   */
+#define PRV_NOTE_MANY_NAMES  (1u << 6) /* ...and it is wearing several      */
+
+/* NAMES CANNOT BE TRUSTED WHILE A FLOOD IS RUNNING.
+ *
+ * Rival identifies hardware by the name it announces, and during a rotation
+ * flood the names are chosen by the attacker. One of the four this firmware
+ * was measured against is literally "Flipper" - so the lens reported "Flipper
+ * Zero present, 245 addresses" while the operator's actual Flipper, renamed
+ * r3gen, was not advertising its own identity at all.
+ *
+ * That is the worst shape of error available here: a confident, specific,
+ * WRONG identification, produced by the very attack it was looking at. The
+ * flood can make this device say anything it likes.
+ *
+ * So an identification assembled from a flood is reported as the flood, and
+ * the operator is told the names in view are attacker-controlled. */
+#define PRV_NOTE_NAMES_FORGED (1u << 7)
+
+/* DEBRIS IS AN IDENTIFICATION WITH NOTHING STEADY BEHIND IT.
+ *
+ * The first attempt at this discarded any identification carrying more than a
+ * dozen addresses, and a test caught it immediately: Rival aggregates by KIND,
+ * so a REAL Flipper advertising steadily alongside a flood of spoofed
+ * "Flipper" names is ONE record holding both. Suppressing on address count
+ * threw the genuine device away with the debris - which would have been a
+ * worse bug than the one being fixed, and silent.
+ *
+ * The discriminator is the ratio instead. A rotation flood draws a fresh
+ * address per advertisement, so its sightings and its address count are
+ * nearly equal. A device that is actually there keeps an address and is heard
+ * from it repeatedly, so its sightings far exceed its addresses - and it
+ * survives however much spoofed traffic is piled on top of it.
+ *
+ * Measured: the operator's real Flipper was NOT advertising at all, so every
+ * "Flipper" sighting was spam - 245 sightings across 244 addresses, ratio 1.0.
+ * The test fixture's genuine device sits at 2.2. */
+#define PRV_STEADY_NUM 3  /* debris when sightings * 2 < addresses * 3, */
+#define PRV_STEADY_DEN 2  /* i.e. fewer than 1.5 sightings per address  */
 
 /* PAIRING-POPUP SPAM, WHICH IS THE ONE ATTACK THAT NAMES ITSELF.
  *
@@ -118,6 +158,61 @@ typedef enum {
  * room with accessories in it. */
 #define PRV_SPAM_ADDRS    8
 #define PRV_PAIR_ADDR_SLOTS 24
+
+/* ---- THE SPAM THAT CARRIES NO PAYLOAD WE RECOGNISE -------------------
+ *
+ * Both tests above need a PAIRING PAYLOAD: one counts distinct model codes,
+ * the other counts addresses carrying such a payload. Every published
+ * detector surveyed keys on the same thing - the Apple company ID with the
+ * proximity-pairing type byte and its model bytes.
+ *
+ * So a flood that carries neither falls between all of them. Measured on real
+ * hardware while a Flipper ran a name-rotation flood: 244 distinct addresses
+ * in view, four rotating display names, and "popup models / advs" reading
+ * 0/0. The device was looking straight at the attack and scoring it CAPABLE,
+ * which means "a tool is present" - not "a tool is being used on you".
+ *
+ * The fix is to stop reading the payload at all.
+ *
+ * A radio has a position and a transmit power, and those do not change when
+ * it rewrites its address. So a flood of addresses from ONE transmitter
+ * arrives in a tight band of signal levels, while a room genuinely full of
+ * different accessories does not - they are at different distances, and their
+ * levels are spread across tens of dB. That is the whole test, and it works
+ * on any payload, including one nobody has catalogued yet.
+ *
+ * It is the same physical argument attribution uses against a spoofed source
+ * MAC (see pharos_attrib.h): the address is written by the attacker, the
+ * signal level is written by the world.
+ *
+ * The window is deliberately narrow. RSSI wanders a few dB on multipath, so
+ * anything tighter rejects the true case; anything wider starts absorbing a
+ * genuinely busy room. */
+#define PRV_COHERE_DB      6   /* how tight the level cluster must be   */
+#define PRV_COHERE_ADDRS  14   /* distinct addresses inside that band   */
+#define PRV_COHERE_SLOTS  64   /* how many we track at once             */
+#define PRV_COHERE_WINDOW_US 6000000ull
+
+/* ONE RADIO WEARING SEVERAL NAMES.
+ *
+ * The second half of the same observation. A real room contains devices that
+ * each announce one name; a name-rotation flood is one device announcing
+ * several. Three distinct names inside the coherent level cluster is not an
+ * accessory drawer. */
+#define PRV_COHERE_NAMES   3
+#define PRV_NAME_SLOTS     8
+
+/* HOW LONG A FLOOD STAYS SEEN AFTER THE COUNT DIPS.
+ *
+ * Without this the verdict oscillated on hardware between IN USE 74 and
+ * CAPABLE 40 several times a minute, while the attack ran steadily and
+ * nothing in the room changed - because the address count wanders across the
+ * threshold as entries expire. It is the same fault the acoustic engine had,
+ * and it teaches the same lesson: a detector that changes its mind during a
+ * steady attack is one its operator stops believing.
+ *
+ * Latched on entry and held, rather than re-decided every evaluation. */
+#define PRV_FLOOD_HOLD_US 8000000ull
 
 /* HOW LONG A DEVICE STAYS ON THE LIST AFTER IT STOPS TRANSMITTING.
  *
@@ -235,6 +330,20 @@ typedef struct {
     uint32_t pair_addr_h[PRV_PAIR_ADDR_SLOTS];
     uint64_t pair_addr_us[PRV_PAIR_ADDR_SLOTS];
     uint8_t pair_n_addrs;
+
+    /* Payload-independent spam: addresses bucketed by the signal level they
+     * arrived at, and the names seen inside the strongest bucket. Hashes
+     * again - the question is only ever "how many different ones". */
+    uint32_t coh_addr_h[PRV_COHERE_SLOTS];
+    int8_t coh_rssi[PRV_COHERE_SLOTS];
+    uint64_t coh_us[PRV_COHERE_SLOTS];
+    uint8_t coh_n;
+
+    uint32_t coh_name_h[PRV_NAME_SLOTS];
+    uint64_t coh_name_us[PRV_NAME_SLOTS];
+    uint8_t coh_n_names;
+    uint64_t coh_flood_us;  /* when the cluster last cleared the bar */
+
     uint64_t first_us, last_us;
 } prv_state_t;
 
@@ -250,6 +359,12 @@ typedef struct {
     uint8_t n_flipper;
     uint8_t n_pwnagotchi;
     uint16_t worst_addresses; /* address rotation by the most capable device */
+
+    /* What the coherence test found, reported so the operator can check the
+     * reasoning rather than take "one radio" on trust. */
+    uint8_t cohere_addrs;   /* addresses inside the level cluster */
+    uint8_t cohere_names;   /* distinct names inside it           */
+    int8_t cohere_rssi;     /* the level they clustered at        */
     uint32_t worst_age_s;     /* how long since the most capable was heard  */
     uint8_t n_wifi_tools;
     prv_kind_t worst_kind;
