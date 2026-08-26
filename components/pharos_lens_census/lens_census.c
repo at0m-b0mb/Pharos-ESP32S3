@@ -23,6 +23,7 @@
 #include "pharos_census.h"
 #include "pharos_dot11.h"
 #include "pharos_pulse.h"
+#include "pharos_skew.h"
 #include "pharos_lens.h"
 #include "pharos_lens_census.h"
 #include "pharos_survey.h"
@@ -105,6 +106,11 @@ static void census_stop(void)
  * out. Before this, every lens but Watch drew an empty timeline. */
 static pharos_pulse_t s_pulse;
 
+/* The physical half of Twin's evidence: which oscillator is behind a name.
+ * See pharos_skew.h - every other family here is something the attacker
+ * chose to write, and this one is not. */
+EXT_RAM_BSS_ATTR static psk_engine_t s_skew;
+
 static void census_event(const pharos_event_t *ev)
 {
     if (!ev || ev->type != PHAROS_EV_DOT11) {
@@ -112,6 +118,10 @@ static void census_event(const pharos_event_t *ev)
     }
 
     pharos_pulse_note(&s_pulse, ev->t_us);
+
+    if (ev->u.dot11.tsf) {
+        psk_observe(&s_skew, ev->u.dot11.a3, ev->u.dot11.tsf, ev->t_us);
+    }
     const pharos_ev_dot11_t *f = &ev->u.dot11;
     if (f->type != PHAROS_FT_MGMT) {
         return;
@@ -838,6 +848,18 @@ static bool k_twin_display(struct pharos_lens_display *o)
     snprintf(o->detail, sizeof(o->detail), "\"%s\"  ceil %u", s_twin_ssid, v.ceiling);
     snprintf(o->advice, sizeof(o->advice), "%s", pt_band_advice(v.band));
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
+
+    /* Three heuristics and one measurement. The fourth chip is lit only by
+     * something the attacker cannot choose: a BSSID whose crystal changed
+     * rate is a BSSID with a different radio behind it. */
+    o->families = (uint8_t)(v.families |
+                            (psk_any_changed(&s_skew) ? (1u << 3) : 0u));
+    o->fam_label[0] = "POSTURE";
+    o->fam_label[1] = "NAME";
+    o->fam_label[2] = "ACTS";
+    o->fam_label[3] = "CLOCK";
+    o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(),
+                                       o->history);
     return true;
 }
 
@@ -853,6 +875,41 @@ static bool k_twin_row(unsigned index, struct pharos_lens_row *out)
     char ssid[PC_SSID_MAX + 1];
     snprintf(ssid, sizeof(ssid), "%s", s_twin_ssid);
     xSemaphoreGive(s_lock);
+
+    /* The measurement first, because it is the only line here an attacker
+     * cannot arrange to look innocent. */
+    if (index == 0u) {
+        psk_verdict_t k;
+        snprintf(out->left, sizeof(out->left), "clock behind name");
+        if (psk_first_changed(&s_skew, &k, 0)) {
+            /* Clamped so the width is provable; two crystals tens of ppm
+             * apart is the interesting case and it fits easily. */
+            int a = k.from_ppm;
+            int b = k.to_ppm;
+            if (a > 99) { a = 99; }
+            if (a < -99) { a = -99; }
+            if (b > 99) { b = 99; }
+            if (b < -99) { b = -99; }
+            snprintf(out->right, sizeof(out->right), "%d>%d", a, b);
+            out->tone = PHAROS_TONE_BAD;
+        } else {
+            unsigned ready = 0, measuring = 0;
+            psk_progress(&s_skew, &ready, &measuring);
+            if (ready) {
+                snprintf(out->right, sizeof(out->right), "%u steady",
+                         ready > 99u ? 99u : ready);
+                out->tone = PHAROS_TONE_GOOD;
+            } else if (measuring) {
+                snprintf(out->right, sizeof(out->right), "measuring");
+                out->tone = PHAROS_TONE_DIM;
+            } else {
+                snprintf(out->right, sizeof(out->right), "-");
+                out->tone = PHAROS_TONE_DIM;
+            }
+        }
+        return true;
+    }
+    index--;
 
     switch (index) {
     case 0:

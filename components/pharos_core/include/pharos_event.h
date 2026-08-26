@@ -102,6 +102,17 @@ typedef struct {
      * hand-rolled injectors. It is two bytes we were already walking past,
      * and it is one of the few fields a tool has no reason to randomise. */
     uint16_t duration;
+
+    /* THE ACCESS POINT'S OWN CLOCK, FROM A BEACON.
+     *
+     * Eight bytes at the start of a beacon body: microseconds since that AP
+     * started, counted by its own crystal. Zero for every other frame type.
+     *
+     * It is here because it is the one field in a beacon an attacker cannot
+     * simply copy: the BSSID, the SSID and the capability bits are theirs to
+     * write, but the RATE their oscillator runs at is a property of the part.
+     * See pharos_skew.h. */
+    uint64_t tsf;
     int8_t rssi;
     uint8_t channel;
     uint8_t type;    /* PHAROS_FT_*  */

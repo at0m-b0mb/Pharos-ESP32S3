@@ -389,6 +389,7 @@ int main(void)
     test_acoustic();
     test_attrib();
     test_pulse();
+    test_skew();
     test_theme();
     test_style();
     test_tower();

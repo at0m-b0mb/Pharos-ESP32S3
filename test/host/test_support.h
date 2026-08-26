@@ -90,6 +90,9 @@ void test_attrib(void);
 /* Suite defined in test_pulse.c */
 void test_pulse(void);
 
+/* Suite defined in test_skew.c */
+void test_skew(void);
+
 /* Suite defined in test_theme.c */
 void test_theme(void);
 

@@ -19,6 +19,15 @@ static uint16_t rd16be(const uint8_t *p)
     return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
 }
 
+static uint64_t rd64(const uint8_t *p)
+{
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) {
+        v = (v << 8) | p[i];
+    }
+    return v;
+}
+
 bool pharos_dot11_parse_header(const uint8_t *buf, size_t len, pharos_ev_dot11_t *out)
 {
     if (!buf || !out || len < DOT11_HDR_MIN) {
@@ -52,6 +61,16 @@ bool pharos_dot11_parse_header(const uint8_t *buf, size_t len, pharos_ev_dot11_t
     }
     if (bcast) {
         out->flags |= PHAROS_DOT11_F_BROADCAST;
+    }
+
+    /* The beacon body opens with the AP's own clock. Bounds-checked like
+     * everything else that reads past the header: a truncated frame leaves it
+     * zero, and zero means "not measured" to every consumer. */
+    if (out->type == PHAROS_FT_MGMT &&
+        (out->subtype == PHAROS_ST_BEACON ||
+         out->subtype == PHAROS_ST_PROBE_RESP) &&
+        len >= DOT11_HDR_MIN + 8u) {
+        out->tsf = rd64(buf + DOT11_HDR_MIN);
     }
     return true;
 }

@@ -35,7 +35,7 @@ SRCS := \
   test_vigil.c \
   test_watch.c \
   test_rival.c \
-  test_acoustic.c test_attrib.c test_pulse.c \
+  test_acoustic.c test_attrib.c test_pulse.c test_skew.c \
   test_theme.c \
   test_style.c \
   test_tower.c \
@@ -57,6 +57,7 @@ SRCS := \
   $(ROOT)/components/pharos_engine/pharos_acoustic.c \
   $(ROOT)/components/pharos_engine/pharos_attrib.c \
   $(ROOT)/components/pharos_engine/pharos_pulse.c \
+  $(ROOT)/components/pharos_engine/pharos_skew.c \
   $(ROOT)/components/pharos_engine/pharos_aegis.c \
   $(ROOT)/components/pharos_engine/pharos_census.c \
   $(ROOT)/components/pharos_engine/pharos_console.c \
