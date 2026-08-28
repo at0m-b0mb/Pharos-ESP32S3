@@ -47,6 +47,8 @@ static ph_pair_t *pair_get(ph_state_t *s, const uint8_t *bssid, const uint8_t *c
     return p;
 }
 
+static void heard_add(ph_state_t *s, const uint8_t mac[6]);
+
 void ph_observe(ph_state_t *s, const pharos_ev_dot11_t *f, uint64_t t_us)
 {
     if (!s || !f) {
@@ -81,6 +83,35 @@ void ph_observe(ph_state_t *s, const pharos_ev_dot11_t *f, uint64_t t_us)
             p->deauth_armed = true;
         }
         return;
+    }
+
+    /* Any frame transmitted BY a radio proves we can hear it - which is what
+     * licenses us to treat its silence as meaningful later. Recorded before
+     * the EAPOL filter, because most of a client's traffic is not EAPOL. */
+    heard_add(s, f->a2);
+
+    /* THE APPROACH. An association request is a management frame: unencrypted,
+     * always delivered, and impossible for a PMKID attack to skip. */
+    if (f->type == PHAROS_FT_MGMT &&
+        (f->subtype == PHAROS_ST_ASSOC_REQ || f->subtype == PHAROS_ST_REASSOC_REQ)) {
+        ph_pair_t *ap = pair_get(s, f->a1, f->a2); /* a1 = AP, a2 = client */
+        if (ap) {
+            ap->assoc_req++;
+            ap->data_since_assoc = false;
+        }
+        return;
+    }
+
+    /* Data FROM a client that has associated is the network being used, which
+     * is exactly what a harvester never does. */
+    if (f->type == PHAROS_FT_DATA) {
+        for (unsigned i = 0; i < s->n; i++) {
+            ph_pair_t *q = &s->pairs[i];
+            if (q->in_use && q->assoc_req && memcmp(q->client, f->a2, 6) == 0) {
+                q->data_since_assoc = true;
+                break;
+            }
+        }
     }
 
     if (f->type != PHAROS_FT_DATA || f->eapol == 0) {
@@ -119,10 +150,33 @@ void ph_observe(ph_state_t *s, const pharos_ev_dot11_t *f, uint64_t t_us)
         }
     } else if (f->eapol == 2) {
         p->m2++;
+        heard_add(s, f->a2); /* message 2 is itself proof we can hear them */
         if (p->m1_pending_pmkid) {
             p->m1_pending_pmkid = false; /* completed: an ordinary client */
         }
     }
+}
+
+static void heard_add(ph_state_t *s, const uint8_t mac[6])
+{
+    for (unsigned i = 0; i < s->heard_n; i++) {
+        if (memcmp(s->heard[i], mac, 6) == 0) {
+            return;
+        }
+    }
+    if (s->heard_n < PH_MAX_HEARD) {
+        memcpy(s->heard[s->heard_n++], mac, 6);
+    }
+}
+
+static bool heard_has(const ph_state_t *s, const uint8_t mac[6])
+{
+    for (unsigned i = 0; i < s->heard_n; i++) {
+        if (memcmp(s->heard[i], mac, 6) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void ph_settle(ph_state_t *s)
@@ -131,9 +185,15 @@ void ph_settle(ph_state_t *s)
         return;
     }
     for (unsigned i = 0; i < s->n; i++) {
-        if (s->pairs[i].in_use && s->pairs[i].m1_pending_pmkid) {
-            s->pairs[i].pmkid_orphan++;
-            s->pairs[i].m1_pending_pmkid = false;
+        ph_pair_t *q = &s->pairs[i];
+        if (!q->in_use || !q->m1_pending_pmkid) {
+            continue;
+        }
+        q->m1_pending_pmkid = false;
+        /* Never heard this client transmit at all? Then we have no standing
+         * to call its message 2 missing - see the note on `heard`. */
+        if (heard_has(s, q->client)) {
+            q->pmkid_orphan++;
         }
     }
 }
@@ -211,6 +271,10 @@ void ph_evaluate(const ph_state_t *s, const ph_context_t *ctx, ph_verdict_t *out
         }
         out->forced_cycles += p->forced;
         out->pmkid_orphans += p->pmkid_orphan;
+        out->assoc_reqs += p->assoc_req;
+        if (p->assoc_req && !p->data_since_assoc) {
+            out->touch_and_go++;
+        }
         if (p->forced) {
             out->victims++;
         }
@@ -234,12 +298,41 @@ void ph_evaluate(const ph_state_t *s, const ph_context_t *ctx, ph_verdict_t *out
     }
 
     /* --- family: unanswered PMKID solicitation ------------------------- */
-    if (out->pmkid_orphans >= 1) {
+    /* ONE IS NOT A FAMILY, AND THE HEADER ALREADY PROMISED THAT.
+     *
+     * "The engine requires REPETITION or BREADTH before it will use the word
+     * harvest" - but this branch fired a full family, and 46 points, on a
+     * single unanswered request. PMKID in message 1 is ROUTINE: it is how PMK
+     * caching and fast roaming work, so every modern client solicits one every
+     * time it roams. One of them is a Tuesday, not an attack.
+     *
+     * A lone request is still worth a couple of points - it is the shape of
+     * the clientless attack - but it may not light a family and it may not on
+     * its own reach a band that says somebody is collecting your handshakes. */
+    if (out->pmkid_orphans >= 2) {
         out->families |= PH_FAM_PMKID;
-        /* This one is strong on its own evidence: ordinary clients finish
-         * their handshakes, so a request that is never completed is a
-         * deliberate act rather than a flaky radio. */
-        score += 46 + clamp_u32((out->pmkid_orphans - 1u) * 8u, 0, 16);
+        /* 46 clears SUSPECTED at 45 - the weight the single orphan used to
+         * carry, now requiring the repetition the header always promised. */
+        score += 46 + clamp_u32((out->pmkid_orphans - 2u) * 8u, 0, 20);
+    } else if (out->pmkid_orphans == 1) {
+        /* Worth a couple of points - it is the right SHAPE - but nowhere near
+         * a band that says somebody is collecting your handshakes. */
+        score += 10;
+    }
+
+    /* --- family: associated, took what it came for, and left ----------- */
+    /* ONE IS AMBIGUOUS AND ALWAYS WILL BE. A client with the wrong password
+     * associates and leaves too, and so does one that wandered out of range
+     * mid-connect. Two separate approaches that both went nowhere is a
+     * pattern; one is a Tuesday, exactly as with the lone PMKID above. */
+    if (out->touch_and_go >= 2) {
+        out->families |= PH_FAM_TOUCH_GO;
+        /* 46 clears SUSPECTED at 45, matching the PMKID family: two
+         * approaches that both went nowhere is the same weight of
+         * evidence as two unanswered solicitations. */
+        score += 46 + clamp_u32((out->touch_and_go - 2u) * 10u, 0, 24);
+    } else if (out->touch_and_go == 1) {
+        score += 8;
     }
 
     /* --- family: the same victim, again and again ---------------------- */
@@ -299,11 +392,23 @@ void ph_evaluate(const ph_state_t *s, const ph_context_t *ctx, ph_verdict_t *out
     case PH_BAND_HARVEST_LIKELY:
         out->headline = (out->families & PH_FAM_PMKID)
                             ? "Somebody is soliciting PMKIDs and never finishing"
+                        : (out->families & PH_FAM_TOUCH_GO)
+                            ? "Something keeps joining this network and never using it"
                             : "Clients are being knocked off and their handshakes taken";
         break;
     case PH_BAND_SUSPECTED:
+        /* THE HEADLINE MUST NAME THE EVIDENCE THAT ACTUALLY FIRED.
+         *
+         * On hardware this said "A handshake was captured in a way that looks
+         * deliberate" while `handshakes seen` was ZERO - the touch-and-go
+         * family had raised the score and the words still described the
+         * handshake family. A verdict that misreports its own reason is worse
+         * than a quiet one: it sends the operator looking for the wrong
+         * thing. */
         out->headline = (out->families & PH_FAM_PMKID)
                             ? "A PMKID was requested and never completed"
+                        : (out->families & PH_FAM_TOUCH_GO)
+                            ? "Something joined this network and never used it"
                             : "A handshake was captured in a way that looks deliberate";
         break;
     case PH_BAND_HANDSHAKES:
@@ -358,6 +463,7 @@ const char *ph_family_name(unsigned family_bit)
     switch (family_bit) {
     case PH_FAM_FORCED:  return "forced";
     case PH_FAM_PMKID:   return "pmkid";
+    case PH_FAM_TOUCH_GO: return "touch-and-go";
     case PH_FAM_REPEAT:  return "repeat";
     case PH_FAM_BREADTH: return "breadth";
     default:             return "-";

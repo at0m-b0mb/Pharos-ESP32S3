@@ -204,17 +204,41 @@ static bool k_harvest_display(struct pharos_lens_display *o)
     ph_verdict_t v = s_verdict;
     snprintf(o->big, sizeof(o->big), "%u", v.score);
     snprintf(o->band, sizeof(o->band), "%s", ph_band_name(v.band));
-    snprintf(o->detail, sizeof(o->detail), "forced %u  pmkid %u  ceil %u",
-             (unsigned)v.forced_cycles, (unsigned)v.pmkid_orphans, v.ceiling);
+    /* THE NUMBERS THAT FIRED, NOT A FIXED THREE.
+     *
+     * This read "forced 0  pmkid 0  ceil 96" during a live attack that had
+     * been caught by the association family - three zeros under a SUSPECTED
+     * headline, which reads as a device that has broken rather than one that
+     * has found something. */
+    snprintf(o->detail, sizeof(o->detail), "joined %u/%u  pmkid %u  ceil %u",
+             (unsigned)v.touch_and_go, (unsigned)v.assoc_reqs,
+             (unsigned)v.pmkid_orphans, v.ceiling);
     snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
     /* WHY it thinks so, on the glass. The engine has computed these families
      * all along; nothing was carrying them to the face, so this lens lit no
      * chips at all and its score had to be taken on trust. */
-    o->families = v.families;
+    /* FIVE FAMILIES, FOUR CHIPS.
+     *
+     * PH_FAM_TOUCH_GO is bit 4 and the face carries PHAROS_DISP_FAMILIES = 4,
+     * so passing the engine's bitmap straight through did two wrong things at
+     * once: the family that had actually fired could not be drawn at all, and
+     * REPEAT (bit 2) lit whichever chip sat in slot 2 regardless of what that
+     * slot was labelled.
+     *
+     * So the display bitmap is BUILT rather than forwarded. REPEAT and BREADTH
+     * both mean "more than one victim" and share the last chip; the
+     * association family gets one of its own, because it is now the evidence
+     * most likely to be the reason the score moved. */
+    uint8_t fam = 0;
+    if (v.families & PH_FAM_FORCED)   fam |= 1u << 0;
+    if (v.families & PH_FAM_PMKID)    fam |= 1u << 1;
+    if (v.families & PH_FAM_TOUCH_GO) fam |= 1u << 2;
+    if (v.families & (PH_FAM_REPEAT | PH_FAM_BREADTH)) fam |= 1u << 3;
+    o->families = fam;
     o->fam_label[0] = "FORCED";
     o->fam_label[1] = "PMKID";
-    o->fam_label[2] = "REPEAT";
+    o->fam_label[2] = "JOINED";
     o->fam_label[3] = "SPREAD";
     o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
@@ -245,17 +269,33 @@ static bool k_harvest_row(unsigned index, struct pharos_lens_row *out)
         out->tone = v.pmkid_orphans ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
         return true;
     case 3:
+        /* THE FRAME WE CAN ACTUALLY RELY ON SEEING. A live PMKID attack ran
+         * for minutes against this device and every EAPOL counter stayed at
+         * zero, because message 1 is one brief data frame. The association
+         * request that precedes it is management: unencrypted, always
+         * delivered, and unskippable. */
+        snprintf(out->left, sizeof(out->left), "associations seen");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.assoc_reqs);
+        out->tone = v.assoc_reqs ? PHAROS_TONE_NEUTRAL : PHAROS_TONE_DIM;
+        return true;
+    case 4:
+        snprintf(out->left, sizeof(out->left), "joined, never used it");
+        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.touch_and_go);
+        out->tone = (v.touch_and_go >= 2) ? PHAROS_TONE_BAD
+                  : v.touch_and_go ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
+        return true;
+    case 5:
         snprintf(out->left, sizeof(out->left), "clients affected");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.victims);
         out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
         return true;
-    case 4:
+    case 6:
         snprintf(out->left, sizeof(out->left), "worst client");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
                  v.worst_client[3], v.worst_client[4], v.worst_client[5]);
         out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
         return true;
-    case 5:
+    case 7:
         snprintf(out->left, sizeof(out->left), "on network");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
                  v.worst_bssid[3], v.worst_bssid[4], v.worst_bssid[5]);

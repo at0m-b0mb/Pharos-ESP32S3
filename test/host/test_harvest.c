@@ -196,8 +196,208 @@ static ph_context_t ctx_of(uint16_t dwell, bool mfp)
     return c;
 }
 
+/* An ordinary data frame FROM a client: proof we can hear that radio. */
+static const pharos_ev_dot11_t *ev_from_client(const uint8_t *bssid,
+                                               const uint8_t *client)
+{
+    pharos_ev_dot11_t *f = ev_slot();
+    f->type = PHAROS_FT_DATA;
+    memcpy(f->a1, bssid, 6);
+    memcpy(f->a2, client, 6);
+    memcpy(f->a3, bssid, 6);
+    return f;
+}
+
+static void test_harvest_one_pmkid_is_a_tuesday(void)
+{
+    banner("harvest: a single PMKID request is not an attack");
+
+    /* THE FALSE POSITIVE, REPORTED FROM HARDWARE.
+     *
+     * Camped on a quiet home network with nothing running against it, the
+     * device said SUSPECTED 46/96, "A PMKID was requested and never
+     * completed". PMKID in message 1 is ROUTINE - it is how PMK caching and
+     * fast roaming work - so this accused an ordinary roam of being an
+     * attack, on a network nobody was touching. */
+    ph_state_t s;
+    ph_reset(&s);
+
+    const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 };
+    const uint8_t cl[6] = { 0xaa, 0xbb, 0xcc, 0x01, 0x02, 0x03 };
+
+    ph_observe(&s, ev_from_client(ap, cl), 1000);      /* audible client   */
+    ph_observe(&s, ev_eapol(1, true, ap, cl), 2000);   /* one solicitation */
+    ph_settle(&s);
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+    ph_evaluate(&s, &ctx, &v);
+
+    CHECK(v.pmkid_orphans == 1, "the orphan is still counted");
+    CHECK(!(v.families & PH_FAM_PMKID), "but one does not light a family");
+    CHECK(v.score < 40, "and does not reach SUSPECTED (%u)", v.score);
+}
+
+static void test_harvest_unheard_client_is_not_evidence(void)
+{
+    banner("harvest: a message is not missing from a radio we never hear");
+
+    /* Message 1 comes from the ACCESS POINT, message 2 from the CLIENT, and
+     * this device has one antenna. An AP at -40 dBm is loud; the phone it is
+     * talking to may be in a pocket. Counting that silence as an abandoned
+     * handshake measures our own antenna, not an attacker. */
+    ph_state_t s;
+    ph_reset(&s);
+
+    const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x61 };
+    const uint8_t cl[6] = { 0xaa, 0xbb, 0xcc, 0x01, 0x02, 0x04 };
+
+    ph_observe(&s, ev_eapol(1, true, ap, cl), 2000); /* nothing FROM cl */
+    ph_settle(&s);
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+    ph_evaluate(&s, &ctx, &v);
+
+    CHECK(v.pmkid_orphans == 0, "an unheard client orphans nothing");
+    CHECK(!(v.families & PH_FAM_PMKID), "and lights no family");
+}
+
+static void test_harvest_repeated_pmkid_still_fires(void)
+{
+    banner("harvest: repeated unanswered requests are still the attack");
+
+    /* The fix must not blind the lens to the thing it exists for. */
+    ph_state_t s;
+    ph_reset(&s);
+
+    const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x62 };
+    for (unsigned i = 0; i < 4u; i++) {
+        const uint8_t cl[6] = { 0xaa, 0xbb, 0xcc, 0x09, 0x09, (uint8_t)i };
+        ph_observe(&s, ev_from_client(ap, cl), 1000 + i);
+        ph_observe(&s, ev_eapol(1, true, ap, cl), 2000 + i);
+    }
+    ph_settle(&s);
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+    ph_evaluate(&s, &ctx, &v);
+
+    CHECK(v.pmkid_orphans == 4, "all four are counted");
+    CHECK(v.families & PH_FAM_PMKID, "and the family fires");
+    CHECK(v.score >= 34, "with a score worth showing (%u)", v.score);
+}
+
+static const pharos_ev_dot11_t *ev_assoc(const uint8_t *bssid,
+                                        const uint8_t *client)
+{
+    pharos_ev_dot11_t *f = ev_slot();
+    f->type = PHAROS_FT_MGMT;
+    f->subtype = PHAROS_ST_ASSOC_REQ;
+    memcpy(f->a1, bssid, 6);
+    memcpy(f->a2, client, 6);
+    memcpy(f->a3, bssid, 6);
+    return f;
+}
+
+static void test_harvest_touch_and_go(void)
+{
+    banner("harvest: joined the network and never used it");
+
+    /* THE FRAME THAT ACTUALLY ARRIVES.
+     *
+     * A live PMKID attack ran against this device for several minutes and
+     * every EAPOL counter stayed at zero - message 1 is one brief data frame
+     * and camping on the right channel is not enough to be holding the
+     * receiver open at the exact moment it passes. The association request
+     * before it is MANAGEMENT: unencrypted, always delivered, unskippable. */
+    ph_state_t s;
+    ph_reset(&s);
+    const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x70 };
+
+    for (unsigned i = 0; i < 2u; i++) {
+        const uint8_t cl[6] = { 0xde, 0xad, 0xbe, 0xef, 0x00, (uint8_t)i };
+        ph_observe(&s, ev_assoc(ap, cl), 1000 + i * 1000);
+    }
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+    ph_evaluate(&s, &ctx, &v);
+
+    CHECK(v.assoc_reqs == 2, "both approaches are seen");
+    CHECK(v.touch_and_go == 2, "and neither carried any traffic");
+    CHECK(v.families & PH_FAM_TOUCH_GO, "the family fires");
+    CHECK(v.band >= PH_BAND_SUSPECTED, "and it is suspicious (%s)",
+          ph_band_name(v.band));
+
+    /* THE WORDS MUST NAME THE EVIDENCE THAT FIRED.
+     *
+     * On hardware this said "A handshake was captured in a way that looks
+     * deliberate" while `handshakes seen` was zero: the association family
+     * had raised the score and the headline still described the handshake
+     * family. A verdict that misreports its own reason sends the operator
+     * looking for the wrong thing. */
+    CHECK(v.handshakes == 0, "no handshake was seen at all");
+    CHECK(strstr(v.headline, "handshake") == NULL,
+          "so the headline must not mention one: %s", v.headline);
+    CHECK(strstr(v.headline, "join") != NULL,
+          "it names the joining instead: %s", v.headline);
+}
+
+static void test_harvest_a_real_client_is_not_a_harvester(void)
+{
+    banner("harvest: a client that joins and USES the network is fine");
+
+    /* THE NEGATIVE THIS EXISTS FOR. Every phone in the building associates.
+     * What separates them from a harvester is that they go on to do
+     * something. */
+    ph_state_t s;
+    ph_reset(&s);
+    const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x71 };
+
+    for (unsigned i = 0; i < 4u; i++) {
+        const uint8_t cl[6] = { 0xc0, 0xff, 0xee, 0x00, 0x00, (uint8_t)i };
+        ph_observe(&s, ev_assoc(ap, cl), 1000 + i * 1000);
+        ph_observe(&s, ev_from_client(ap, cl), 2000 + i * 1000); /* uses it */
+    }
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+    ph_evaluate(&s, &ctx, &v);
+
+    CHECK(v.assoc_reqs == 4, "all four approaches are seen");
+    CHECK(v.touch_and_go == 0, "none of them is a touch-and-go");
+    CHECK(!(v.families & PH_FAM_TOUCH_GO), "and the family stays quiet");
+}
+
+static void test_harvest_one_failed_join_is_not_an_attack(void)
+{
+    banner("harvest: one failed join is a wrong password, not a harvester");
+
+    ph_state_t s;
+    ph_reset(&s);
+    const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x72 };
+    const uint8_t cl[6] = { 0x0b, 0xad, 0x00, 0x00, 0x00, 0x01 };
+    ph_observe(&s, ev_assoc(ap, cl), 1000);
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+    ph_evaluate(&s, &ctx, &v);
+
+    CHECK(v.touch_and_go == 1, "it is counted");
+    CHECK(!(v.families & PH_FAM_TOUCH_GO), "but one does not light a family");
+    CHECK(v.band < PH_BAND_SUSPECTED, "and does not accuse anybody (%s)",
+          ph_band_name(v.band));
+}
+
 void test_harvest(void)
 {
+    test_harvest_touch_and_go();
+    test_harvest_a_real_client_is_not_a_harvester();
+    test_harvest_one_failed_join_is_not_an_attack();
+    test_harvest_one_pmkid_is_a_tuesday();
+    test_harvest_unheard_client_is_not_evidence();
+    test_harvest_repeated_pmkid_still_fires();
     test_eapol_parser();
 
     banner("harvest: forced captures vs ordinary handshakes");
@@ -283,14 +483,25 @@ void test_harvest(void)
     CHECK(v.families & PH_FAM_BREADTH, "breadth family raised");
     CHECK_EQ(v.band, PH_BAND_HARVEST_LIKELY);
 
-    /* The clientless attack: a PMKID solicited and never completed. */
+    /* The clientless attack: PMKIDs solicited and never completed.
+     *
+     * TWO, not one, and from clients we can actually hear. This test used to
+     * assert that a SINGLE unanswered request raised the family and reached
+     * SUSPECTED - and that is exactly the false positive the device produced
+     * on a quiet home network: one ordinary roam, 46/96, "somebody is
+     * collecting your handshakes". PMKID in message 1 is how fast roaming
+     * works; one of them is a Tuesday. */
     ph_reset(&s);
-    ph_observe(&s, ev_eapol(1, true, AP, STA), 1000000ull);
+    for (unsigned i = 0; i < 2u; i++) {
+        const uint8_t cl[6] = { 0x0d, 0x0e, 0x0a, 0x0d, 0x00, (uint8_t)i };
+        ph_observe(&s, ev_from_client(AP, cl), 900000ull + i);
+        ph_observe(&s, ev_eapol(1, true, AP, cl), 1000000ull + i);
+    }
     ph_settle(&s); /* the sweep ended; no message 2 ever came */
     ph_evaluate(&s, &camped, &v);
-    CHECK_EQ(v.pmkid_orphans, 1);
+    CHECK_EQ(v.pmkid_orphans, 2);
     CHECK(v.families & PH_FAM_PMKID, "pmkid family raised");
-    CHECK(v.band >= PH_BAND_SUSPECTED, "an unanswered PMKID is suspicious (got %s)",
+    CHECK(v.band >= PH_BAND_SUSPECTED, "unanswered PMKIDs are suspicious (got %s)",
           ph_band_name(v.band));
     CHECK(strstr(v.headline, "PMKID") != NULL, "headline: %s", v.headline);
 

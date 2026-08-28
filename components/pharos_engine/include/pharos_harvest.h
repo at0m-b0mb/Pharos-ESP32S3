@@ -72,6 +72,20 @@ typedef enum {
 #define PH_FAM_PMKID   (1u << 1) /* PMKID solicited and never completed    */
 #define PH_FAM_REPEAT  (1u << 2) /* the same victim forced again and again */
 #define PH_FAM_BREADTH (1u << 3) /* several victims, same pattern          */
+/* ASSOCIATED, TOOK WHAT IT CAME FOR, AND LEFT.
+ *
+ * hcxdumptool's primary PMKID vector is simply to CONNECT to the access point
+ * - the AP hands out a PMKID in message 1 and the tool walks away. Watching
+ * for that message 1 means watching for a single brief DATA frame, which is
+ * exactly what this lens spent a whole live attack failing to catch.
+ *
+ * The association request is a MANAGEMENT frame. It is never encrypted, it is
+ * always delivered to a sniffer, and no PMKID attack can skip it. Watching the
+ * approach instead of the payload is both easier and harder to evade.
+ *
+ * A real client associates and then USES the network. A harvester associates
+ * and is never heard from again. */
+#define PH_FAM_TOUCH_GO (1u << 4)
 
 #define PH_NOTE_THIN_SWEEP  (1u << 0) /* hopping: cycles are easily missed */
 #define PH_NOTE_DROPS       (1u << 1) /* the ingest ring lost frames       */
@@ -105,11 +119,43 @@ typedef struct {
     bool deauth_armed;
     uint64_t last_m1_us;
     bool m1_pending_pmkid; /* an unanswered PMKID is outstanding */
+
+    /* The approach, and whether anything came of it. See PH_FAM_TOUCH_GO. */
+    uint32_t assoc_req;
+    bool data_since_assoc;
+
+    /* HAVE WE EVER HEARD THIS CLIENT SPEAK?
+     *
+     * Message 1 comes from the access point and message 2 from the client, and
+     * this device has one antenna. An access point across the room arrives at
+     * -40 dBm; the phone it is talking to may be in a pocket, behind a wall,
+     * or simply quieter. Hearing M1 and not M2 is therefore the ORDINARY case
+     * for a passive receiver, not a remarkable one.
+     *
+     * Without this the engine read "no message 2" as "the handshake was
+     * abandoned", which is absence of evidence dressed up as evidence of
+     * absence - and scored a single ordinary roam at 46/96, SUSPECTED. It
+     * accused a quiet network of being under attack.
+     *
+     * So an unanswered request only counts against somebody we can actually
+     * hear. Zero frames from this client means the silence is ours, not
+     * theirs. */
 } ph_pair_t;
+
+/* Clients we have actually heard TRANSMIT.
+ *
+ * Kept beside the pairs rather than on them, because a client's ordinary
+ * traffic usually arrives BEFORE its handshake - so a flag on the pair is
+ * written only if the frames happen to come in the luckier order, and the
+ * first version of this silently counted nothing at all. */
+#define PH_MAX_HEARD 24
 
 typedef struct {
     ph_pair_t pairs[PH_MAX_PAIRS];
     unsigned n;
+
+    uint8_t heard[PH_MAX_HEARD][6];
+    unsigned heard_n;
     bool full;
     uint32_t handshakes;  /* total, across everything          */
     uint32_t deauths;     /* total                             */
@@ -126,6 +172,8 @@ typedef struct {
 
     uint32_t forced_cycles;  /* deauth-then-handshake pairs      */
     uint32_t pmkid_orphans;  /* solicited, never completed       */
+    uint32_t assoc_reqs;     /* association attempts seen        */
+    uint32_t touch_and_go;   /* ...that never carried any data   */
     uint32_t victims;        /* distinct clients showing forcing */
     uint32_t handshakes;     /* total handshakes observed        */
 
