@@ -92,6 +92,22 @@ typedef enum {
 #define PH_NOTE_MFP         (1u << 2) /* 802.11w seen: deauth should fail  */
 #define PH_NOTE_FULL        (1u << 3) /* more conversations than we track  */
 #define PH_NOTE_PROTECTED   (1u << 4) /* M3/M4 are encrypted; we see 1 & 2 */
+/* THIS NETWORK DOES NOT APPEAR TO HAND OUT PMKIDs.
+ *
+ * A zero on the PMKID row meant two completely different things and looked
+ * identical: "nothing has happened yet" and "this network is not vulnerable to
+ * the clientless attack at all". The second is a security FINDING and was
+ * being displayed as a blank.
+ *
+ * There is no honest way to read this off a beacon - PMKID caching is not
+ * advertised in the RSN element, and opportunistic key caching is not
+ * advertised anywhere. So it is measured instead: after enough message-1
+ * frames have gone by carrying no PMKID, the absence is worth reporting. The
+ * claim is only as strong as the sample, which is why it needs one. */
+#define PH_NOTE_NO_PMKID    (1u << 5)
+
+/* How many message 1s must pass before their silence means something. */
+#define PH_PMKID_SAMPLE 3u
 
 typedef struct {
     uint16_t dwell_permil; /* how much of the band this sweep heard     */
@@ -156,6 +172,8 @@ typedef struct {
 
     uint8_t heard[PH_MAX_HEARD][6];
     unsigned heard_n;
+
+    uint32_t m1_total, m1_pmkid; /* the PMKID sample, see PH_NOTE_NO_PMKID */
     bool full;
     uint32_t handshakes;  /* total, across everything          */
     uint32_t deauths;     /* total                             */
@@ -172,6 +190,8 @@ typedef struct {
 
     uint32_t forced_cycles;  /* deauth-then-handshake pairs      */
     uint32_t pmkid_orphans;  /* solicited, never completed       */
+    uint32_t m1_seen;        /* message 1s, whatever they carried */
+    uint32_t m1_with_pmkid;  /* ...of which carried a PMKID       */
     uint32_t assoc_reqs;     /* association attempts seen        */
     uint32_t touch_and_go;   /* ...that never carried any data   */
     uint32_t victims;        /* distinct clients showing forcing */

@@ -213,7 +213,15 @@ static bool k_harvest_display(struct pharos_lens_display *o)
     snprintf(o->detail, sizeof(o->detail), "joined %u/%u  pmkid %u  ceil %u",
              (unsigned)v.touch_and_go, (unsigned)v.assoc_reqs,
              (unsigned)v.pmkid_orphans, v.ceiling);
-    snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
+    /* When nothing is wrong, the most useful thing this lens can say is that
+     * the clientless attack does not work here - which is a result, not an
+     * absence. Only when there is no louder finding to report. */
+    if (v.band <= PH_BAND_HANDSHAKES && (v.notes & PH_NOTE_NO_PMKID)) {
+        snprintf(o->advice, sizeof(o->advice), "%s",
+                 "This network hands out no PMKIDs - the clientless attack fails here");
+    } else {
+        snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
+    }
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
     /* WHY it thinks so, on the glass. The engine has computed these families
      * all along; nothing was carrying them to the face, so this lens lit no
@@ -264,11 +272,32 @@ static bool k_harvest_row(unsigned index, struct pharos_lens_row *out)
         out->tone = PHAROS_TONE_NEUTRAL;
         return true;
     case 2:
+        /* A ZERO HERE MEANT TWO DIFFERENT THINGS AND LOOKED THE SAME.
+         *
+         * "nothing has happened yet" and "this network cannot be attacked
+         * that way at all" are opposite answers, and the second is a security
+         * finding that was being drawn as a blank. */
         snprintf(out->left, sizeof(out->left), "PMKID requests");
-        snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.pmkid_orphans);
-        out->tone = v.pmkid_orphans ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
+        if (v.pmkid_orphans) {
+            snprintf(out->right, sizeof(out->right), "%u",
+                     (unsigned)v.pmkid_orphans);
+            out->tone = PHAROS_TONE_WARN;
+        } else if (v.notes & PH_NOTE_NO_PMKID) {
+            snprintf(out->right, sizeof(out->right), "not offered");
+            out->tone = PHAROS_TONE_GOOD;
+        } else {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        }
         return true;
     case 3:
+        /* The sample that licenses the claim above. */
+        snprintf(out->left, sizeof(out->left), "message 1s carrying one");
+        snprintf(out->right, sizeof(out->right), "%u/%u",
+                 (unsigned)v.m1_with_pmkid, (unsigned)v.m1_seen);
+        out->tone = v.m1_seen ? PHAROS_TONE_NEUTRAL : PHAROS_TONE_DIM;
+        return true;
+    case 4:
         /* THE FRAME WE CAN ACTUALLY RELY ON SEEING. A live PMKID attack ran
          * for minutes against this device and every EAPOL counter stayed at
          * zero, because message 1 is one brief data frame. The association
@@ -278,24 +307,24 @@ static bool k_harvest_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.assoc_reqs);
         out->tone = v.assoc_reqs ? PHAROS_TONE_NEUTRAL : PHAROS_TONE_DIM;
         return true;
-    case 4:
+    case 5:
         snprintf(out->left, sizeof(out->left), "joined, never used it");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.touch_and_go);
         out->tone = (v.touch_and_go >= 2) ? PHAROS_TONE_BAD
                   : v.touch_and_go ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
         return true;
-    case 5:
+    case 6:
         snprintf(out->left, sizeof(out->left), "clients affected");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.victims);
         out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
         return true;
-    case 6:
+    case 7:
         snprintf(out->left, sizeof(out->left), "worst client");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
                  v.worst_client[3], v.worst_client[4], v.worst_client[5]);
         out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
         return true;
-    case 7:
+    case 8:
         snprintf(out->left, sizeof(out->left), "on network");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
                  v.worst_bssid[3], v.worst_bssid[4], v.worst_bssid[5]);

@@ -390,8 +390,55 @@ static void test_harvest_one_failed_join_is_not_an_attack(void)
           ph_band_name(v.band));
 }
 
+static void test_harvest_no_pmkid_offered_is_a_finding(void)
+{
+    banner("harvest: \"none offered\" is a result, not a blank");
+
+    /* A ZERO ON THE PMKID ROW MEANT TWO OPPOSITE THINGS.
+     *
+     * "nothing has happened yet" and "this network cannot be attacked that
+     * way at all" rendered identically. The second is a security finding -
+     * the clientless attack simply does not work against an AP that hands out
+     * no PMKIDs - and it was being drawn as an empty cell. */
+    ph_state_t s;
+    ph_reset(&s);
+    const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x80 };
+    const uint8_t cl[6] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 };
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+
+    /* Nothing seen yet: no claim either way. */
+    ph_evaluate(&s, &ctx, &v);
+    CHECK(!(v.notes & PH_NOTE_NO_PMKID), "silence alone concludes nothing");
+    CHECK(v.m1_seen == 0, "and reports an empty sample");
+
+    /* One message 1 without a PMKID is not yet a sample. */
+    ph_observe(&s, ev_eapol(1, false, ap, cl), 1000);
+    ph_evaluate(&s, &ctx, &v);
+    CHECK(!(v.notes & PH_NOTE_NO_PMKID), "one is not enough to conclude");
+
+    /* Enough of them, and the absence becomes the finding. */
+    for (unsigned i = 1; i < PH_PMKID_SAMPLE + 1u; i++) {
+        ph_observe(&s, ev_eapol(1, false, ap, cl), 1000 + i * 1000);
+    }
+    ph_evaluate(&s, &ctx, &v);
+    CHECK(v.notes & PH_NOTE_NO_PMKID, "a sample with none in it is a finding");
+    CHECK(v.m1_with_pmkid == 0, "and none of them carried one");
+    CHECK(v.m1_seen >= PH_PMKID_SAMPLE, "over a sample worth quoting (%u)",
+          (unsigned)v.m1_seen);
+
+    /* But one real PMKID retracts the claim immediately. */
+    ph_observe(&s, ev_eapol(1, true, ap, cl), 9000);
+    ph_evaluate(&s, &ctx, &v);
+    CHECK(!(v.notes & PH_NOTE_NO_PMKID),
+          "a single PMKID withdraws \"none offered\"");
+    CHECK(v.m1_with_pmkid == 1, "and is counted");
+}
+
 void test_harvest(void)
 {
+    test_harvest_no_pmkid_offered_is_a_finding();
     test_harvest_touch_and_go();
     test_harvest_a_real_client_is_not_a_harvester();
     test_harvest_one_failed_join_is_not_an_attack();

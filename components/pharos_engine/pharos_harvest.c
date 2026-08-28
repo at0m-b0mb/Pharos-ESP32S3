@@ -132,6 +132,10 @@ void ph_observe(ph_state_t *s, const pharos_ev_dot11_t *f, uint64_t t_us)
     if (f->eapol == 1) {
         p->m1++;
         s->handshakes++;
+        s->m1_total++;
+        if (f->flags & PHAROS_DOT11_F_PMKID) {
+            s->m1_pmkid++;
+        }
         p->last_m1_us = t_us;
         if (f->flags & PHAROS_DOT11_F_PMKID) {
             p->pmkid_req++;
@@ -243,6 +247,14 @@ void ph_evaluate(const ph_state_t *s, const ph_context_t *ctx, ph_verdict_t *out
     }
     out->ceiling = ph_ceiling(ctx);
     out->handshakes = s->handshakes;
+    out->m1_seen = s->m1_total;
+    out->m1_with_pmkid = s->m1_pmkid;
+
+    /* Enough message 1s have gone by with no PMKID in any of them for the
+     * absence to be a finding rather than a gap in the record. */
+    if (s->m1_total >= PH_PMKID_SAMPLE && s->m1_pmkid == 0u) {
+        out->notes |= PH_NOTE_NO_PMKID;
+    }
 
     const uint32_t dwell = clamp_u32(ctx->dwell_permil, 1, 1000);
     if (dwell < 500) {
