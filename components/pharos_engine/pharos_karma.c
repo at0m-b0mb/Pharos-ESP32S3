@@ -156,6 +156,27 @@ void pk_observe_response(pk_engine_t *e, const uint8_t bssid[6], const char *ssi
     }
 }
 
+/* Does a DIFFERENT radio beacon this name? See PK_FAM_IMPOSTOR: this turns an
+ * absence claim into a contradiction between two things we actually heard. */
+static bool beaconed_elsewhere(const pk_engine_t *e, const pk_responder_t *self,
+                               const pk_ssid_t *want)
+{
+    for (unsigned i = 0; i < e->n_responders; i++) {
+        const pk_responder_t *o = &e->responders[i];
+        if (!o->in_use || o == self) {
+            continue;
+        }
+        for (unsigned k = 0; k < o->n_ssids; k++) {
+            const pk_ssid_t *s = &o->ssids[k];
+            if (s->beaconed && s->len == want->len &&
+                memcmp(s->name, want->name, want->len) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 uint8_t pk_ceiling(const pk_context_t *ctx)
 {
     const uint32_t dwell = clamp_u32(ctx ? ctx->dwell_permil : 1000, 1, 1000);
@@ -206,7 +227,8 @@ void pk_evaluate(const pk_engine_t *e, const pk_context_t *ctx, pk_verdict_t *ou
             continue;
         }
 
-        unsigned answered = 0, unannounced = 0, echoed = 0;
+        unsigned answered = 0, unannounced = 0, echoed = 0, impostor = 0;
+        const pk_ssid_t *impostor_of = NULL;
         for (unsigned k = 0; k < r->n_ssids; k++) {
             const pk_ssid_t *s = &r->ssids[k];
             if (!s->answered) {
@@ -217,6 +239,13 @@ void pk_evaluate(const pk_engine_t *e, const pk_context_t *ctx, pk_verdict_t *ou
                 unannounced++;
                 if (s->echoed) {
                     echoed++;
+                }
+                /* Answering for a name somebody else is announcing. */
+                if (beaconed_elsewhere(e, r, s)) {
+                    impostor++;
+                    if (!impostor_of) {
+                        impostor_of = s;
+                    }
                 }
             }
         }
@@ -257,7 +286,16 @@ void pk_evaluate(const pk_engine_t *e, const pk_context_t *ctx, pk_verdict_t *ou
         }
         echo = clamp_u32(echo, 0, 30);
 
-        uint32_t raw = breadth + absence + echo;
+        /* --- IMPOSTOR: it answered for a name somebody else announces ---
+         * Weighted above ECHO because it is not an absence: both halves were
+         * heard. One is worth an alarm's worth of evidence on its own. */
+        uint32_t imp = 0;
+        if (impostor >= 1) {
+            imp = 26 + (impostor - 1) * 10;
+        }
+        imp = clamp_u32(imp, 0, 40);
+
+        uint32_t raw = breadth + absence + echo + imp;
         raw = clamp_u32(raw, 0, 100);
         uint32_t score = raw;
 
@@ -265,28 +303,57 @@ void pk_evaluate(const pk_engine_t *e, const pk_context_t *ctx, pk_verdict_t *ou
         if (breadth >= 12) families |= PK_FAM_BREADTH;
         if (absence >= 10) families |= PK_FAM_ABSENCE;
         if (echo >= 12) families |= PK_FAM_ECHO;
+        if (imp >= 20) families |= PK_FAM_IMPOSTOR;
 
         unsigned family_count = 0;
-        for (unsigned b = 0; b < 3; b++) {
+        for (unsigned b = 0; b < 4; b++) {
             if (families & (1u << b)) family_count++;
+        }
+
+        /* A CONTRADICTION IS NOT WEAKENED BY HAVING BEEN ELSEWHERE.
+         *
+         * The ordinary ceiling exists because "it never beaconed that name"
+         * is the claim a hopping receiver is least entitled to make. This
+         * family makes no such claim - it heard the real access point say the
+         * name and heard this one answer for it - so it is allowed past the
+         * hopping ceiling, exactly as a sequence-order violation is in
+         * pharos_watch.c. Still short of certainty, and never 100. */
+        uint8_t ceiling = out->ceiling;
+        if ((families & PK_FAM_IMPOSTOR) && ceiling < PK_CEILING_CONTRADICTION) {
+            ceiling = PK_CEILING_CONTRADICTION;
         }
 
         /* An alarm requires the ABSENCE family specifically. Answering for
          * several networks is what a multi-SSID access point does all day;
          * it only becomes impersonation when the radio will not say those
          * names unless asked. */
-        if (!(families & PK_FAM_ABSENCE) && score > 44) {
+        /* The alarm still requires that the radio would not say the name
+         * unless asked - but IMPOSTOR is the stronger form of exactly that
+         * claim, so it satisfies the requirement in ABSENCE's place. */
+        if (!(families & (PK_FAM_ABSENCE | PK_FAM_IMPOSTOR)) && score > 44) {
             score = 44;
         }
         if (family_count < 2 && score > 44) {
             score = 44;
         }
-        if (score > out->ceiling) {
-            score = out->ceiling;
+        if (score > ceiling) {
+            score = ceiling;
         }
 
         if (score >= best_score) {
             best_score = score;
+            /* The winning responder's ceiling is the verdict's ceiling: a
+             * contradiction lifts it, and the lift has to survive out of this
+             * loop or the screen shows a bound the score already passed. */
+            out->ceiling = ceiling;
+            out->impostor_ssids = (uint8_t)impostor;
+            out->impostor_name[0] = '\0';
+            if (impostor_of) {
+                const uint8_t n = impostor_of->len < PK_SSID_MAX
+                                      ? impostor_of->len : PK_SSID_MAX;
+                memcpy(out->impostor_name, impostor_of->name, n);
+                out->impostor_name[n] = '\0';
+            }
             out->score = (uint8_t)score;
             out->raw_score = (uint8_t)raw;
             out->families = families;

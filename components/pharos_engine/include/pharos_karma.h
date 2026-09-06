@@ -48,6 +48,27 @@ extern "C" {
 #define PK_FAM_BREADTH (1u << 0) /* answers for many names            */
 #define PK_FAM_ABSENCE (1u << 1) /* names it never announces itself   */
 #define PK_FAM_ECHO    (1u << 2) /* answers arrive right after asking */
+/* ANSWERED FOR A NAME THAT A DIFFERENT RADIO ACTUALLY BEACONS.
+ *
+ * The other three families rest, in the end, on an ABSENCE: this radio never
+ * announced the name it answered for. That is the right signal, and it is the
+ * weakest kind of evidence a hopping receiver can offer, because "I never
+ * heard it" is exactly what a receiver that was elsewhere would also report.
+ *
+ * This is not an absence. If some OTHER access point in the room is beaconing
+ * "HomeNet" continuously, and this radio answers a probe for "HomeNet" while
+ * never announcing it, that is a positive contradiction between two things we
+ * actually heard. It is the difference between "I did not see it" and "I saw
+ * somebody else doing it".
+ *
+ * So it carries more weight, and - like the dwell-independent proof in
+ * pharos_watch.h - it raises its own ceiling, because unlike an absence claim
+ * it is not weakened by having been elsewhere. */
+#define PK_FAM_IMPOSTOR (1u << 3)
+
+/* What a verdict may reach when it carries that contradiction. Short of the
+ * camped ceiling: one antenna still cannot rule out what it never heard. */
+#define PK_CEILING_CONTRADICTION 88
 
 typedef enum {
     PK_BAND_NORMAL = 0,  /*  0-19  looks like an honest access point */
@@ -105,6 +126,9 @@ typedef struct {
 typedef struct {
     uint8_t score;
     uint8_t raw_score;
+    /* SSIDs this responder answered for that ANOTHER radio beacons. */
+    uint8_t impostor_ssids;
+    char impostor_name[PK_SSID_MAX + 1];
     uint8_t ceiling;
     uint8_t families;
     uint8_t notes;

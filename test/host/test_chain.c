@@ -237,8 +237,70 @@ static void probe_and_answer(pk_engine_t *e, const uint8_t *bssid, const char *s
     pk_observe_response(e, bssid, ssid, len, -45, 6, prompt ? t + 100000 : t + 5000000);
 }
 
+static void test_karma_impostor(void)
+{
+    banner("karma: answering for a name somebody else announces");
+
+    /* THE STRONGER CLAIM.
+     *
+     * The other families rest on an ABSENCE - this radio never announced the
+     * name it answered for - which is the weakest thing a hopping receiver can
+     * assert, because "I never heard it" is also what a receiver that was
+     * elsewhere would report.
+     *
+     * This is a contradiction between two things actually heard: a real access
+     * point announcing "HomeNet", and a second radio answering a probe for
+     * "HomeNet" while never announcing it. */
+    pk_engine_t e;
+    pk_reset(&e);
+
+    const uint8_t real[6]  = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    const uint8_t rogue[6] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+
+    for (unsigned i = 0; i < 30u; i++) {
+        pk_observe_beacon(&e, real, "HomeNet", 7, -40, 6, 1000000ull * i);
+    }
+    pk_observe_probe(&e, "HomeNet", 7, 31000000ull);
+    pk_observe_response(&e, rogue, "HomeNet", 7, -55, 6, 31100000ull);
+
+    /* Hopping: the posture in which an absence claim is worth least. */
+    pk_context_t hopping = { .dwell_permil = 80, .bus_yield_permil = 1000 };
+    pk_verdict_t v;
+    pk_evaluate(&e, &hopping, &v);
+
+    CHECK(v.families & PK_FAM_IMPOSTOR, "the contradiction is seen");
+    CHECK(v.impostor_ssids >= 1, "and counted (%u)", v.impostor_ssids);
+    CHECK(strcmp(v.impostor_name, "HomeNet") == 0, "and named (%s)",
+          v.impostor_name);
+    CHECK(v.ceiling >= PK_CEILING_CONTRADICTION,
+          "a contradiction lifts its own ceiling past hopping (%u)", v.ceiling);
+
+    /* THE NEGATIVE THIS MUST NOT BREAK.
+     *
+     * A roaming deployment is several radios carrying the SAME network, and
+     * every one of them BEACONS it. If sharing a name were enough, this family
+     * would accuse every corporate mesh in the world. */
+    pk_engine_t ok;
+    pk_reset(&ok);
+    const uint8_t ap2[6] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x66 };
+    for (unsigned i = 0; i < 30u; i++) {
+        pk_observe_beacon(&ok, real, "CorpWiFi", 8, -40, 6, 1000000ull * i);
+        pk_observe_beacon(&ok, ap2,  "CorpWiFi", 8, -50, 11, 1000000ull * i);
+    }
+    pk_observe_probe(&ok, "CorpWiFi", 8, 31000000ull);
+    pk_observe_response(&ok, ap2, "CorpWiFi", 8, -50, 11, 31100000ull);
+
+    pk_verdict_t w;
+    pk_evaluate(&ok, &hopping, &w);
+    CHECK(!(w.families & PK_FAM_IMPOSTOR),
+          "a radio that announces the name it answers for is not an impostor");
+    CHECK(w.score <= 44, "and a roaming mesh stays out of the alarm band (%u)",
+          w.score);
+}
+
 void test_karma(void)
 {
+    test_karma_impostor();
     banner("karma: a radio that answers to any name");
     pk_context_t camped = { .dwell_permil = 1000, .bus_yield_permil = 1000 };
     pk_verdict_t v;

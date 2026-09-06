@@ -191,7 +191,10 @@ static bool k_karma_display(struct pharos_lens_display *o)
     o->fam_label[0] = "BREADTH";
     o->fam_label[1] = "ABSENT";
     o->fam_label[2] = "ECHO";
-    o->fam_label[3] = NULL;
+    /* The fourth slot was empty and the strongest family had nowhere to go:
+     * an IMPOSTOR finding would have lifted the score with no chip to explain
+     * why. */
+    o->fam_label[3] = "STOLEN";
     o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
