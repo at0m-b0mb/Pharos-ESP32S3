@@ -294,7 +294,69 @@ void pv_observe_adv(pv_state_t *s, const uint8_t addr[6], uint8_t addr_type,
     }
     if (!tag) {
         if (s->n >= PV_MAX_TAGS) {
+            /* THE TABLE WAS A FIRST-COME LOTTERY, AND THAT IS THE WRONG WAY
+             * ROUND FOR THIS LENS.
+             *
+             * It used to set `full` and return, so the first thirty-two
+             * addresses seen kept their slots for the rest of the session. In
+             * a cafe with a dozen trackers in other people's bags, the table
+             * is full of strangers within a minute - and a tag that starts
+             * following you AFTER that can never be recorded at all. The one
+             * device this lens exists to catch is precisely the one that
+             * appears and persists, so filling up on arrivals is exactly
+             * backwards. The locale ring already rings over its oldest entry
+             * (see the note above); the tag table never got the same
+             * treatment.
+             *
+             * What gets evicted is the least evidential entry: fewest locales
+             * first, then longest unheard. A tag carrying locale evidence is
+             * a candidate for "travelling with you" and is never dropped to
+             * make room for a stranger seen once.
+             *
+             * A tracker that has gone quiet must survive this. BLE-Doubt
+             * measured paired AirTags going silent for up to an hour and
+             * resuming for only minutes at a time - and that behaviour
+             * persisted after separation from the owner. Evicting on silence
+             * alone would discard the exact device the lens is for, which is
+             * why silence is only the tie-break and never the first test. */
+            unsigned worst = 0;
+            bool found = false;
+            for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+                if (!s->tags[i].in_use) {
+                    continue;
+                }
+                if (!found) {
+                    worst = i;
+                    found = true;
+                    continue;
+                }
+                const pv_tag_t *w = &s->tags[worst];
+                const pv_tag_t *c = &s->tags[i];
+                if (c->n_locales < w->n_locales ||
+                    (c->n_locales == w->n_locales && c->last_us < w->last_us)) {
+                    worst = i;
+                }
+            }
+            /* Still reported: more trackers than the table can hold is a fact
+             * about the room, and the operator should know the list is a
+             * sample rather than a census. */
             s->full = true;
+            if (!found || s->tags[worst].n_locales >= 2u) {
+                /* Everything here is already evidence. Refusing to record a
+                 * new arrival is the lesser harm; overwriting a device that
+                 * has followed you across two places is not. */
+                return;
+            }
+            tag = &s->tags[worst];
+            memset(tag, 0, sizeof(*tag));
+            memcpy(tag->addr, addr, 6);
+            tag->addr_type = addr_type;
+            tag->in_use = true;
+            tag->first_us = t_us;
+            tag->best_rssi = rssi;
+            tag->kind = kind;
+            tag->sightings++;
+            tag->last_us = t_us;
             return;
         }
         tag = &s->tags[s->n++];

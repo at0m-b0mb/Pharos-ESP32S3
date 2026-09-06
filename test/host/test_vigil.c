@@ -315,8 +315,87 @@ static void test_vigil_named_tags(void)
           "a shorter name is not assumed to be one");
 }
 
+/* A Tile, built the same way every other test here builds one. */
+static void feed(pv_state_t *s, const uint8_t addr[6], uint64_t t)
+{
+    const uint8_t n = mk_service(0xFEED);
+    pv_observe_adv(s, addr, 1, -60, g_buf, n, t);
+}
+
+static void test_vigil_table_keeps_the_evidence(void)
+{
+    banner("vigil: a full table must not lock out the tag that follows you");
+
+    /* THE FIRST-COME LOTTERY.
+     *
+     * The table used to set `full` and return, so the first thirty-two
+     * addresses seen kept their slots for the whole session. In a cafe with a
+     * dozen trackers in other people's bags the table fills with strangers
+     * within a minute - and a tag that starts following you AFTER that could
+     * never be recorded at all. The device this lens exists to catch is
+     * precisely the one that appears and persists. */
+    pv_state_t s;
+    pv_reset(&s);
+    pv_observe_locale(&s, 0x11111111u, 1000000ull);
+
+    for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+        uint8_t a[6] = { 0x40, 0x11, 0x22, 0x33, 0x00, (uint8_t)i };
+        feed(&s, a, 1000000ull + i);
+    }
+
+    const uint8_t hunter[6] = { 0x50, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE };
+    feed(&s, hunter, 5000000ull);
+
+    bool present = false;
+    for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+        if (s.tags[i].in_use && memcmp(s.tags[i].addr, hunter, 6) == 0) {
+            present = true;
+        }
+    }
+    CHECK(present, "a later arrival can still get a slot");
+    CHECK(s.full, "and the table still reports that it overflowed");
+}
+
+static void test_vigil_evidence_outranks_arrival(void)
+{
+    banner("vigil: a tag seen across two places is not evicted for a stranger");
+
+    /* Eviction must be ranked by EVIDENCE, not by age. A tracker seen across
+     * two locales is the finding; a stranger seen once is noise.
+     *
+     * And a tag that has gone QUIET must survive. BLE-Doubt measured paired
+     * AirTags going silent for up to an hour and resuming only for minutes at
+     * a time, and that behaviour persisted after separation from the owner -
+     * so evicting on silence alone would discard the exact device this lens
+     * exists to catch. Silence is the tie-break, never the first test. */
+    pv_state_t s;
+    pv_reset(&s);
+
+    const uint8_t follower[6] = { 0x60, 0x01, 0x02, 0x03, 0x04, 0x05 };
+    pv_observe_locale(&s, 0x55555555u, 1000000ull);
+    feed(&s, follower, 1500000ull);
+    pv_observe_locale(&s, 0xAAAAAAAAu, 3000000ull);
+    feed(&s, follower, 3500000ull);
+
+    /* Then a crowd of strangers, every one of them seen more recently. */
+    for (unsigned i = 0; i < PV_MAX_TAGS + 8u; i++) {
+        uint8_t a[6] = { 0x70, 0x11, 0x22, 0x33, 0x00, (uint8_t)i };
+        feed(&s, a, 9000000ull + i);
+    }
+
+    bool kept = false;
+    for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+        if (s.tags[i].in_use && memcmp(s.tags[i].addr, follower, 6) == 0) {
+            kept = true;
+        }
+    }
+    CHECK(kept, "the tag with locale evidence survives a crowd of strangers");
+}
+
 void test_vigil(void)
 {
+    test_vigil_table_keeps_the_evidence();
+    test_vigil_evidence_outranks_arrival();
     test_vigil_google_find_my();
     test_vigil_named_tags();
     test_vigil_movement_gates_following();
