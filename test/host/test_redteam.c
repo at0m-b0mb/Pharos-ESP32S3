@@ -113,8 +113,70 @@ static void test_flood_rate_needs_a_real_denominator(void)
           pf_band_name(v.band));
 }
 
+static void test_flood_beacon_poverty(void)
+{
+    banner("mirage: a hand-built beacon is underdressed");
+
+    /* THE FAMILY THAT NEEDS ONE FRAME INSTEAD OF A MINUTE.
+     *
+     * Volume is a rate. Ephemerality is the observation that names never came
+     * back - an absence, and the claim a hopping receiver is least entitled to
+     * make. Even synthetic addressing wants several names before the pattern
+     * shows. All three need TIME.
+     *
+     * A real access point's beacon is crowded - rates, DS, TIM, country, ERP,
+     * RSN, HT capability and operation, extended capabilities, often VHT and
+     * WMM. A flooding tool writes the minimum that makes a phone list the
+     * name, because that is all its author had to write. */
+    pf_engine_t e;
+    pf_reset(&e);
+    for (unsigned i = 0; i < 40u; i++) {
+        uint8_t b[6] = { 0x02, 0xAA, 0xBB, 0xCC, 0x00, (uint8_t)i };
+        char name[24];
+        snprintf(name, sizeof name, "FreeWiFi_%02u", i);
+        pf_observe_ies(&e, b, name, (uint8_t)strlen(name), 3, 200000ull * i);
+    }
+    pf_context_t camped = { .dwell_permil = 1000 };
+    pf_verdict_t v;
+    pf_evaluate(&e, &camped, &v);
+    CHECK(v.families & PF_FAM_POVERTY, "bare beacons are their own family");
+    CHECK(v.poverty_permil >= 900, "and measured (%u permil)", v.poverty_permil);
+
+    /* THE NEGATIVE. A real rooftop is many networks and every one of them is a
+     * properly dressed access point. Density is not an attack. */
+    pf_engine_t city;
+    pf_reset(&city);
+    for (unsigned i = 0; i < 40u; i++) {
+        uint8_t b[6] = { 0x00, 0x1A, 0x2B, 0x3C, 0x00, (uint8_t)i };
+        char name[24];
+        snprintf(name, sizeof name, "Apartment_%02u", i);
+        pf_observe_ies(&city, b, name, (uint8_t)strlen(name), 14, 200000ull * i);
+    }
+    pf_verdict_t w;
+    pf_evaluate(&city, &camped, &w);
+    CHECK(!(w.families & PF_FAM_POVERTY),
+          "a dense street of real access points is not accused");
+
+    /* AND THE REFUSAL. A caller that cannot count elements reports zero, and a
+     * detector must never read its own missing instrumentation as evidence. */
+    pf_engine_t unmeasured;
+    pf_reset(&unmeasured);
+    for (unsigned i = 0; i < 40u; i++) {
+        uint8_t b[6] = { 0x02, 0xAA, 0xBB, 0xCC, 0x00, (uint8_t)i };
+        char name[24];
+        snprintf(name, sizeof name, "FreeWiFi_%02u", i);
+        pf_observe(&unmeasured, b, name, (uint8_t)strlen(name), 200000ull * i);
+    }
+    pf_verdict_t u;
+    pf_evaluate(&unmeasured, &camped, &u);
+    CHECK(!(u.families & PF_FAM_POVERTY),
+          "not measuring is not the same as measuring zero");
+    CHECK(u.ie_measured == 0, "and it says so (%u)", (unsigned)u.ie_measured);
+}
+
 void test_flood(void)
 {
+    test_flood_beacon_poverty();
     test_flood_rate_needs_a_real_denominator();
 
     banner("flood: beacon / SSID spam");

@@ -5,6 +5,45 @@
 #define DOT11_HDR_MIN 24
 #define BEACON_FIXED  12 /* timestamp 8 + beacon interval 2 + capability 2 */
 
+/* HOW RICHLY DRESSED IS THIS BEACON?
+ *
+ * A real access point's beacon is crowded: supported rates, DS parameter set,
+ * TIM, country, ERP, extended rates, RSN, HT capabilities, HT operation,
+ * extended capabilities, often VHT, WMM and a WPS vendor element. Twelve to
+ * twenty elements is ordinary.
+ *
+ * A beacon synthesised by a flooding tool is not. Those frames are assembled
+ * by hand, and the hand assembles the minimum that makes a phone list the
+ * name: an SSID, some rates, a channel.
+ *
+ * That is a POSITIVE observation about a frame that arrived, which is what
+ * makes it worth having. Mirage's other evidence for a fabricated network is
+ * that its names are never heard again - an absence, and the claim a hopping
+ * receiver is least entitled to make. This one needs a single beacon.
+ *
+ * Bounds-checked exactly as the element search is: a truncated or hostile
+ * frame stops the walk and we count only what could be verified. */
+uint8_t pharos_dot11_ie_count(const uint8_t *body, size_t len, size_t start)
+{
+    if (!body || len < start) {
+        return 0;
+    }
+    size_t off = start;
+    unsigned n = 0;
+    while (off + 2u <= len) {
+        const uint8_t elen = body[off + 1];
+        if (off + 2u + elen > len) {
+            break;
+        }
+        n++;
+        if (n >= 255u) {
+            break;
+        }
+        off += 2u + elen;
+    }
+    return (uint8_t)n;
+}
+
 static uint16_t rd16(const uint8_t *p)
 {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));

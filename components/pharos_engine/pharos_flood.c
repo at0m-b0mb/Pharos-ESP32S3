@@ -59,6 +59,20 @@ static pf_ssid_t *ssid_find(pf_engine_t *e, const char *ssid, uint8_t len)
 void pf_observe(pf_engine_t *e, const uint8_t bssid[6], const char *ssid,
                 uint8_t len, uint64_t t_us)
 {
+    pf_observe_ies(e, bssid, ssid, len, 0, t_us);
+}
+
+void pf_observe_ies(pf_engine_t *e, const uint8_t bssid[6], const char *ssid,
+                    uint8_t len, uint8_t ie_count, uint64_t t_us)
+{
+    /* Tallied over beacons we could actually measure, so a caller that never
+     * counts elements contributes nothing either way. */
+    if (ie_count) {
+        e->ie_measured++;
+        if (ie_count < PF_IE_POOR) {
+            e->ie_poor++;
+        }
+    }
     if (!e || !bssid || !ssid || len == 0 || len > PF_SSID_MAX) {
         return; /* a hidden/empty SSID tells us nothing about a name flood */
     }
@@ -258,18 +272,38 @@ void pf_evaluate(const pf_engine_t *e, const pf_context_t *ctx, pf_verdict_t *ou
         out->c_synthetic = (uint8_t)clamp_u32(synth, 0, 30);
     }
 
+    /* --- POVERTY: the beacons themselves are bare ----------------------
+     *
+     * Needs a real sample as well as a share: two terse frames out of three
+     * is a fraction, not a finding. Reported over MEASURED beacons only, so a
+     * caller that never counts elements contributes nothing. */
+    {
+        out->ie_measured = e->ie_measured;
+        out->poverty_permil = e->ie_measured
+            ? (uint16_t)((e->ie_poor * 1000u) / e->ie_measured) : 0u;
+        uint32_t poor = 0;
+        if (e->ie_measured >= 8u && out->poverty_permil >= 600u) {
+            static const uint32_t px[] = { 600, 800, 950, 1000 };
+            static const uint32_t py[] = { 10, 18, 24, 28 };
+            poor = interp(out->poverty_permil, px, py, 4);
+        }
+        out->c_poverty = (uint8_t)clamp_u32(poor, 0, 28);
+    }
+
     /* --- families ------------------------------------------------------- */
     if (out->c_volume >= 12) out->families |= PF_FAM_VOLUME;
     if (out->c_ephemeral >= 10) out->families |= PF_FAM_EPHEMERAL;
     if (out->c_synthetic >= 10) out->families |= PF_FAM_SYNTHETIC;
+    if (out->c_poverty >= 10) out->families |= PF_FAM_POVERTY;
 
-    uint32_t raw = (uint32_t)out->c_volume + out->c_ephemeral + out->c_synthetic;
+    uint32_t raw = (uint32_t)out->c_volume + out->c_ephemeral +
+                   out->c_synthetic + out->c_poverty;
     raw = clamp_u32(raw, 0, 100);
     out->raw_score = (uint8_t)raw;
     uint32_t score = raw;
 
     unsigned family_count = 0;
-    for (unsigned b = 0; b < 3; b++) {
+    for (unsigned b = 0; b < 4; b++) {
         if (out->families & (1u << b)) family_count++;
     }
 

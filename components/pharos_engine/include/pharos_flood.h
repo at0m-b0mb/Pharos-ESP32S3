@@ -48,6 +48,29 @@ extern "C" {
 #define PF_FAM_VOLUME    (1u << 0) /* new names per second        */
 #define PF_FAM_EPHEMERAL (1u << 1) /* names seen once, then gone  */
 #define PF_FAM_SYNTHETIC (1u << 2) /* software / patterned BSSIDs */
+/* THE BEACON ITSELF IS UNDERDRESSED.
+ *
+ * The other three families need TIME. Volume is a rate, ephemerality is the
+ * observation that names never came back - an absence, and the claim a hopping
+ * receiver is least entitled to make - and even synthetic addressing wants
+ * several names before the pattern shows.
+ *
+ * This one needs a single frame. A real access point's beacon is crowded:
+ * rates, DS, TIM, country, ERP, extended rates, RSN, HT capabilities, HT
+ * operation, extended capabilities, often VHT, WMM and a WPS vendor element.
+ * Twelve to twenty is ordinary. A beacon assembled by a flooding tool carries
+ * the minimum that makes a phone list the name - an SSID, some rates, a
+ * channel - because that is all the author had to write.
+ *
+ * So it is positive evidence about a frame that ARRIVED, rather than an
+ * inference from frames that did not. */
+#define PF_FAM_POVERTY   (1u << 3)
+
+/* Below this many elements a beacon is doing the bare minimum. Set well under
+ * what any real access point emits so that an unusually terse but genuine AP
+ * is not accused: the gap between 4 and 12 is wide, and this sits at the
+ * bottom of it. */
+#define PF_IE_POOR 6u
 
 typedef enum {
     PF_BAND_QUIET = 0,   /*  0-19  ordinary airspace                */
@@ -105,6 +128,8 @@ typedef struct {
     uint32_t evictions;
     uint64_t first_us, last_us;
     bool overflow;
+    uint32_t ie_measured; /* beacons whose elements we counted    */
+    uint32_t ie_poor;     /* ...of which were bare-minimum frames */
 } pf_engine_t;
 
 typedef struct {
@@ -123,6 +148,9 @@ typedef struct {
     uint16_t synthetic_permil;   /* share of names on software MACs */
     uint8_t widest_oui_names;    /* most SSIDs from one prefix      */
     const char *headline;
+    uint8_t c_poverty;
+    uint16_t poverty_permil; /* share of measured beacons that were bare */
+    uint32_t ie_measured;
 } pf_verdict_t;
 
 void pf_reset(pf_engine_t *e);
@@ -130,6 +158,14 @@ void pf_reset(pf_engine_t *e);
 /* One beacon: a network name announced by a BSSID. */
 void pf_observe(pf_engine_t *e, const uint8_t bssid[6], const char *ssid,
                 uint8_t len, uint64_t t_us);
+
+/* The same, plus how many information elements the beacon carried.
+ *
+ * `ie_count` of 0 means NOT MEASURED - a caller that cannot count them, or a
+ * frame that is not a beacon - and never counts as evidence of poverty. A
+ * detector must not read its own missing instrumentation as a finding. */
+void pf_observe_ies(pf_engine_t *e, const uint8_t bssid[6], const char *ssid,
+                    uint8_t len, uint8_t ie_count, uint64_t t_us);
 
 void pf_evaluate(const pf_engine_t *e, const pf_context_t *ctx, pf_verdict_t *out);
 

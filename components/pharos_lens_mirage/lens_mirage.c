@@ -79,7 +79,8 @@ static void mirage_event(const pharos_event_t *ev)
      * meant a flood of 300 fake names off one radio counted as one "name" and
      * the lens could never fire. A beacon with no SSID element is passed as a
      * genuine empty name rather than skipped: hidden networks are real. */
-    pf_observe(&s_engine, f->a2, f->ssid_len ? f->ssid : NULL, f->ssid_len, ev->t_us);
+    pf_observe_ies(&s_engine, f->a2, f->ssid_len ? f->ssid : NULL,
+                   f->ssid_len, f->ie_count, ev->t_us);
     xSemaphoreGive(s_lock);
 }
 
@@ -174,7 +175,7 @@ static bool k_mirage_display(struct pharos_lens_display *o)
     o->fam_label[0] = "VOLUME";
     o->fam_label[1] = "NEW";
     o->fam_label[2] = "SYNTH";
-    o->fam_label[3] = NULL;
+    o->fam_label[3] = "BARE";
     o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
@@ -222,6 +223,25 @@ static bool k_mirage_row(unsigned index, struct pharos_lens_row *out)
         out->tone = (v.synthetic_permil >= 700u) ? PHAROS_TONE_BAD : PHAROS_TONE_NEUTRAL;
         return true;
     case 4:
+        /* THE VALIDATION ROW. A real access point beacons a dozen elements or
+         * more; a hand-built flood frame carries three. Showing the share lets
+         * the reading be checked against a street of genuine APs, which should
+         * always sit at zero. */
+        snprintf(out->left, sizeof(out->left), "bare beacons");
+        if (v.ie_measured == 0u) {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        } else {
+            const unsigned pct = (unsigned)(v.poverty_permil / 10u) > 100u
+                                     ? 100u : (unsigned)(v.poverty_permil / 10u);
+            const unsigned n = v.ie_measured > 99u ? 99u : (unsigned)v.ie_measured;
+            snprintf(out->right, sizeof(out->right), "%u%% of %u", pct, n);
+            out->tone = (v.families & PF_FAM_POVERTY) ? PHAROS_TONE_BAD
+                      : (v.poverty_permil >= 300u)    ? PHAROS_TONE_WARN
+                                                      : PHAROS_TONE_GOOD;
+        }
+        return true;
+    case 5:
         snprintf(out->left, sizeof(out->left), "names from one OUI");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.widest_oui_names);
         out->tone = PHAROS_TONE_DIM; return true;

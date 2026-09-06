@@ -146,6 +146,11 @@ typedef struct {
      * recycled the moment the callback returns. */
     uint8_t ssid_len;
     uint8_t rsn_flags; /* PHAROS_RSN_F_*; 0 for frames that carry no RSN */
+    /* How many information elements the beacon carried. A real access point
+     * dresses richly - a dozen or more; a hand-built flood frame carries the
+     * three or four that make a phone list the name. Zero for frames that are
+     * not beacons or probe responses. */
+    uint8_t ie_count;
     char ssid[PHAROS_EV_SSID_MAX];
 } pharos_ev_dot11_t;
 

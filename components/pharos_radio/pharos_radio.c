@@ -288,6 +288,12 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             /* Probe REQUESTS carry no fixed parameters; starting the walk 12
              * bytes in would skip their first element, which is the SSID - the
              * only one that matters. */
+            /* How richly dressed the frame is, from the same walk. A real
+             * access point carries a dozen elements or more; a hand-built
+             * flood frame carries the three that make a phone list the name. */
+            ev.u.dot11.ie_count =
+                pharos_dot11_ie_count(body, blen, has_fixed ? 12u : 0u);
+
             uint8_t ie_len = 0;
             const uint8_t *ssid = pharos_dot11_find_ie_from(
                 body, blen, has_fixed ? 12u : 0u, PHAROS_IE_SSID, &ie_len);

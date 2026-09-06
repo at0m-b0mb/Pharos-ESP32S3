@@ -20,6 +20,11 @@
 extern "C" {
 #endif
 
+/* Count the information elements in a management frame body, from `start`.
+ * See the note on the definition: beacon richness separates an access point
+ * from a hand-built frame, and it needs only one beacon to say so. */
+uint8_t pharos_dot11_ie_count(const uint8_t *body, size_t len, size_t start);
+
 /* Fixed-header parse. buf points at the start of the MAC header, len is what
  * the radio handed us. Returns false if the frame is too short to trust.
  * Fills type/subtype/addresses/seq/flags; the caller supplies rssi/channel. */
