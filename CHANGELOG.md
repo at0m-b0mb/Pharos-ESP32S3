@@ -1,5 +1,78 @@
 # Changelog
 
+## v3.3.0 - the address is forged, the radio is not
+
+Fourteen commits since v3.2.0. The thread running through the new engines is
+one idea: **an attacker writes the fields, but they do not write the physics.**
+Every field in a frame can be set to whatever the sender likes. An oscillator's
+drift rate, a transmitter's signal level and a corrupted checksum cannot be.
+
+### New engines
+
+- **Attribution** (`pharos_attrib`) - a deauthentication frame's source address
+  is forged by definition, so it is ignored. The RSSI is not: the radio that
+  sent it was at some real distance, radiating real power. Forged frames are
+  matched against every device in the room by signal level, which can name the
+  radio behind a spoofed address.
+- **Clock skew** (`pharos_skew`) - every access point counts microseconds on
+  its own crystal, and no two crystals run at the same rate. If a BSSID's rate
+  CHANGES, the radio behind that name changed. Uses the minimum offset per
+  bucket, not the mean, because reception delay is a one-sided tax and
+  averaging it measures how busy the CPU was rather than the oscillator.
+  States plainly what it cannot do: a determined attacker can synchronise TSF,
+  so a match is never reported as innocence.
+
+### Detection improvements, each measured against the field
+
+- **Karma** gains IMPOSTOR. PiKarma, the best-known detector of this attack,
+  flags any radio answering for more than one SSID - which accuses every
+  corporate AP carrying guest, staff and IoT. Pharos already scored those
+  zero. But its three families all rested on an ABSENCE, the weakest claim a
+  hopping receiver can make. Answering for a name a DIFFERENT radio actually
+  beacons is a contradiction between two things heard, so it raises its own
+  ceiling to 88 past the hopping bound.
+- **Vigil** gains Google's Find My Device network - Pebblebee, Moto Tag, Eufy,
+  Chipolo Point - roughly half the trackers a person meets, previously
+  invisible. FMDN shares service UUID 0xFEAA with ordinary Eddystone beacons,
+  so shop and museum beacons are told apart by frame type and explicitly
+  BARRED from the tag table. Everything in that table is a candidate for
+  "travelling with you", and accusing a supermarket shelf is the worst
+  sentence this lens has available.
+- **Squall** gains BROKEN. Its other families infer denial from what is
+  missing; a failed checksum is direct evidence of interference. A congested
+  channel is loud and its frames decode, a jammed one is loud and its frames
+  shatter.
+- **Harvest** now needs TWO unanswered PMKIDs, and only from clients it has
+  actually heard transmit. One is routine fast roaming, and message 2 comes
+  from the client - which a one-antenna receiver often cannot hear at all.
+  This was reported from hardware as SUSPECTED 46/96 on an idle network.
+  "not offered" is now a stated result rather than an ambiguous zero.
+
+### Fixes found on the glass
+
+- **Camping revoked what the lens asked to hear.** The camp plan carried
+  want_mgmt alone, so `squall camp` stopped delivering the data frames its
+  retry family is computed from. 0% retries camped, 3% once fixed.
+- **The START button could not start anything** - drawn at +102..+158, while
+  the zone that launches a lens stopped at +95. The two never overlapped.
+- **Press-and-hold did not exist.** Only LV_EVENT_CLICKED was registered, so
+  there was no way off a page with a finger - and the guide taught the gesture
+  anyway.
+- **Every sensor's detail rows lost their first characters**, because labels
+  were centre-aligned by bounding box and grew symmetrically off the glass.
+- Whisper's verdict flickered ~450 times in 30 seconds; a confirm counter plus
+  a band kerb brings it to 4.
+- Settings looked like every other list. Controls now carry a stripe, a
+  chevron and an accent value; readings keep their tone.
+- The first-run guide is reachable again from Settings.
+
+### Honesty notes
+
+Clock skew and Squall's BROKEN family are wired and host-tested but **not
+demonstrated on hardware**: neither an evil twin nor a jammer was available to
+make them fire. They are defensible, not proven.
+
+
 ## v3.2.0 — 2026-08-25
 
 ### The gauge has a channel now
