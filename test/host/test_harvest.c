@@ -436,8 +436,57 @@ static void test_harvest_no_pmkid_offered_is_a_finding(void)
     CHECK(v.m1_with_pmkid == 1, "and is counted");
 }
 
+static void test_harvest_one_radio_many_networks(void)
+{
+    banner("harvest: one radio shopping is not a crowd of clients");
+
+    /* THE CLIENTLESS COLLECTOR.
+     *
+     * hcxdumptool does not need to deauthenticate anybody: it associates with
+     * an access point, asks for a PMKID, and moves on. `victims` only counts
+     * pairs where a forced cycle happened, so that whole attack was invisible
+     * to the breadth family - and touch_and_go counts PAIRS, which cannot
+     * tell one radio that approached twenty networks from twenty phones that
+     * each approached one.
+     *
+     * A client associates with the network it belongs to. It does not shop. */
+    ph_state_t s;
+    ph_reset(&s);
+    const uint8_t collector[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01 };
+    for (unsigned i = 0; i < 6u; i++) {
+        const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, (uint8_t)i };
+        ph_observe(&s, ev_assoc(ap, collector), 1000000ull + i * 100000ull);
+    }
+    ph_settle(&s);
+
+    ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
+    ph_verdict_t v;
+    ph_evaluate(&s, &ctx, &v);
+    CHECK(v.widest_reach >= 6u, "one address reached six networks (%u)",
+          (unsigned)v.widest_reach);
+    CHECK(v.families & PH_FAM_TOUCH_GO, "and that is the collector's family");
+
+    /* THE NEGATIVE. The same number of approaches, spread across a crowd of
+     * ordinary phones, is a cafe - and must not score the same. */
+    ph_state_t cafe;
+    ph_reset(&cafe);
+    for (unsigned i = 0; i < 6u; i++) {
+        const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, (uint8_t)i };
+        const uint8_t phone[6] = { 0xAA, 0xBB, 0xCC, 0x00, 0x00, (uint8_t)i };
+        ph_observe(&cafe, ev_assoc(ap, phone), 1000000ull + i * 100000ull);
+    }
+    ph_settle(&cafe);
+    ph_verdict_t w;
+    ph_evaluate(&cafe, &ctx, &w);
+    CHECK(w.widest_reach <= 1u, "no phone reached more than one (%u)",
+          (unsigned)w.widest_reach);
+    CHECK(w.score < v.score, "and the crowd scores lower than the collector "
+          "(%u vs %u)", w.score, v.score);
+}
+
 void test_harvest(void)
 {
+    test_harvest_one_radio_many_networks();
     test_harvest_no_pmkid_offered_is_a_finding();
     test_harvest_touch_and_go();
     test_harvest_a_real_client_is_not_a_harvester();

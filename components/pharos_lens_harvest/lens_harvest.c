@@ -243,7 +243,13 @@ static bool k_harvest_display(struct pharos_lens_display *o)
     if (v.families & PH_FAM_PMKID)    fam |= 1u << 1;
     if (v.families & PH_FAM_TOUCH_GO) fam |= 1u << 2;
     if (v.families & (PH_FAM_REPEAT | PH_FAM_BREADTH)) fam |= 1u << 3;
-    o->families = fam;
+    /* Four chips for six families, so the map is explicit rather than a raw
+     * bit copy: FORCED, PMKID, REACH and the approach that went nowhere are
+     * the four an operator acts on. REPEAT and BREADTH stay in the rows. */
+    o->families = (uint8_t)(((v.families & PH_FAM_FORCED)   ? (1u << 0) : 0u) |
+                            ((v.families & PH_FAM_PMKID)    ? (1u << 1) : 0u) |
+                            ((v.families & PH_FAM_REACH)    ? (1u << 2) : 0u) |
+                            ((v.families & PH_FAM_TOUCH_GO) ? (1u << 3) : 0u));
     o->fam_label[0] = "FORCED";
     o->fam_label[1] = "PMKID";
     o->fam_label[2] = "JOINED";
@@ -298,6 +304,21 @@ static bool k_harvest_row(unsigned index, struct pharos_lens_row *out)
         out->tone = v.m1_seen ? PHAROS_TONE_NEUTRAL : PHAROS_TONE_DIM;
         return true;
     case 4:
+        /* The collector's own signature: one address across many networks.
+         * A client associates with the network it belongs to; it does not
+         * shop. */
+        snprintf(out->left, sizeof(out->left), "one radio reached");
+        if (v.widest_reach <= 1u) {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        } else {
+            snprintf(out->right, sizeof(out->right), "%u nets",
+                     (unsigned)(v.widest_reach > 99u ? 99u : v.widest_reach));
+            out->tone = (v.families & PH_FAM_REACH) ? PHAROS_TONE_BAD
+                                                    : PHAROS_TONE_WARN;
+        }
+        return true;
+    case 5:
         /* THE FRAME WE CAN ACTUALLY RELY ON SEEING. A live PMKID attack ran
          * for minutes against this device and every EAPOL counter stayed at
          * zero, because message 1 is one brief data frame. The association
@@ -307,24 +328,24 @@ static bool k_harvest_row(unsigned index, struct pharos_lens_row *out)
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.assoc_reqs);
         out->tone = v.assoc_reqs ? PHAROS_TONE_NEUTRAL : PHAROS_TONE_DIM;
         return true;
-    case 5:
+    case 6:
         snprintf(out->left, sizeof(out->left), "joined, never used it");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.touch_and_go);
         out->tone = (v.touch_and_go >= 2) ? PHAROS_TONE_BAD
                   : v.touch_and_go ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
         return true;
-    case 6:
+    case 7:
         snprintf(out->left, sizeof(out->left), "clients affected");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.victims);
         out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
         return true;
-    case 7:
+    case 8:
         snprintf(out->left, sizeof(out->left), "worst client");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
                  v.worst_client[3], v.worst_client[4], v.worst_client[5]);
         out->tone = v.victims ? PHAROS_TONE_BAD : PHAROS_TONE_DIM;
         return true;
-    case 8:
+    case 9:
         snprintf(out->left, sizeof(out->left), "on network");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
                  v.worst_bssid[3], v.worst_bssid[4], v.worst_bssid[5]);

@@ -290,6 +290,25 @@ void ph_evaluate(const ph_state_t *s, const ph_context_t *ctx, ph_verdict_t *out
         if (p->forced) {
             out->victims++;
         }
+
+        /* How many DIFFERENT networks this station approached. Counted by
+         * walking the pairs again for the same client address: the table is
+         * small and bounded, and this is the one number that separates a
+         * collector from a crowd. */
+        if (p->assoc_req) {
+            unsigned reach = 0;
+            for (unsigned k = 0; k < s->n; k++) {
+                const ph_pair_t *q = &s->pairs[k];
+                if (q->in_use && q->assoc_req &&
+                    memcmp(q->client, p->client, 6) == 0) {
+                    reach++;
+                }
+            }
+            if (reach > out->widest_reach) {
+                out->widest_reach = (uint8_t)(reach > 255u ? 255u : reach);
+                memcpy(out->reach_client, p->client, 6);
+            }
+        }
         if (p->forced > worst_forced) {
             worst_forced = p->forced;
             memcpy(out->worst_client, p->client, 6);
@@ -343,8 +362,26 @@ void ph_evaluate(const ph_state_t *s, const ph_context_t *ctx, ph_verdict_t *out
          * approaches that both went nowhere is the same weight of
          * evidence as two unanswered solicitations. */
         score += 46 + clamp_u32((out->touch_and_go - 2u) * 10u, 0, 24);
+
+        /* ONE RADIO, MANY NETWORKS.
+         *
+         * The count above is over PAIRS, which cannot separate one station
+         * that approached twenty networks from twenty phones that each
+         * approached one. A client associates with the network it belongs
+         * to - it does not shop - so a single address reaching across
+         * several networks is the collector's own signature, and it is worth
+         * more than the same number of approaches spread across a crowd. */
     } else if (out->touch_and_go == 1) {
         score += 8;
+    }
+
+    /* --- family: one radio, many networks ------------------------------
+     *
+     * Three is the floor because two is a phone that moved between a home and
+     * a guest network, or roamed and came back. Shopping starts at three. */
+    if (out->widest_reach >= 3u) {
+        out->families |= PH_FAM_REACH;
+        score += 24 + clamp_u32((out->widest_reach - 3u) * 8u, 0, 24);
     }
 
     /* --- family: the same victim, again and again ---------------------- */
@@ -478,6 +515,7 @@ const char *ph_family_name(unsigned family_bit)
     case PH_FAM_TOUCH_GO: return "touch-and-go";
     case PH_FAM_REPEAT:  return "repeat";
     case PH_FAM_BREADTH: return "breadth";
+    case PH_FAM_REACH:   return "reach";
     default:             return "-";
     }
 }

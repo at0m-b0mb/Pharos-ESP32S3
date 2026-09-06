@@ -87,6 +87,21 @@ typedef enum {
  * and is never heard from again. */
 #define PH_FAM_TOUCH_GO (1u << 4)
 
+/* ONE RADIO ACROSS MANY NETWORKS.
+ *
+ * Deliberately its own family rather than a bonus on TOUCH_GO, and the
+ * distinction is not bookkeeping. "An approach went nowhere" is a fact about
+ * the OUTCOME of one association; "one address approached six networks" is a
+ * fact about the BREADTH of the targeting. They can occur independently, they
+ * fail independently, and the honesty cap - one family, however loud, cannot
+ * reach HARVEST LIKELY - is only meaningful if the families are actually
+ * separate arguments.
+ *
+ * Folded into TOUCH_GO the bonus was computed and then capped away, so a
+ * collector walking a street scored exactly the same as a cafe full of phones.
+ * Separated, the collector has two arguments and the cafe still has one. */
+#define PH_FAM_REACH   (1u << 5)
+
 #define PH_NOTE_THIN_SWEEP  (1u << 0) /* hopping: cycles are easily missed */
 #define PH_NOTE_DROPS       (1u << 1) /* the ingest ring lost frames       */
 #define PH_NOTE_MFP         (1u << 2) /* 802.11w seen: deauth should fail  */
@@ -190,6 +205,22 @@ typedef struct {
 
     uint32_t forced_cycles;  /* deauth-then-handshake pairs      */
     uint32_t pmkid_orphans;  /* solicited, never completed       */
+    /* HOW MANY DIFFERENT NETWORKS THE BUSIEST SINGLE RADIO APPROACHED.
+     *
+     * touch_and_go counts PAIRS, and a pair count cannot tell one radio that
+     * approached twenty networks from twenty phones that each approached one.
+     * The first is hcxdumptool walking a street collecting PMKIDs; the second
+     * is a Tuesday in a cafe.
+     *
+     * A client associates with the network it belongs to. It does not shop.
+     * So the widest reach of any single station address is the clientless
+     * collector's own fingerprint, and unlike the deauth families it needs no
+     * disconnect to have happened at all - which is exactly the case the rest
+     * of this engine was blind to, because `victims` only counts pairs where
+     * a forced cycle occurred. */
+    uint8_t widest_reach;
+    uint8_t reach_client[6];
+
     uint32_t m1_seen;        /* message 1s, whatever they carried */
     uint32_t m1_with_pmkid;  /* ...of which carried a PMKID       */
     uint32_t assoc_reqs;     /* association attempts seen        */
