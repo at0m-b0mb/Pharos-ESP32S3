@@ -1,5 +1,68 @@
 # Changelog
 
+## v3.4.0 - the sensors, one at a time, against the field
+
+Eight commits since v3.3.0. Where v3.3.0 added new engines, this release
+**audits the ones already shipping** - each lens read against the working
+implementations and published research for the same attack, then fixed where
+ours came off worse.
+
+The pattern that kept recurring: a detector was making an argument it was not
+entitled to make, or was blind to a whole variant of the attack it was named
+after.
+
+**Probe - a link across a long gap is a coincidence.** The de-randomisation
+test matched an IE fingerprint plus a sequence counter within 64, with no bound
+on WHEN. A 12-bit counter has 4096 values, so an unrelated device lands in that
+window 1.6% of the time by chance - a steady trickle of false links across a
+long session. And a device that last probed ten minutes ago has counted on by
+thousands of steps, so a near-match then is coincidence rather than
+continuation. A false link asserts that two people are one person.
+
+**Mirage - a hand-built beacon is underdressed.** Volume, ephemerality and
+synthetic addressing all need TIME, and ephemerality is an absence claim
+besides. A real access point's beacon carries a dozen elements or more; a
+flooding tool writes the three that make a phone list the name. That shows in a
+single frame.
+
+**Census - transition mode graded an A while its handshake stayed catchable.**
+WPA3-Personal transition mode advertises SAE *and* PSK, so it read as WPA3 and
+graded 90/A-. A client can still be pushed down the PSK path and its handshake
+captured - which is the attack pharos_harvest grades from the other end. Capped
+at B, the same argument the MFP ceiling already makes.
+
+**Sentinel - evidence about an impersonator may only ever add.** A returning
+BSSID whose vendor prefix had changed was scored as *less* suspicious, on the
+grounds that a different manufacturer is unlikely. But the OUI is three bytes an
+attacker chooses, so cloning the vendor made the alarm quieter. Forgeable
+evidence may raise suspicion and may never lower it.
+
+**Twin - a beacon built unlike its siblings.** A roaming group is one
+deployment configured once, so its beacons are structurally identical. A member
+whose frame is built differently is not the same hardware - positive evidence
+about a frame that arrived, where posture and vendor are heuristics an attacker
+controls.
+
+**Locate - the needle kept pointing at a memory.** If the target stopped
+transmitting, the averages held their last values and the trend reported them
+forever. `last_us` was recorded and never read. This is the lens you follow
+WITH YOUR FEET: a frozen HOTTER is worse than no reading.
+
+**Vigil - a full tag table was a first-come lottery.** When the table filled it
+set `full` and returned, so the first thirty-two addresses kept their slots for
+the session - and a tag that started following you after that could never be
+recorded. Eviction is now ranked by evidence, and silence is only the
+tie-break: BLE-Doubt measured paired AirTags going quiet for up to an hour,
+and that persisted after separation from the owner.
+
+**Harvest - one radio shopping is not a crowd of clients.** The modern PMKID
+attack is clientless, so it produced no forced cycles and was invisible to the
+breadth family. touch_and_go counts pairs and cannot tell one radio touching
+six networks from six phones touching one each.
+
+8103 host checks, 0 failures. Every fix carries the negative it must refuse to
+fire on.
+
 ## v3.3.0 - the address is forged, the radio is not
 
 Fourteen commits since v3.2.0. The thread running through the new engines is

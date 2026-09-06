@@ -1307,7 +1307,7 @@ static void screen_lumen_splash(void)
     lumen_base();
     arc(PR_CX, PR_CY, PS_RING_R, 4, 0.0f, 300.0f, C_GREEN);
     glowtext(PR_CX, PR_CY - 20, 48, 'c', C_TEXT, "PHAROS");
-    text(PR_CX, PR_CY + 30, 20, 'c', C_DIM, "v3.3.0");
+    text(PR_CX, PR_CY + 30, 20, 'c', C_DIM, "v3.4.0");
     text(PR_CX, PR_CY + 84, 16, 'c', C_GREEN, "RECEIVE ONLY - FENCE CLEAN");
 }
 
