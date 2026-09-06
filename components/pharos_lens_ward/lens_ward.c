@@ -76,6 +76,71 @@ static uint8_t s_impostor[WARD_MAX_IMPOSTORS][6];
 
 /* Set when a tap found nothing to adopt, so the screen can say so. */
 static bool s_adopt_failed;
+
+/* NETWORKS WARD HEARD FOR ITSELF.
+ *
+ * Adoption used to read the Census lens' table, which made choosing a network
+ * depend on a DIFFERENT lens having been run first. From a cold boot the tap
+ * found nothing, and even after running Census the table is cleared on mount,
+ * so the answer depended on the order somebody happened to press things in.
+ * That is not a thing an operator can be expected to know.
+ *
+ * Ward already receives every beacon on the channels it sweeps - it simply
+ * threw them away while no target was set. It now keeps them. The lens that
+ * asks you to pick a network can find the networks itself, which is the only
+ * arrangement that works from a cold start with nothing else running. */
+#define WARD_MAX_SEEN 16
+typedef struct {
+    uint8_t bssid[6];
+    char ssid[33];
+    uint8_t channel;
+    int8_t rssi;
+    bool in_use;
+} ward_seen_t;
+static ward_seen_t s_seen[WARD_MAX_SEEN];
+static unsigned s_n_seen;
+
+static void ward_note_network(const pharos_ev_dot11_t *d)
+{
+    if (d->subtype != PHAROS_ST_BEACON && d->subtype != PHAROS_ST_PROBE_RESP) {
+        return;
+    }
+    if (d->ssid_len == 0) {
+        return; /* hidden: nothing to name it by on the adopt screen */
+    }
+    for (unsigned i = 0; i < s_n_seen; i++) {
+        if (memcmp(s_seen[i].bssid, d->a3, 6) == 0) {
+            /* Keep the loudest reading: adoption picks the nearest network,
+             * and one weak sample of a close AP should not demote it. */
+            if (d->rssi > s_seen[i].rssi) {
+                s_seen[i].rssi = d->rssi;
+                s_seen[i].channel = d->channel;
+            }
+            return;
+        }
+    }
+    if (s_n_seen >= WARD_MAX_SEEN) {
+        /* Replace the faintest: the list exists to offer the nearest. */
+        unsigned worst = 0;
+        for (unsigned i = 1; i < s_n_seen; i++) {
+            if (s_seen[i].rssi < s_seen[worst].rssi) worst = i;
+        }
+        if (d->rssi <= s_seen[worst].rssi) {
+            return;
+        }
+        s_n_seen = worst; /* overwrite that slot below */
+    }
+    ward_seen_t *e = &s_seen[s_n_seen < WARD_MAX_SEEN ? s_n_seen : 0];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->bssid, d->a3, 6);
+    const uint8_t n = d->ssid_len > 32 ? 32 : d->ssid_len;
+    memcpy(e->ssid, d->ssid, n);
+    e->ssid[n] = '\0';
+    e->channel = d->channel;
+    e->rssi = d->rssi;
+    e->in_use = true;
+    if (s_n_seen < WARD_MAX_SEEN) s_n_seen++;
+}
 static unsigned s_n_impostors;
 static uint32_t s_impostor_frames;
 static int8_t s_impostor_rssi;
@@ -187,7 +252,11 @@ static void ward_event(const pharos_event_t *ev)
     pharos_pulse_note(&s_pulse, ev->t_us);
     s_frames_seen++;
     if (!s_have_target) {
-        return; /* nothing to filter for; grade nothing */
+        /* No target yet, so nothing to grade - but this is exactly when the
+         * operator is about to choose one, and these are the frames that name
+         * the choices. */
+        ward_note_network(&ev->u.dot11);
+        return;
     }
     if (!frame_is_mine(&ev->u.dot11)) {
         /* Not traffic ON the guarded network - but possibly a radio wearing
@@ -266,12 +335,31 @@ bool pharos_lens_ward_target(uint8_t bssid[6], char *ssid, size_t cap,
  * than quietly framing every later reading. */
 static void ward_adopt_strongest(void)
 {
-    pc_ap_t ap;
-    pc_verdict_t v;
+    /* Ward's OWN list first - it hears every beacon on the channels it sweeps
+     * and no longer depends on another lens having been run. Census is still
+     * consulted afterwards, because if it HAS run it has graded these networks
+     * and may know one Ward has not heard yet on its current channel. */
     int8_t best = -127;
     pc_ap_t chosen;
     bool found = false;
 
+    for (unsigned i = 0; i < s_n_seen; i++) {
+        if (!s_seen[i].in_use || s_seen[i].rssi <= best) {
+            continue;
+        }
+        best = s_seen[i].rssi;
+        memset(&chosen, 0, sizeof(chosen));
+        memcpy(chosen.bssid, s_seen[i].bssid, 6);
+        const size_t n = strlen(s_seen[i].ssid);
+        chosen.ssid_len = (uint8_t)(n > 32 ? 32 : n);
+        memcpy(chosen.ssid, s_seen[i].ssid, chosen.ssid_len);
+        chosen.channel = s_seen[i].channel;
+        chosen.rssi = s_seen[i].rssi;
+        found = true;
+    }
+
+    pc_ap_t ap;
+    pc_verdict_t v;
     for (unsigned i = 0; pharos_lens_census_at(i, &ap, &v); i++) {
         if (ap.rssi > best) {
             best = ap.rssi;
@@ -291,8 +379,8 @@ static void ward_adopt_strongest(void)
          * Say what happened instead. The condition is temporary and the fix
          * is one lens away, so the message names it. */
         s_adopt_failed = true;
-        ESP_LOGW(TAG, "nothing to adopt: no networks surveyed yet "
-                      "(run Census first, or wait for the watchtower)");
+        ESP_LOGW(TAG, "nothing to adopt: no named network heard yet "
+                      "(give it a few seconds to sweep)");
         return;
     }
     s_adopt_failed = false;
@@ -434,9 +522,16 @@ static bool k_ward_row(unsigned index, struct pharos_lens_row *out)
         }
         if (index == 1) {
             if (s_adopt_failed) {
-            snprintf(out->left, sizeof(out->left), "no networks surveyed yet");
-            snprintf(out->right, sizeof(out->right), "run Census");
+            snprintf(out->left, sizeof(out->left), "no network heard yet");
+            snprintf(out->right, sizeof(out->right), "sweeping");
             out->tone = PHAROS_TONE_WARN;
+            return true;
+        }
+        if (s_n_seen) {
+            snprintf(out->left, sizeof(out->left), "tap centre to adopt");
+            snprintf(out->right, sizeof(out->right), "%u seen",
+                     s_n_seen > 99u ? 99u : s_n_seen);
+            out->tone = PHAROS_TONE_NEUTRAL;
             return true;
         }
         snprintf(out->left, sizeof(out->left), "tap centre to adopt");
