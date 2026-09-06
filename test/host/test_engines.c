@@ -77,6 +77,36 @@ void test_census(void)
     CHECK_EQ(v.grade, PC_GRADE_B);
     CHECK(v.score < 88, "transition mode cannot reach an A");
 
+    /* AND THE CASE THAT WAS PASSING FOR THE WRONG REASON.
+     *
+     * The check above switches MFP off, so it was the NO_MFP ceiling holding
+     * the grade down - transition mode itself carried no ceiling at all. An
+     * access point in transition mode WITH protected management frames scored
+     * 36+25+15+15 = 91 and graded A.
+     *
+     * That network's WPA2 path is still open, so its handshake is still
+     * capturable and still crackable offline - the attack pharos_harvest
+     * grades. A network cannot be an A while an attack this device can SEE
+     * would land on it, which is the same argument the MFP ceiling rests on. */
+    pc_ap_t trans_mfp = ap_wpa3();
+    trans_mfp.rsn.has_psk = true;
+    trans_mfp.rsn.mfp_required = true;
+    pc_grade(&trans_mfp, &v);
+    CHECK(v.caps_applied & PC_CAP_TRANSITION,
+          "transition mode carries a ceiling of its own");
+    CHECK(!(v.caps_applied & PC_CAP_NO_MFP),
+          "and it is not borrowing the MFP one");
+    CHECK(v.grade == PC_GRADE_B, "protected or not, it stops at a B");
+    CHECK(v.score <= 87, "capped (%u)", v.score);
+
+    /* The negative: SAE alone, with MFP, is still the best this device grades.
+     * The ceiling must punish the WPA2 path, not the presence of SAE. */
+    pc_ap_t sae_only = ap_wpa3();
+    pc_grade(&sae_only, &v);
+    CHECK(!(v.caps_applied & PC_CAP_TRANSITION),
+          "a network that does not accept WPA2 is not capped");
+    CHECK_EQ(v.grade, PC_GRADE_A_PLUS);
+
     /* The tie to the Watch engine: no 802.11w means the flood works. */
     pc_ap_t no_mfp = ap_wpa2();
     pc_grade(&no_mfp, &v);

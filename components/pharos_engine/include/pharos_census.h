@@ -72,6 +72,26 @@ typedef enum {
 #define PC_CAP_WPS_PIN  (1u << 3) /* WPS PIN method advertised      */
 #define PC_CAP_NO_MFP   (1u << 4) /* deauth floods will work here   */
 #define PC_CAP_WPA1     (1u << 5) /* legacy WPA only                */
+/* WPA3 TRANSITION MODE: SAE OFFERED, BUT PSK STILL ACCEPTED.
+ *
+ * An access point in WPA3-Personal transition mode advertises both SAE and
+ * PSK so that older clients can still join. It therefore LOOKS like WPA3 -
+ * and it graded like WPA3, reaching an A, because the only penalty was nine
+ * points off the authentication component.
+ *
+ * But the WPA2 path is still open, which means the four-way handshake is
+ * still capturable and still crackable offline. That is not a theoretical
+ * concern: it is the attack pharos_harvest grades, and the Wi-Fi Alliance
+ * added "Transition Disable" in 2020 precisely because clients can be pushed
+ * down it.
+ *
+ * So this ceiling exists for exactly the reason the MFP one does. A network
+ * without 802.11w cannot exceed a B because the deauthentication flood
+ * pharos_watch grades will work on it; a network in transition mode cannot
+ * exceed a B because the handshake capture pharos_harvest grades will work on
+ * it. Two engines describing one weakness from opposite ends, which is the
+ * shape this whole device is built in. */
+#define PC_CAP_TRANSITION (1u << 6)
 
 #define PC_NOTE_HIDDEN      (1u << 0) /* hiding an SSID is not security  */
 #define PC_NOTE_TRANSITION  (1u << 1) /* WPA3 downgradeable to WPA2      */

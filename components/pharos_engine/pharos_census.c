@@ -76,6 +76,11 @@ void pc_grade(const pc_ap_t *ap, pc_verdict_t *out)
     } else if (ap->rsn.has_sae && ap->rsn.has_psk) {
         auth = 36;
         out->notes |= PC_NOTE_TRANSITION;
+        /* Not merely a deduction: a ceiling. See PC_CAP_TRANSITION - the WPA2
+         * path is still open, so the handshake is still capturable, and a
+         * network that graded A while an attack this device can SEE would
+         * land on it was overstating its own safety. */
+        out->caps_applied |= PC_CAP_TRANSITION;
         out->headline = "WPA3 transition mode - a client can still be pushed to WPA2";
     } else if (ap->rsn.has_sae) {
         auth = 45;
@@ -155,6 +160,10 @@ void pc_grade(const pc_ap_t *ap, pc_verdict_t *out)
     if (out->caps_applied & PC_CAP_NO_MFP) {
         if (score > 77) score = 77; /* top of C: deauth floods work here */
     }
+    if (out->caps_applied & PC_CAP_TRANSITION) {
+        /* Top of B: the handshake is still capturable on the WPA2 path. */
+        if (score > 87) score = 87;
+    }
 
     out->score = clamp8(score, 0, 100);
     out->grade = grade_of(out->score);
@@ -208,6 +217,9 @@ const char *pc_grade_advice(const pc_verdict_t *v)
     if (v->caps_applied & PC_CAP_WPS_PIN) {
         return "WPS PIN is advertised. It is an eight-digit bypass of whatever "
                "passphrase you chose. Turn it off.";
+    }
+    if (v->caps_applied & PC_CAP_TRANSITION) {
+        return "WPA2 is still accepted here, so the handshake is still catchable";
     }
     if (v->caps_applied & PC_CAP_NO_MFP) {
         return "No 802.11w. Clients here can be disconnected by anyone with a "
