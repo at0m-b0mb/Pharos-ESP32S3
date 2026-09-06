@@ -19,8 +19,62 @@ static void walk(pl_engine_t *e, int rssi0, int rssi1, int n, int jitter, uint64
     }
 }
 
+static void test_locate_goes_quiet(void)
+{
+    banner("locate: a needle pointing at a memory");
+
+    /* THE FAILURE MODE THIS LENS CANNOT AFFORD.
+     *
+     * The trend is driven by exponential averages of RSSI. If the target stops
+     * transmitting, nothing new arrives, the averages hold their last values,
+     * and the trend keeps reporting whatever it last said - indefinitely.
+     *
+     * On any other screen that is a stale number. Here it is a person walking
+     * across a building following a needle pointing at a memory, because
+     * Locate is the lens you follow WITH YOUR FEET. A frozen HOTTER is worse
+     * than no reading: it is confidently wrong in a direction that costs shoe
+     * leather and trust. */
+    const uint8_t target[6] = { 0xAA, 0xBB, 0xCC, 0x11, 0x22, 0x33 };
+    pl_engine_t e;
+    pl_reset(&e, target);
+
+    /* A walk-in: the signal climbs, so the needle says warmer. */
+    uint64_t t = 1000000ull;
+    for (int r = -80; r <= -45; r += 3) {
+        pl_observe(&e, target, (int8_t)r, t);
+        t += 200000ull;
+    }
+    pl_verdict_t v;
+    pl_evaluate_at(&e, t, &v);
+    CHECK(v.trend == PL_TREND_HOTTER || v.trend == PL_TREND_HERE,
+          "the walk-in reads warm");
+
+    /* Now it stops transmitting. The averages still hold a strong, rising
+     * signal - and without a clock the needle would keep saying so. */
+    pl_verdict_t stale;
+    pl_evaluate_at(&e, t + 10ull * 1000000ull, &stale);
+    CHECK(stale.trend == PL_TREND_LOST,
+          "a silent target is reported lost, not warm");
+    CHECK(stale.silent_us >= PL_STALE_US, "and for how long (%llus)",
+          (unsigned long long)(stale.silent_us / 1000000ull));
+
+    /* A short gap is not silence. Trackers and access points beacon several
+     * times a second, but a single missed frame must not stop the hunt. */
+    pl_verdict_t brief;
+    pl_evaluate_at(&e, t + 500000ull, &brief);
+    CHECK(brief.trend != PL_TREND_LOST,
+          "half a second of quiet is not a lost target");
+
+    /* And it recovers the moment the target speaks again. */
+    pl_observe(&e, target, -45, t + 11ull * 1000000ull);
+    pl_verdict_t back;
+    pl_evaluate_at(&e, t + 11ull * 1000000ull, &back);
+    CHECK(back.trend != PL_TREND_LOST, "one frame brings the hunt back");
+}
+
 void test_locate(void)
 {
+    test_locate_goes_quiet();
     banner("locate: hotter / colder direction finding");
     pl_engine_t e;
     pl_verdict_t v;

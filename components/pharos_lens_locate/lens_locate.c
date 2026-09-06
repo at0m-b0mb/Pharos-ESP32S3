@@ -83,7 +83,9 @@ static void locate_tick(uint32_t dt_ms)
         return;
     }
     pl_verdict_t v;
-    pl_evaluate(&s_engine, &v);
+    /* Told the time, so a target that has gone quiet is reported quiet
+     * rather than frozen on its last opinion. */
+    pl_evaluate_at(&s_engine, (uint64_t)esp_timer_get_time(), &v);
     if (v.trend != s_verdict.trend) {
         ESP_LOGI(TAG, "%s  rssi=%d peak=%d close=%u%% conf=%u%%",
                  pl_trend_name(v.trend), v.rssi_smoothed, v.rssi_peak,

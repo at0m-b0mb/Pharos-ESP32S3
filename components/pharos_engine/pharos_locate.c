@@ -109,6 +109,11 @@ void pl_observe(pl_engine_t *e, const uint8_t src[6], int8_t rssi, uint64_t t_us
 
 void pl_evaluate(const pl_engine_t *e, pl_verdict_t *out)
 {
+    pl_evaluate_at(e, 0, out);
+}
+
+void pl_evaluate_at(const pl_engine_t *e, uint64_t now_us, pl_verdict_t *out)
+{
     if (!out) {
         return;
     }
@@ -118,6 +123,22 @@ void pl_evaluate(const pl_engine_t *e, pl_verdict_t *out)
         out->trend = PL_TREND_STEADY;
         out->headline = e && e->has_target ? "Listening for the target..."
                                            : "No target selected";
+        return;
+    }
+
+    /* THE TARGET HAS GONE QUIET.
+     *
+     * Checked before anything is computed from the averages, because every
+     * number below is derived from samples that may be minutes old. See
+     * PL_STALE_US: this is the lens somebody follows on foot. */
+    if (now_us && e->last_us && now_us > e->last_us &&
+        (now_us - e->last_us) > PL_STALE_US) {
+        out->trend = PL_TREND_LOST;
+        out->rssi_now = e->last_rssi;
+        out->rssi_peak = e->peak;
+        out->samples = e->samples;
+        out->silent_us = now_us - e->last_us;
+        out->headline = "Gone quiet - stop and wait, or it has moved out of range";
         return;
     }
 
@@ -172,6 +193,7 @@ const char *pl_trend_name(pl_trend_t t)
     case PL_TREND_STEADY: return "STEADY";
     case PL_TREND_HOTTER: return "WARMER";
     case PL_TREND_HERE:   return "HERE";
+    case PL_TREND_LOST:   return "GONE QUIET";
     default:              return "?";
     }
 }
@@ -179,6 +201,12 @@ const char *pl_trend_name(pl_trend_t t)
 const char *pl_trend_advice(pl_trend_t t)
 {
     switch (t) {
+    case PL_TREND_LOST:
+        /* Deliberately does not say "it has gone". A receiver that stopped
+         * hearing something cannot tell a transmitter that switched off from
+         * one behind a wall, and this is the lens somebody is walking with. */
+        return "Nothing heard for seconds. Stand still - it may resume, or "
+               "you may have walked out of its range.";
     case PL_TREND_COLDER:
         return "Signal is falling. You are walking away from it - turn back.";
     case PL_TREND_STEADY:

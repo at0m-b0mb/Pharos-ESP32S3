@@ -44,6 +44,7 @@ typedef enum {
     PL_TREND_STEADY,     /* holding - move to learn more     */
     PL_TREND_HOTTER,     /* signal rising - getting closer   */
     PL_TREND_HERE,       /* very strong and steady - on top  */
+    PL_TREND_LOST,       /* the target has stopped transmitting */
 } pl_trend_t;
 
 typedef struct {
@@ -72,6 +73,7 @@ typedef struct {
     uint16_t samples;
     bool locked;         /* enough samples to trust the trend */
     const char *headline;
+    uint64_t silent_us; /* how long since the target last spoke */
 } pl_verdict_t;
 
 void pl_reset(pl_engine_t *e, const uint8_t target[6]);
@@ -80,7 +82,30 @@ void pl_reset(pl_engine_t *e, const uint8_t target[6]);
  * so the caller may pass the whole stream. */
 void pl_observe(pl_engine_t *e, const uint8_t src[6], int8_t rssi, uint64_t t_us);
 
+/* HOW LONG A SILENT TARGET STAYS BELIEVABLE.
+ *
+ * The needle is driven by exponential averages of RSSI. If the target stops
+ * transmitting, nothing new arrives, the averages keep their last values and
+ * the trend keeps reporting whatever it last said - forever.
+ *
+ * On any other lens that would be a stale number on a screen. On this one it
+ * is a person walking across a building following a needle that is pointing
+ * at a memory, because Locate is the lens you follow WITH YOUR FEET. A frozen
+ * HOTTER is worse than no reading at all: it is confidently wrong in a
+ * direction that costs shoe leather and trust.
+ *
+ * Trackers and access points beacon several times a second, so a few seconds
+ * of silence is already unusual. Three is long enough to survive ordinary
+ * gaps and short enough that nobody walks far on a dead reading. */
+#define PL_STALE_US 3000000ull
+
 void pl_evaluate(const pl_engine_t *e, pl_verdict_t *out);
+
+/* The same, told what time it is, so a target that has gone quiet can be
+ * reported as quiet instead of as its last opinion. pl_evaluate() forwards
+ * here with a `now` of zero, which means "do not age" - preserved for callers
+ * that genuinely have no clock, never as a default worth choosing. */
+void pl_evaluate_at(const pl_engine_t *e, uint64_t now_us, pl_verdict_t *out);
 
 const char *pl_trend_name(pl_trend_t t);
 const char *pl_trend_advice(pl_trend_t t);
