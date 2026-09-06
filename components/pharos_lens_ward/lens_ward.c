@@ -68,6 +68,18 @@ EXT_RAM_BSS_ATTR static pw_engine_t s_engine;
 static pw_verdict_t s_verdict;
 static SemaphoreHandle_t s_lock;
 
+/* Radios announcing the guarded network's NAME that are not the guarded
+ * network's own BSSID. See frame_wears_my_name(). Bounded: a name being worn
+ * by more radios than this is already the finding. */
+#define WARD_MAX_IMPOSTORS 4
+static uint8_t s_impostor[WARD_MAX_IMPOSTORS][6];
+
+/* Set when a tap found nothing to adopt, so the screen can say so. */
+static bool s_adopt_failed;
+static unsigned s_n_impostors;
+static uint32_t s_impostor_frames;
+static int8_t s_impostor_rssi;
+
 /* The network under guard. All-zero means none chosen yet. */
 static uint8_t s_target[6];
 static char s_target_ssid[33];
@@ -123,6 +135,45 @@ static bool frame_is_mine(const pharos_ev_dot11_t *d)
            memcmp(d->a1, s_target, 6) == 0;
 }
 
+/* SOMEBODY ELSE ANNOUNCING YOUR NAME.
+ *
+ * The filter above is exact about WHICH network a frame concerns, and that is
+ * right for everything Ward feeds to the deauthentication engine. But it made
+ * this lens blind to the one attack most specific to its own purpose.
+ *
+ * Ward guards a network by BSSID. An evil twin is, by definition, a DIFFERENT
+ * radio wearing your NAME - so its beacons carry your SSID and its own BSSID,
+ * match none of the three addresses, and were dropped before anything looked
+ * at them. The lens whose entire job is "watch MY network" could not see the
+ * attack aimed at exactly that.
+ *
+ * The SSID was already being stored by ward_guard() and never read. This asks
+ * the question it was stored for: is a radio that is not mine announcing my
+ * name? That is not traffic on the guarded network - it is an impostor of it,
+ * so it is counted separately and never fed to the flood engine, which is
+ * about volume on one BSSID and would be misled by a second radio's beacons.
+ *
+ * Hidden and unnamed networks are excluded: an empty SSID matches every other
+ * empty SSID, which would report the whole neighbourhood as impostors. */
+static bool frame_wears_my_name(const pharos_ev_dot11_t *d)
+{
+    if (!s_target_ssid[0] || d->ssid_len == 0) {
+        return false;
+    }
+    if (d->subtype != PHAROS_ST_BEACON && d->subtype != PHAROS_ST_PROBE_RESP) {
+        return false;
+    }
+    const size_t n = strlen(s_target_ssid);
+    if ((size_t)d->ssid_len != n) {
+        return false;
+    }
+    if (memcmp(d->ssid, s_target_ssid, n) != 0) {
+        return false;
+    }
+    /* Our own access point announcing itself is not an impostor. */
+    return memcmp(d->a3, s_target, 6) != 0;
+}
+
 /* The shared activity ribbon: one call per event in, one call per repaint
  * out. Before this, every lens but Watch drew an empty timeline. */
 static pharos_pulse_t s_pulse;
@@ -139,6 +190,23 @@ static void ward_event(const pharos_event_t *ev)
         return; /* nothing to filter for; grade nothing */
     }
     if (!frame_is_mine(&ev->u.dot11)) {
+        /* Not traffic ON the guarded network - but possibly a radio wearing
+         * its NAME, which is the attack aimed most precisely at this lens.
+         * Counted here and never fed to the flood engine below: that engine
+         * measures volume on one BSSID and a second radio's beacons would
+         * corrupt exactly the number it exists to compute. */
+        if (frame_wears_my_name(&ev->u.dot11)) {
+            const uint8_t *b = ev->u.dot11.a3;
+            bool known = false;
+            for (unsigned i = 0; i < s_n_impostors; i++) {
+                if (memcmp(s_impostor[i], b, 6) == 0) { known = true; break; }
+            }
+            if (!known && s_n_impostors < WARD_MAX_IMPOSTORS) {
+                memcpy(s_impostor[s_n_impostors++], b, 6);
+            }
+            s_impostor_frames++;
+            s_impostor_rssi = ev->u.dot11.rssi;
+        }
         return;
     }
     s_frames_mine++;
@@ -152,6 +220,8 @@ static struct pharos_bus *ward_ingest(void) { return &s_bus; }
 void pharos_lens_ward_guard(const uint8_t bssid[6], const char *ssid,
                             uint8_t channel)
 {
+    s_n_impostors = 0;
+    s_impostor_frames = 0;
     if (!bssid) {
         return;
     }
@@ -209,7 +279,24 @@ static void ward_adopt_strongest(void)
             found = true;
         }
     }
-    if (found) {
+    if (!found) {
+        /* THE ONLY ACTION THIS SCREEN OFFERS, FAILING SILENTLY.
+         *
+         * Adoption picks the loudest access point from the CENSUS list, which
+         * is empty until Census has run. Start Ward from a cold boot and the
+         * detail row says "tap centre to adopt nearest" - and the tap does
+         * nothing at all, with no explanation. The operator's reasonable
+         * conclusion is that the touch screen is broken.
+         *
+         * Say what happened instead. The condition is temporary and the fix
+         * is one lens away, so the message names it. */
+        s_adopt_failed = true;
+        ESP_LOGW(TAG, "nothing to adopt: no networks surveyed yet "
+                      "(run Census first, or wait for the watchtower)");
+        return;
+    }
+    s_adopt_failed = false;
+    {
         char name[33];
         const uint8_t n = chosen.ssid_len > 32 ? 32 : chosen.ssid_len;
         memcpy(name, chosen.ssid, n);
@@ -346,7 +433,13 @@ static bool k_ward_row(unsigned index, struct pharos_lens_row *out)
             return true;
         }
         if (index == 1) {
-            snprintf(out->left, sizeof(out->left), "tap centre to adopt");
+            if (s_adopt_failed) {
+            snprintf(out->left, sizeof(out->left), "no networks surveyed yet");
+            snprintf(out->right, sizeof(out->right), "run Census");
+            out->tone = PHAROS_TONE_WARN;
+            return true;
+        }
+        snprintf(out->left, sizeof(out->left), "tap centre to adopt");
             snprintf(out->right, sizeof(out->right), "nearest");
             out->tone = PHAROS_TONE_DIM;
             return true;
@@ -356,53 +449,75 @@ static bool k_ward_row(unsigned index, struct pharos_lens_row *out)
 
     switch (index) {
     case 0:
+        /* LEAD WITH IT. A second radio announcing the guarded name is the
+         * attack aimed most precisely at this lens, and it outranks any
+         * volume figure below - a quiet network with an impostor on it is
+         * not a quiet network. */
+        snprintf(out->left, sizeof(out->left), "wearing your name");
+        if (!s_have_target) {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        } else if (s_n_impostors == 0u) {
+            snprintf(out->right, sizeof(out->right), "no one");
+            out->tone = PHAROS_TONE_GOOD;
+        } else {
+            if (s_n_impostors == 1u) {
+                snprintf(out->right, sizeof(out->right), "1 radio");
+            } else {
+                snprintf(out->right, sizeof(out->right), "%u radios",
+                         s_n_impostors > 9u ? 9u : s_n_impostors);
+            }
+            out->tone = PHAROS_TONE_BAD;
+        }
+        return true;
+    case 1:
         snprintf(out->left, sizeof(out->left), "guarding");
         snprintf(out->right, sizeof(out->right), "%.11s",
                  ssid[0] ? ssid : "<hidden>");
         out->tone = PHAROS_TONE_NEUTRAL;
         return true;
-    case 1:
+    case 2:
         snprintf(out->left, sizeof(out->left), "address");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x", addr[3],
                  addr[4], addr[5]);
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 2:
+    case 3:
         snprintf(out->left, sizeof(out->left), "channel  (camped)");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)ch);
         out->tone = pharos_radio_is_camped() ? PHAROS_TONE_GOOD
                                              : PHAROS_TONE_WARN;
         return true;
-    case 3:
+    case 4:
         snprintf(out->left, sizeof(out->left), "its frames heard");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)mine);
         out->tone = mine ? PHAROS_TONE_GOOD : PHAROS_TONE_BAD;
         return true;
-    case 4:
+    case 5:
         snprintf(out->left, sizeof(out->left), "everything else");
         snprintf(out->right, sizeof(out->right), "%u",
                  (unsigned)(seen > mine ? seen - mine : 0u));
         /* Dim on purpose: the whole point is that this number is ignored. */
         out->tone = PHAROS_TONE_DIM;
         return true;
-    case 5:
+    case 6:
         snprintf(out->left, sizeof(out->left), "disconnects at it");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.observed);
         out->tone = v.observed ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
         return true;
-    case 6:
+    case 7:
         snprintf(out->left, sizeof(out->left), "confidence ceiling");
         snprintf(out->right, sizeof(out->right), "%u", (unsigned)v.ceiling);
         out->tone = (v.ceiling >= 80) ? PHAROS_TONE_GOOD : PHAROS_TONE_WARN;
         return true;
-    case 7: {
+    case 8: {
         snprintf(out->left, sizeof(out->left), "clients knocked off");
         snprintf(out->right, sizeof(out->right), "%u",
                  (unsigned)v.distinct_victims);
         out->tone = v.distinct_victims ? PHAROS_TONE_BAD : PHAROS_TONE_GOOD;
         return true;
     }
-    case 8: {
+    case 9: {
         const char *why = pw_forgery_name(v.forgery);
         snprintf(out->left, sizeof(out->left), "%.25s",
                  (why && why[0]) ? why : "no forgery seen");
