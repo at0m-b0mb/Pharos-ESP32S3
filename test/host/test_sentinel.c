@@ -130,6 +130,44 @@ void test_sentinel(void)
               f ? f->severity : 0);
     }
 
+    /* A SOFTWARE RADIO WEARING THE ESTATE'S NAME SCORES HIGHER STILL - AND
+     * A FAMILIAR MANUFACTURER NEVER SCORES LOWER.
+     *
+     * An attempt to refine this engine discounted a newcomer whose BSSID
+     * shared a baseline AP's manufacturer prefix, reasoning that a mesh grows
+     * with more of the same hardware. That is true and it is not usable: an
+     * OUI is three bytes an attacker types in, so treating a match as
+     * reassurance hands the LOWEST score to the impersonator careful enough
+     * to clone the prefix. Evidence here may only ever add.
+     *
+     * A locally-administered address is different in kind. It is not a claim
+     * about a manufacturer that might be false - it is the radio declining to
+     * make one, which is what software does. */
+    {
+        pc_ap_t now[4];
+        memcpy(now, est, sizeof(est));
+        /* Same vendor prefix as the estate, wearing an estate SSID. */
+        now[3] = ap_make("Acme-Guest", 0x99, 3, true, true, false);
+        ps_compare(&base, now, 4, &camped, &v);
+        const ps_finding_t *same_oui = find_change(&v, PS_CHANGE_NEW);
+        const uint8_t sev_same = same_oui ? same_oui->severity : 0;
+        CHECK(v.notes & PS_NOTE_SSID_REUSE,
+              "a familiar manufacturer is not a reason to stop noticing");
+        CHECK(sev_same >= 45, "and it still scores as reuse (%u)", sev_same);
+
+        /* The same newcomer, now announcing itself from a software address. */
+        pc_ap_t soft[4];
+        memcpy(soft, est, sizeof(est));
+        soft[3] = ap_make("Acme-Guest", 0x99, 3, true, true, false);
+        soft[3].bssid[0] |= 0x02u;
+        ps_compare(&base, soft, 4, &camped, &v);
+        const ps_finding_t *local = find_change(&v, PS_CHANGE_NEW);
+        CHECK(local && local->severity > sev_same,
+              "a locally-administered twin scores higher (%u vs %u)",
+              local ? local->severity : 0, sev_same);
+    }
+
+
     /* MISSING is the lowest-severity finding, because this receiver hears one
      * channel at a time - and it is discounted further on a thin sweep. */
     {

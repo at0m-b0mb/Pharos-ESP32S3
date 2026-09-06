@@ -146,15 +146,53 @@ void ps_compare(const ps_baseline_t *b, const pc_ap_t *aps, unsigned n,
             uint32_t sev = 15;
             bool reuse = false;
             for (unsigned k = 0; k < b->n; k++) {
-                if (b->aps[k].in_use &&
-                    ssid_eq(b->aps[k].ssid, b->aps[k].ssid_len, ap->ssid, ap->ssid_len)) {
-                    reuse = true;
-                    break;
+                if (!b->aps[k].in_use ||
+                    !ssid_eq(b->aps[k].ssid, b->aps[k].ssid_len,
+                             ap->ssid, ap->ssid_len)) {
+                    continue;
                 }
+                reuse = true;
+                break;
             }
             if (reuse) {
+                /* WHOSE RADIO IS WEARING THE NAME?
+                 *
+                 * A flat penalty here treated two very different events
+                 * identically. An estate that adds a second access point to
+                 * its mesh produces exactly this shape - same SSID, new
+                 * BSSID - and the header says plainly that a new AP should
+                 * score low unless it looks like an impersonator. Charging
+                 * ordinary growth the full impersonation penalty is the
+                 * false positive that teaches an operator to ignore the
+                 * finding.
+                 *
+                 * The manufacturer prefix separates them. A mesh grows with
+                 * more of the same hardware; an impersonator brings whatever
+                 * they own, and a locally-administered address means the
+                 * radio is not even claiming to be a manufactured device -
+                 * it is software wearing your network's name. */
                 sev += 30;
                 out->notes |= PS_NOTE_SSID_REUSE;
+
+                /* A SOFTWARE RADIO WEARING THE ESTATE'S NAME.
+                 *
+                 * Only ever ADDED, never subtracted, and that asymmetry is
+                 * the whole point. A first attempt here also DISCOUNTED a
+                 * newcomer that shared a baseline AP's manufacturer prefix,
+                 * on the reasoning that a mesh grows with more of the same
+                 * hardware. The test refused it, and the test was right: an
+                 * OUI is three bytes an attacker types in. Treating a match
+                 * as reassurance would have handed the lowest score to the
+                 * impersonator who bothered to clone the prefix - rewarding
+                 * exactly the more careful adversary.
+                 *
+                 * A locally-administered address is different in kind. It is
+                 * not a claim about a manufacturer that might be false; it is
+                 * the radio declining to make one, which is what software
+                 * does. That is evidence, so it adds. */
+                if ((ap->bssid[0] & 0x02u) != 0) {
+                    sev += 8;
+                }
             }
             if (now_open) {
                 sev += 25;
