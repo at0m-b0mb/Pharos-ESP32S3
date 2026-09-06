@@ -243,8 +243,82 @@ static void test_vigil_movement_gates_following(void)
     CHECK(vs.band == vm.band, "and it lifts once they do move");
 }
 
+static void test_vigil_google_find_my(void)
+{
+    banner("vigil: Google's Find My Device network, and the beacon it hides among");
+
+    /* THE HALF OF THE MARKET THIS LENS COULD NOT SEE.
+     *
+     * Google's network launched in 2024 and now carries Pebblebee, Moto Tag,
+     * Eufy and Chipolo Point. A tag on it follows somebody exactly as well as
+     * an AirTag does, and Vigil was blind to every one of them.
+     *
+     * The catch is that FMDN advertises under service UUID 0xFEAA - the SAME
+     * one as ordinary Eddystone proximity beacons in shops and museums. The
+     * frame type is what separates them. */
+    {
+        /* Eddystone-UID: frame type 0x00. A beacon on a shelf. */
+        const uint8_t beacon[] = { 0x03, 0x03, 0xAA, 0xFE,
+                                   0x06, 0x16, 0xAA, 0xFE, 0x00, 0xE7, 0x01 };
+        CHECK(pv_classify(beacon, sizeof beacon) == PV_KIND_EDDYSTONE,
+              "an Eddystone UID frame is a beacon, not a tracker");
+    }
+    {
+        const uint8_t url[] = { 0x03, 0x03, 0xAA, 0xFE,
+                                0x06, 0x16, 0xAA, 0xFE, 0x10, 0x00, 0x02 };
+        CHECK(pv_classify(url, sizeof url) == PV_KIND_EDDYSTONE,
+              "so is a URL frame");
+    }
+    {
+        /* FMDN: a frame type above the documented Eddystone four. */
+        const uint8_t fmdn[] = { 0x03, 0x03, 0xAA, 0xFE,
+                                 0x07, 0x16, 0xAA, 0xFE, 0x40, 0x11, 0x22, 0x33 };
+        CHECK(pv_classify(fmdn, sizeof fmdn) == PV_KIND_FINDMY_GOOGLE,
+              "a Find My Device frame is a tracker");
+    }
+
+    /* AND THE FALSE POSITIVE THIS ORDERING EXISTS TO PREVENT.
+     *
+     * A named beacon must never reach the tag table, because everything in
+     * that table is a candidate for "travelling with you". Accusing a
+     * supermarket shelf of following somebody is the worst sentence this lens
+     * has available to it. */
+    pv_state_t st;
+    pv_reset(&st);
+    const uint8_t addr[6] = { 0xC0, 0xFF, 0xEE, 0x00, 0x00, 0x01 };
+    const uint8_t beacon[] = { 0x03, 0x03, 0xAA, 0xFE,
+                               0x06, 0x16, 0xAA, 0xFE, 0x00, 0xE7, 0x01 };
+    for (unsigned i = 0; i < 20u; i++) {
+        pv_observe_adv(&st, addr, 0, -50, beacon, sizeof beacon,
+                       1000000ull * i);
+    }
+    CHECK(st.n == 0, "a beacon never enters the tracker table (%u)", st.n);
+
+    /* A real tag on the same UUID does. */
+    const uint8_t fmdn[] = { 0x03, 0x03, 0xAA, 0xFE,
+                             0x07, 0x16, 0xAA, 0xFE, 0x40, 0x11, 0x22, 0x33 };
+    pv_observe_adv(&st, addr, 0, -50, fmdn, sizeof fmdn, 30000000ull);
+    CHECK(st.n == 1, "but a Find My Device tag does");
+}
+
+static void test_vigil_named_tags(void)
+{
+    banner("vigil: a tag that puts its maker in the advertisement");
+
+    const uint8_t pb[] = { 0x0A, 0x09, 'P','e','b','b','l','e','b','e','e' };
+    CHECK(pv_classify(pb, sizeof pb) == PV_KIND_PEBBLEBEE,
+          "Pebblebee names itself");
+
+    /* And the negative: a name that merely starts similarly is not a tag. */
+    const uint8_t other[] = { 0x07, 0x09, 'P','e','b','b','l','e' };
+    CHECK(pv_classify(other, sizeof other) != PV_KIND_PEBBLEBEE,
+          "a shorter name is not assumed to be one");
+}
+
 void test_vigil(void)
 {
+    test_vigil_google_find_my();
+    test_vigil_named_tags();
     test_vigil_movement_gates_following();
     test_vigil_tag_list();
     test_vigil_classify_extended();

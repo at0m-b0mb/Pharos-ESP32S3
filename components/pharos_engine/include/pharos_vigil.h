@@ -72,6 +72,24 @@ typedef enum {
     PV_KIND_TILE,
     PV_KIND_SMARTTAG,     /* Samsung Galaxy SmartTag                */
     PV_KIND_CHIPOLO,      /* Chipolo, its own service UUID          */
+    /* GOOGLE'S FIND MY DEVICE NETWORK - the half of the market Vigil could
+     * not see.
+     *
+     * Launched in 2024 and now carrying Pebblebee, Moto Tag, Eufy and Chipolo
+     * Point. A tag on this network is exactly as capable of following somebody
+     * as an AirTag is, and until now this engine was blind to all of them. */
+    PV_KIND_FINDMY_GOOGLE,
+    PV_KIND_PEBBLEBEE,    /* names itself, on either network         */
+    /* AN ORDINARY PROXIMITY BEACON, WHICH IS NOT A TRACKER.
+     *
+     * Google's tracker network shares service UUID 0xFEAA with plain
+     * Eddystone - the beacons in shops, museums and bus stops. They are told
+     * apart by the frame type, and this kind exists so an ordinary beacon is
+     * NAMED and dismissed rather than left as UNKNOWN, where a persistent
+     * advertiser eventually gets treated as a suspect. Calling a supermarket
+     * shelf a stalking device is the worst false positive this lens has
+     * available to it. */
+    PV_KIND_EDDYSTONE,
     PV_KIND_FLIPPER,      /* a Flipper Zero advertising its presence */
     PV_KIND_SERIAL,       /* a bare BLE serial bridge - see below    */
     PV_KIND_GENERIC,      /* a persistent advertiser we cannot name  */

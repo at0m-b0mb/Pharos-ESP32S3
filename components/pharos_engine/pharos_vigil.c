@@ -111,6 +111,21 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
                 nm[3] == 'p' && nm[4] == 'p' && nm[5] == 'e' && nm[6] == 'r') {
                 return PV_KIND_FLIPPER;
             }
+            /* Tags that put their maker in the advertisement. Cheaper and
+             * more certain than any UUID when they do it. */
+            static const char *k_named_tags[] = {
+                "Pebblebee", "PB Clip", "PB Tag",
+            };
+            for (unsigned b = 0; b < sizeof(k_named_tags) / sizeof(k_named_tags[0]); b++) {
+                const char *needle = k_named_tags[b];
+                unsigned m = 0;
+                while (needle[m] && nm[m] && nm[m] == needle[m]) {
+                    m++;
+                }
+                if (!needle[m]) {
+                    return PV_KIND_PEBBLEBEE;
+                }
+            }
             static const char *k_bridges[] = {
                 "HC-05", "HC-06", "HC-08", "JDY-", "AT-09", "MLT-BT05",
                 "FCD", "FREE2MOVE", "BT05", "HM-10",
@@ -139,6 +154,30 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
             }
             if (uuid == 0xFE33) {
                 return PV_KIND_CHIPOLO;
+            }
+            /* GOOGLE FIND MY DEVICE, AND THE BEACON IT IS EASILY MISTAKEN FOR.
+             *
+             * FMDN advertises under 0xFEAA - the SAME service UUID as ordinary
+             * Eddystone proximity beacons. Matching the UUID alone would flag
+             * every shop, museum and bus-stop beacon as a stalking device.
+             *
+             * The frame type in the first service-data byte separates them:
+             * Eddystone defines 0x00 UID, 0x10 URL, 0x20 TLM and 0x30 EID,
+             * and Google's tracker frame sits above those. So an unrecognised
+             * high frame type is treated as a tracker and the four documented
+             * beacon frames are named as beacons - which is the safe way round,
+             * because a beacon that is merely NAMED costs nothing while a
+             * tracker that is missed costs everything. */
+            if (uuid == 0xFEAA) {
+                if (plen < 3) {
+                    return PV_KIND_EDDYSTONE;
+                }
+                const uint8_t frame = p[2];
+                if (frame == 0x00u || frame == 0x10u ||
+                    frame == 0x20u || frame == 0x30u) {
+                    return PV_KIND_EDDYSTONE;
+                }
+                return PV_KIND_FINDMY_GOOGLE;
             }
         }
         i = (uint8_t)(i + 1u + l);
@@ -230,6 +269,16 @@ void pv_observe_adv(pv_state_t *s, const uint8_t addr[6], uint8_t addr_type,
     const pv_kind_t kind = pv_classify(data, len);
     if (kind == PV_KIND_UNKNOWN) {
         return; /* not a tracker we can name; phones and laptops are not this */
+    }
+    /* A PROXIMITY BEACON IS NOT A TRACKER, AND MUST NOT BE SCORED AS ONE.
+     *
+     * Google's tracker network shares 0xFEAA with ordinary Eddystone, so the
+     * classifier now names shop and museum beacons rather than leaving them
+     * UNKNOWN. That naming must not become a promotion: anything entering this
+     * table is a candidate for "travelling with you", and a supermarket shelf
+     * accused of following somebody is the worst thing this lens could say. */
+    if (kind == PV_KIND_EDDYSTONE) {
+        return;
     }
     if (s->first_us == 0) {
         s->first_us = t_us;
@@ -491,6 +540,9 @@ const char *pv_kind_name(pv_kind_t k)
     case PV_KIND_TILE:        return "Tile";
     case PV_KIND_SMARTTAG:    return "SmartTag";
     case PV_KIND_CHIPOLO:     return "Chipolo";
+    case PV_KIND_FINDMY_GOOGLE: return "Find My Device";
+    case PV_KIND_PEBBLEBEE:   return "Pebblebee";
+    case PV_KIND_EDDYSTONE:   return "beacon (not a tracker)";
     case PV_KIND_FLIPPER:     return "Flipper Zero";
     case PV_KIND_SERIAL:      return "BLE serial bridge";
     case PV_KIND_GENERIC:     return "unnamed tracker";
