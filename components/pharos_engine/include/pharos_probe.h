@@ -39,6 +39,29 @@ extern "C" {
 #define PP_MAX_DEVICES  32
 #define PP_MAX_NETWORKS 12 /* remembered per device */
 
+/* HOW RECENTLY THE OLD ADDRESS MUST HAVE SPOKEN.
+ *
+ * The link test was a fingerprint match plus a sequence counter landing within
+ * 64 of where the old address stopped - with no bound on WHEN. That is wrong
+ * in both directions.
+ *
+ * A 12-bit counter has 4096 values, so a 64-wide window catches an unrelated
+ * device 1.6% of the time by chance alone. Across a session with dozens of
+ * devices and thousands of probes, that is not a remote possibility; it is a
+ * steady trickle of false links.
+ *
+ * And the physics runs the other way too: a device that last probed ten
+ * minutes ago has been sending frames all the while, so its counter is now
+ * thousands of steps on. A near-match after that gap is a coincidence, not a
+ * continuation - the real continuation would have been missed.
+ *
+ * A MAC rotation is a fast event: the old address stops and the new one
+ * starts within seconds. Requiring that closeness makes the window mean what
+ * it claims. A false link asserts that two people are one person, which is a
+ * worse error than missing a link and is exactly the claim this lens exists
+ * to make carefully. */
+#define PP_LINK_WINDOW_US 30000000ull /* 30 s */
+
 /* Kinds of place a network name can betray, ordered roughly by how much
  * knowing it narrows down a person. */
 typedef enum {

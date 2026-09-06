@@ -69,6 +69,54 @@ void test_probe_classify(void)
     CHECK_EQ(pp_classify("Starbucks", 4), PP_PLACE_UNKNOWN); /* only "Star" visible */
 }
 
+void test_probe_link_needs_recency(void)
+{
+    banner("probe: a link across a long gap is a coincidence, not a rotation");
+
+    /* THE FALSE LINK.
+     *
+     * The de-randomisation test was a fingerprint match plus a sequence
+     * counter landing within 64 of where the old address stopped - with no
+     * bound on WHEN. A 12-bit counter has 4096 values, so an unrelated device
+     * lands in that window 1.6% of the time by chance alone.
+     *
+     * And the physics runs the other way too: a device that last probed ten
+     * minutes ago has been counting all the while, so its counter is now
+     * thousands of steps on. A near-match after that gap cannot be the same
+     * device continuing.
+     *
+     * A false link asserts that two people are one person, which is a worse
+     * error than missing a link. */
+    const uint8_t a[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    const uint8_t b[6] = { 0x06, 0x99, 0x88, 0x77, 0x66, 0x55 };
+    const uint32_t fp = 0xABCDEF01u;
+
+    pp_engine_t e;
+    pp_reset(&e);
+    pp_probe_t p1 = mk_probe(a, "Cafe", 100, fp, 1000000ull);
+    pp_observe(&e, &p1);
+
+    /* Ten minutes later, a new address whose counter happens to land close. */
+    pp_probe_t late = mk_probe(b, "Cafe", 140, fp,
+                               1000000ull + 600ull * 1000000ull);
+    pp_observe(&e, &late);
+    CHECK(e.n_devices == 2,
+          "a ten-minute gap is two devices, not one rotating (%u)",
+          e.n_devices);
+
+    /* THE REAL ROTATION, which must still be caught. */
+    pp_engine_t r;
+    pp_reset(&r);
+    pp_probe_t q1 = mk_probe(a, "Cafe", 100, fp, 1000000ull);
+    pp_observe(&r, &q1);
+    pp_probe_t q2 = mk_probe(b, "Cafe", 140, fp, 1000000ull + 3000000ull);
+    pp_observe(&r, &q2);
+
+    CHECK(r.n_devices == 1, "a fast rotation is still linked (%u)", r.n_devices);
+    CHECK(r.devices[0].identities == 2, "and both addresses counted (%u)",
+          r.devices[0].identities);
+}
+
 void test_probe_grading(void)
 {
     banner("probe: grading a device's exposure");

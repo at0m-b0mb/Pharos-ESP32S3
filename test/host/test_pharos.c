@@ -404,6 +404,7 @@ int main(void)
     test_dial();
     test_probe_classify();
     test_probe_grading();
+    test_probe_link_needs_recency();
     test_power();
     test_region();
     test_range_determinism();

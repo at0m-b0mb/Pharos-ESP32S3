@@ -195,6 +195,13 @@ int pp_observe(pp_engine_t *e, const pp_probe_t *p)
             if (!c->in_use || c->fingerprint != p->fingerprint) {
                 continue;
             }
+            /* The old address must have spoken recently: see
+             * PP_LINK_WINDOW_US. Without this the window is a coincidence
+             * generator, not a link test. */
+            if (p->t_us < c->last_us ||
+                (p->t_us - c->last_us) > PP_LINK_WINDOW_US) {
+                continue;
+            }
             if (seq_continues(c->last_seq, p->seq)) {
                 dev = c;
                 dev->identities++;
