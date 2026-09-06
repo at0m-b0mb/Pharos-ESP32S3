@@ -430,8 +430,50 @@ static void test_roster_streaming_shape(void)
     CHECK_EQ(rd_upload_duty(NULL), 0);
 }
 
+static void test_roster_random_mac_has_no_vendor(void)
+{
+    banner("roster: a randomised address has no manufacturer to look up");
+
+    /* THE COINCIDENCE THAT BECAME A CLAIM.
+     *
+     * The first three octets of a burned-in MAC are the OUI and identify who
+     * made the device. The first three octets of a RANDOM one are three
+     * random bytes that happen to have the locally-administered bit set.
+     * The lookup was unconditional, so a random address whose prefix
+     * coincided with a table entry was reported confidently as that
+     * manufacturer - and given a device class derived from it, so a phone
+     * protecting itself could be listed as a printer. */
+    rd_roster_t r;
+    rd_reset(&r);
+
+    /* A real Apple prefix, and the same three bytes with the
+     * locally-administered bit set - which is what a randomising phone
+     * actually emits. */
+    const uint8_t real[6]    = { 0x3C, 0x06, 0x30, 0x11, 0x22, 0x33 };
+    const uint8_t random_[6] = { 0x3E, 0x06, 0x30, 0x11, 0x22, 0x33 };
+
+    rd_observe_wifi(&r, real,    false, NULL, NULL, 6, -50, NULL, 1000000ull);
+    rd_observe_wifi(&r, random_, false, NULL, NULL, 6, -50, NULL, 1000000ull);
+
+    const rd_device_t *a = NULL, *b = NULL;
+    for (unsigned i = 0; i < r.n; i++) {
+        if (memcmp(r.dev[i].mac, real, 6) == 0)    a = &r.dev[i];
+        if (memcmp(r.dev[i].mac, random_, 6) == 0) b = &r.dev[i];
+    }
+    CHECK(a && b, "both addresses were admitted");
+    if (!a || !b) return;
+
+    CHECK(!a->randomised_mac, "the burned-in address is not called random");
+    CHECK(a->vendor != NULL, "and it still gets its manufacturer");
+
+    CHECK(b->randomised_mac, "the locally-administered bit is noticed");
+    CHECK(b->vendor == NULL, "and no manufacturer is invented for it");
+    CHECK(b->klass == RD_UNKNOWN, "nor a device class derived from one");
+}
+
 void test_roster(void)
 {
+    test_roster_random_mac_has_no_vendor();
     test_roster_streaming_shape();
     test_roster_export_carries_the_model();
     test_roster_tags_fit_the_row();

@@ -177,8 +177,30 @@ static rd_device_t *admit(rd_roster_t *r, const uint8_t mac[6], uint64_t t_us)
     d->first_us = t_us;
     d->rssi = -128;
     d->randomised_mac = mac_is_random(mac);
-    d->vendor = rd_vendor(mac);
-    d->klass = rd_class_of_oui(mac);
+    /* A RANDOMISED ADDRESS HAS NO MANUFACTURER TO LOOK UP.
+     *
+     * The first three octets of a burned-in MAC are the OUI and identify who
+     * made the device. The first three octets of a RANDOM one are three random
+     * bytes that happen to have the locally-administered bit set. Looking them
+     * up in the vendor table was unconditional, so a random address whose
+     * prefix coincided with a table entry was reported confidently as that
+     * manufacturer - and with a class derived from it, so a phone protecting
+     * itself could be listed as a printer.
+     *
+     * The bit was already being read one line above, and its own comment says
+     * this lets Roster "say the device is protecting itself rather than
+     * mistaking it for an unknown vendor". The lookup simply never asked.
+     *
+     * Randomisation is not missing information. It IS the information: this
+     * device is running a modern OS with privacy defaults on. That is worth
+     * reporting, and it is worth more than a coincidence. */
+    if (!d->randomised_mac) {
+        d->vendor = rd_vendor(mac);
+        d->klass = rd_class_of_oui(mac);
+    } else {
+        d->vendor = NULL;
+        d->klass = RD_UNKNOWN;
+    }
     r->admitted++;
     return d;
 }
