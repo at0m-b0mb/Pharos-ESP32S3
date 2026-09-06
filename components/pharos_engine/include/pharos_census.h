@@ -41,6 +41,14 @@ typedef struct {
     uint8_t channel;
     int8_t rssi;
     uint16_t beacons;      /* how many times we heard it              */
+    /* HOW MANY INFORMATION ELEMENTS ITS BEACON CARRIES.
+     *
+     * Not graded by Census itself - a terse beacon is not insecure. It is
+     * here for pharos_twin, which compares members of one SSID against each
+     * other: a roaming group is configured identically, so its beacons are
+     * structurally identical too. A member whose frame is built differently
+     * is not the same deployment. Zero means not measured. */
+    uint8_t ie_count;
     uint16_t beacon_ms;    /* advertised beacon interval              */
     bool hidden;           /* SSID element empty or all-zero          */
     bool privacy;          /* capability field Privacy bit            */

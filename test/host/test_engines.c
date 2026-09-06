@@ -321,6 +321,67 @@ void test_twin(void)
         CHECK(strstr(nm, "SAFE") == NULL, "no band claims safety");
         CHECK(strstr(ad, " is safe") == NULL, "advice never says safe");
     }
+    /* STRUCTURAL DIVERGENCE: the beacon is BUILT differently.
+     *
+     * A roaming group is the same hardware running one configuration, so its
+     * members advertise the same feature set and therefore the same number of
+     * information elements. A member built by other software is not: hostapd
+     * and the soft APs that impersonate a network advertise what THEY
+     * support, rarely what a ceiling radio supports.
+     *
+     * This CORROBORATES, it does not accuse. Twin requires the posture family
+     * before anything escalates, and rightly so - an access point built
+     * differently while asking for the SAME security is a mixed-vendor
+     * deployment, which is ordinary. So the signal is measured against a
+     * suspect the posture test already found. */
+    {
+        /* A group with one weaker member: that member is the suspect. */
+        pc_ap_t plain[5];
+        for (unsigned i = 0; i < 5; i++) {
+            plain[i] = twin_member((uint8_t)(i + 1), 6, -55);
+            plain[i].ie_count = 14;
+        }
+        plain[3] = twin_member(4, 6, -55);
+        plain[3].rsn.has_sae = false;
+        plain[3].rsn.has_psk = true;
+        plain[3].rsn.mfp_required = false;
+        plain[3].ie_count = 14;          /* built like its siblings */
+        pt_evaluate(plain, 5, NULL, &ctx, &v);
+        const uint8_t before = v.score;
+        CHECK(before > 0, "a weaker member is a suspect (%u)", before);
+
+        /* The same suspect, now also structurally unlike every sibling. */
+        pc_ap_t built[5];
+        memcpy(built, plain, sizeof(plain));
+        built[3].ie_count = 5;
+        pt_evaluate(built, 5, NULL, &ctx, &v);
+        CHECK(v.score > before,
+              "built unlike its siblings corroborates (%u -> %u)",
+              before, v.score);
+
+        /* THE NEGATIVE. Two elements apart is ordinary drift between firmware
+         * revisions of one product, not a different build. */
+        pc_ap_t drift[5];
+        memcpy(drift, plain, sizeof(plain));
+        for (unsigned i = 0; i < 5; i++) {
+            drift[i].ie_count = (uint8_t)(14 + (i & 1u));
+        }
+        pt_evaluate(drift, 5, NULL, &ctx, &v);
+        CHECK(v.score <= before + 2,
+              "a firmware-revision difference adds nothing (%u vs %u)",
+              v.score, before);
+
+        /* AND THE REFUSAL. An unmeasured group must not read as uniform. */
+        pc_ap_t unmeasured[5];
+        memcpy(unmeasured, plain, sizeof(plain));
+        for (unsigned i = 0; i < 5; i++) {
+            unmeasured[i].ie_count = 0;
+        }
+        pt_evaluate(unmeasured, 5, NULL, &ctx, &v);
+        CHECK(v.score <= before,
+              "not measuring is not evidence (%u vs %u)", v.score, before);
+    }
+
 }
 
 /* ---------------------------------------------------------------- report */

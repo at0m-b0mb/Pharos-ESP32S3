@@ -248,6 +248,44 @@ void pt_evaluate(const pc_ap_t *aps, unsigned n, const pt_profile_t *profile,
             behaviour += 8;
         }
     }
+
+    /* STRUCTURAL DIVERGENCE: the beacon is BUILT differently.
+     *
+     * The beacon interval above is one configured number. This is the shape of
+     * the whole frame. A roaming group is the same hardware running the same
+     * configuration, so its members advertise the same feature set - the same
+     * HT and VHT elements, the same vendor and WMM blocks, the same extended
+     * capabilities - and therefore the same number of elements, frame after
+     * frame. Real deployments are boringly consistent in a way that is hard to
+     * imitate without meaning to.
+     *
+     * A member built by other software is not. hostapd and the soft APs that
+     * impersonate a network advertise what THEY support, which is rarely what
+     * a ceiling-mounted enterprise radio supports.
+     *
+     * Compared WITHIN the group rather than against an absolute, so it needs
+     * no threshold about what a "rich" beacon is and cannot be wrong about an
+     * unusual but genuine deployment: every sibling is the control. Only the
+     * suspect standing apart from ALL of them counts, and only when there are
+     * enough siblings for "all of them" to mean something. */
+    if (n > 2 && aps[suspect].ie_count) {
+        unsigned measured = 0, differing = 0;
+        for (unsigned i = 0; i < n; i++) {
+            if (i == suspect || !aps[i].ie_count) {
+                continue;
+            }
+            measured++;
+            /* A couple of elements is ordinary drift between firmware
+             * revisions of the same product; a different build is further. */
+            const int d = (int)aps[i].ie_count - (int)aps[suspect].ie_count;
+            if (d > 3 || d < -3) {
+                differing++;
+            }
+        }
+        if (measured >= 2 && differing == measured) {
+            behaviour += 10;
+        }
+    }
     out->c_behaviour = (uint8_t)clamp_u32(behaviour, 0, 30);
 
     out->suspect_index = (uint8_t)suspect;

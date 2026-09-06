@@ -137,6 +137,9 @@ static void census_event(const pharos_event_t *ev)
     ap->beacons++;
     ap->rssi = f->rssi;
     ap->channel = f->channel;
+    if (f->ie_count) {
+        ap->ie_count = f->ie_count;
+    }
     ap->privacy = (f->flags & PHAROS_DOT11_F_PROTECTED) != 0;
 
     /* Name and posture, now that the hot path carries them. Before v1.13.0
