@@ -169,6 +169,16 @@ typedef struct {
     int8_t noise_floor;   /* dBm, quartile estimate            */
     int8_t peak_rssi;
     uint16_t busy_permil; /* airtime occupancy, per mille      */
+    /* FRAMES THAT ARRIVED AND WERE BROKEN.
+     *
+     * Every other number here counts frames that decoded. This counts the
+     * ones the radio heard and could not resolve - failed FCS. It is the
+     * difference between "frames are not arriving" and "frames are arriving
+     * corrupted", and only the second is direct evidence of interference: a
+     * jammer does not merely reduce traffic, it breaks it.
+     *
+     * Zero unless a lens asked for it; see want_fcsfail. */
+    uint16_t fcs_fail;
 } pharos_ev_dwell_t;
 
 typedef struct {

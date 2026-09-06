@@ -49,6 +49,10 @@ static uint8_t s_wps_n;
 
 #endif
 
+/* Frames the radio heard and could not resolve. Taken and cleared once per
+ * dwell; see want_fcsfail. */
+static volatile uint32_t s_fcs_fail;
+
 static const char *TAG = "radio";
 
 /* Fence status, filled at init and never mutated afterwards. */
@@ -100,6 +104,26 @@ pharos_scan_plan_t pharos_scan_plan_camp(uint8_t channel)
     p.dwell_ms = 1000;
     p.hop = PHAROS_HOP_CAMP;
     p.want_mgmt = true;
+
+    /* CAMPING MUST NOT CHANGE WHAT THE LENS ASKED TO HEAR.
+     *
+     * This built a plan from scratch carrying want_mgmt alone, so camping
+     * silently revoked every other delivery the running lens had requested.
+     * Squall asks for DATA frames because retransmissions are mostly data -
+     * so `squall camp 6`, the posture with the highest ceiling and the one an
+     * operator reaches for when they suspect jamming, quietly stopped
+     * delivering the frames its retry family is computed from. It reported
+     * 0% retries on a channel it could no longer hear properly.
+     *
+     * Camping is a statement about WHERE to listen. It was also, by accident,
+     * a statement about WHAT to listen for. Only the first is intended, so
+     * the rest of the request is carried across from the plan in force. */
+    if (s.running) {
+        p.want_data    = s.plan.want_data;
+        p.want_ctrl    = s.plan.want_ctrl;
+        p.want_fcsfail = s.plan.want_fcsfail;
+        p.want_mgmt    = s.plan.want_mgmt || p.want_mgmt;
+    }
     return p;
 }
 
@@ -123,6 +147,13 @@ static void emit_dwell(uint8_t channel, uint32_t us)
     ev.u.dwell.band = 0; /* this radio is deaf above 2.4 GHz */
     ev.u.dwell.dwell_ms = (uint16_t)(us / 1000u > 0xFFFFu ? 0xFFFFu : us / 1000u);
     ev.u.dwell.frames = (uint16_t)(s.dwell_frames > 0xFFFFu ? 0xFFFFu : s.dwell_frames);
+    /* Taken and cleared per dwell, so the number belongs to THIS channel
+     * visit rather than to the whole session. */
+    {
+        const uint32_t bad = s_fcs_fail;
+        s_fcs_fail = 0;
+        ev.u.dwell.fcs_fail = (uint16_t)(bad > 0xFFFFu ? 0xFFFFu : bad);
+    }
     ev.u.dwell.peak_rssi = s.dwell_peak_rssi;
     /* No true noise-floor register is exposed, so leave it at 0 - which the
      * engines read as "unknown" and disclose - rather than inventing one. */
@@ -207,6 +238,19 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         return;
     }
     const wifi_promiscuous_pkt_t *pkt = (const wifi_promiscuous_pkt_t *)buf;
+    /* BROKEN ON ARRIVAL.
+     *
+     * rx_state is documented as "0: no error; others: error numbers which are
+     * not public", so a non-zero value is a frame the radio heard and could
+     * not resolve. Counted here and dropped immediately: its bytes are
+     * meaningless - the header may be garbage and parsing it would invent
+     * addresses - but the COUNT is exactly what separates a jammed channel
+     * from a merely quiet one. */
+    if (pkt->rx_ctrl.rx_state != 0) {
+        s_fcs_fail++;
+        return;
+    }
+
     const uint8_t *payload = pkt->payload;
     const int len = pkt->rx_ctrl.sig_len;
 
@@ -485,6 +529,7 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
     if (plan->want_mgmt) filter.filter_mask |= WIFI_PROMIS_FILTER_MASK_MGMT;
     if (plan->want_data) filter.filter_mask |= WIFI_PROMIS_FILTER_MASK_DATA;
     if (plan->want_ctrl) filter.filter_mask |= WIFI_PROMIS_FILTER_MASK_CTRL;
+    if (plan->want_fcsfail) filter.filter_mask |= WIFI_PROMIS_FILTER_MASK_FCSFAIL;
     if (filter.filter_mask == 0) filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
     esp_wifi_set_promiscuous_filter(&filter);
     esp_wifi_set_promiscuous_rx_cb(&promisc_cb);

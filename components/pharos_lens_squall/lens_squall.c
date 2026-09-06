@@ -56,6 +56,15 @@ static bool squall_start(void)
     plan.dwell_ms = 500;
     plan.want_mgmt = true;
     plan.want_data = true; /* retries are mostly data frames */
+    /* THE ONE LENS THAT WANTS THE BROKEN ONES.
+     *
+     * esp_wifi warns against this filter in general and it is right - on a
+     * busy channel corrupt frames outnumber good ones. But this is the lens
+     * whose entire job is telling a jammed channel from a loud one, and a
+     * failed checksum is the only direct evidence of that difference. They
+     * are tallied and dropped in the radio callback, so nothing downstream
+     * pays for them. */
+    plan.want_fcsfail = true;
     return pharos_radio_rx_start(&plan, &s_bus);
 }
 
@@ -84,6 +93,7 @@ static void squall_event(const pharos_event_t *ev)
         .noise_floor = d->noise_floor,
         .peak_rssi = d->peak_rssi,
         .busy_permil = d->busy_permil,
+        .fcs_fail = d->fcs_fail,
     };
     pq_observe(&s_table, &in);
 }
@@ -190,7 +200,7 @@ static bool k_squall_display(struct pharos_lens_display *o)
     o->fam_label[0] = "ENERGY";
     o->fam_label[1] = "RETRY";
     o->fam_label[2] = "SPREAD";
-    o->fam_label[3] = NULL;
+    o->fam_label[3] = "BROKEN";
     o->has_history = pharos_pulse_fill(&s_pulse, (uint64_t)esp_timer_get_time(), o->history);
     return true;
 }
@@ -227,6 +237,24 @@ static bool k_squall_row(unsigned index, struct pharos_lens_row *out)
         out->tone = PHAROS_TONE_NEUTRAL;
         return true;
     case 4:
+        /* THE MEASUREMENT THAT SEPARATES LOUD FROM JAMMED.
+         *
+         * A congested channel is busy and its frames decode; a jammed one is
+         * busy and its frames shatter. Shown as a share of everything HEARD,
+         * so it stays a fraction of reality even when almost nothing decodes. */
+        snprintf(out->left, sizeof(out->left), "arrived broken");
+        if (v.fcs_fail_total == 0u) {
+            snprintf(out->right, sizeof(out->right), "-");
+            out->tone = PHAROS_TONE_DIM;
+        } else {
+            snprintf(out->right, sizeof(out->right), "%u%%",
+                     (unsigned)(v.broken_permil / 10u));
+            out->tone = (v.families & PQ_FAM_BROKEN) ? PHAROS_TONE_BAD
+                      : (v.broken_permil >= 150u)    ? PHAROS_TONE_WARN
+                                                     : PHAROS_TONE_GOOD;
+        }
+        return true;
+    case 5:
         snprintf(out->left, sizeof(out->left), "retransmissions");
         snprintf(out->right, sizeof(out->right), "%u%%",
                  (unsigned)(v.retry_permil / 10u));

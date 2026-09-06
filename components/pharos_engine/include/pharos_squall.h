@@ -80,6 +80,20 @@ typedef enum {
 #define PQ_FAM_ENERGY  (1u << 0) /* power present that does not decode   */
 #define PQ_FAM_RETRIES (1u << 1) /* senders retransmitting, then failing */
 #define PQ_FAM_SPREAD  (1u << 2) /* the condition covers several channels*/
+/* FRAMES ARRIVED AND WERE BROKEN.
+ *
+ * The other three families are inferences from what is MISSING: energy with
+ * no frames under it, senders retrying and then giving up, the same silence
+ * across several channels. All of them are shaped like an absence, and an
+ * absence is what a receiver that was somewhere else also reports.
+ *
+ * A failed checksum is not an absence. The radio heard a transmission, tried
+ * to resolve it, and could not - which is the direct physical signature of
+ * interference rather than a deduction from quiet. A congested channel is
+ * loud and its frames DECODE; a jammed one is loud and its frames SHATTER.
+ * That is the distinction this engine exists to make, and until now it was
+ * being made without the one measurement that shows it happening. */
+#define PQ_FAM_BROKEN  (1u << 3)
 
 #define PQ_NOTE_THIN     (1u << 0) /* hopping: cannot distinguish absent  */
 #define PQ_NOTE_FEW      (1u << 1) /* not enough dwells yet to grade      */
@@ -100,6 +114,10 @@ typedef struct {
     int8_t noise_floor;   /* dBm, quartile estimate; 0 = unknown  */
     int8_t peak_rssi;
     uint16_t busy_permil; /* airtime the radio judged occupied    */
+    /* Frames that arrived and failed their checksum. Zero when the caller
+     * did not ask the radio for them, which is not the same as none having
+     * occurred - so a zero here never counts as evidence of health. */
+    uint16_t fcs_fail;
 } pq_dwell_t;
 
 typedef struct {
@@ -108,6 +126,7 @@ typedef struct {
     uint32_t visits;
     uint32_t frames_total;
     uint32_t retries_total;
+    uint32_t fcs_fail_total; /* frames heard but not resolvable */
     uint32_t dwell_ms_total;
     int32_t floor_sum;   /* for a mean noise floor    */
     uint32_t floor_n;
@@ -133,7 +152,9 @@ typedef struct {
     uint8_t n_graded;      /* channels with enough samples to judge */
     uint8_t n_denial;      /* channels showing the denial shape     */
     uint8_t n_congested;
-    uint16_t retry_permil; /* across everything graded              */
+    uint16_t retry_permil;
+    uint16_t broken_permil;   /* of everything heard, how much would not decode */
+    uint32_t fcs_fail_total; /* across everything graded              */
 
     const char *headline;
 } pq_verdict_t;

@@ -28,6 +28,7 @@ void pq_observe(pq_state_table_t *t, const pq_dwell_t *d)
     c->visits++;
     c->frames_total += d->frames;
     c->retries_total += d->retries;
+    c->fcs_fail_total += d->fcs_fail;
     c->dwell_ms_total += d->dwell_ms;
     c->busy_sum += d->busy_permil;
     if (d->noise_floor != 0) {
@@ -182,6 +183,26 @@ void pq_evaluate(const pq_state_table_t *t, const pq_context_t *ctx, pq_verdict_
         }
     }
 
+    /* --- how much of what we heard was broken? -------------------------
+     *
+     * Against frames + failures, not frames alone: on a badly jammed channel
+     * almost nothing decodes, so a ratio against decoded frames would divide
+     * by something approaching zero and read as infinite corruption on two
+     * bad packets. Against everything HEARD, the number stays a fraction of
+     * reality and behaves sensibly at both ends. */
+    {
+        uint32_t bad = 0, heard = 0;
+        for (unsigned i = 1; i <= PQ_MAX_CHANNELS; i++) {
+            if (!t->ch[i].in_use) {
+                continue;
+            }
+            bad += t->ch[i].fcs_fail_total;
+            heard += t->ch[i].fcs_fail_total + t->ch[i].frames_total;
+        }
+        out->fcs_fail_total = bad;
+        out->broken_permil = heard ? (uint16_t)((bad * 1000u) / heard) : 0u;
+    }
+
     uint32_t score = worst_sev;
 
     /* --- families ------------------------------------------------------ */
@@ -192,6 +213,17 @@ void pq_evaluate(const pq_state_table_t *t, const pq_context_t *ctx, pq_verdict_
         out->families |= PQ_FAM_RETRIES;
         score += clamp_u32((out->retry_permil - 350u) / 25u, 0, 14);
     }
+    /* --- BROKEN: frames arrived and would not resolve -------------------
+     *
+     * The one family here that is not an inference from absence. Needs a real
+     * sample as well as a ratio: three corrupt frames out of five is a
+     * fraction, not a finding, and the ordinary background of a busy channel
+     * already carries some corruption. */
+    if (out->broken_permil >= 250u && out->fcs_fail_total >= 40u) {
+        out->families |= PQ_FAM_BROKEN;
+        score += clamp_u32((out->broken_permil - 250u) / 30u, 0, 18);
+    }
+
     if (out->n_denial >= 3) {
         /* A jammer usually covers a band, not one channel. A single bad
          * channel is far more likely to be one noisy device. */
@@ -207,6 +239,10 @@ void pq_evaluate(const pq_state_table_t *t, const pq_context_t *ctx, pq_verdict_
      * outdoor bridge. DENIAL is only claimable when the senders are visibly
      * suffering too, or when it spans the band. One family is a strong hint
      * and is reported as DEGRADED-grade suspicion, never as denial. */
+    /* Energy plus corruption is no longer energy alone: a microwave oven
+     * raises the floor, but the frames underneath it still decode. Power that
+     * SHATTERS traffic is a different observation, and it is the one this
+     * engine was missing. */
     const bool energy_only = (out->families == PQ_FAM_ENERGY);
     if (energy_only && score > 62) {
         score = 62;

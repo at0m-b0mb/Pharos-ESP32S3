@@ -62,6 +62,14 @@ typedef struct {
     bool want_mgmt;      /* deliver management frames           */
     bool want_data;      /* deliver data frame headers          */
     bool want_ctrl;      /* deliver control frames              */
+    /* COUNT FRAMES THAT FAILED THEIR CHECKSUM.
+     *
+     * esp_wifi's own header says of this filter: "do not open it in general".
+     * It is right - on a busy channel the corrupt frames outnumber the good
+     * ones and every consumer pays for garbage it cannot use. So it is opt-in,
+     * and the frames are TALLIED AND DROPPED in the callback rather than
+     * pushed onto the bus: the count is the signal, the bytes are not. */
+    bool want_fcsfail;
 } pharos_scan_plan_t;
 
 /* A broad 2.4 GHz survey across the region's legal channels. */

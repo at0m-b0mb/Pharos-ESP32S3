@@ -39,8 +39,86 @@ static pq_context_t ctx_of(uint16_t dwell, bool camped)
     return c;
 }
 
+static void test_squall_broken_frames(void)
+{
+    banner("squall: a jammed channel is loud AND its frames shatter");
+
+    /* THE MEASUREMENT THIS ENGINE WAS MISSING.
+     *
+     * Its other three families are inferences from what is ABSENT: energy with
+     * no frames under it, senders retrying then giving up, silence across
+     * several channels. A failed checksum is not an absence - the radio heard
+     * a transmission and could not resolve it, which is the direct physical
+     * signature of interference.
+     *
+     * A congested channel is loud and its frames DECODE. A jammed one is loud
+     * and its frames SHATTER. */
+    pq_state_table_t t;
+    pq_reset(&t);
+
+    for (unsigned i = 0; i < 12u; i++) {
+        pq_dwell_t d = {
+            .channel = 6, .dwell_ms = 300,
+            .frames = 40, .retries = 20,
+            .noise_floor = -70, .peak_rssi = -40,
+            .busy_permil = 850,
+            .fcs_fail = 260,   /* most of what arrived was rubble */
+        };
+        pq_observe(&t, &d);
+    }
+
+    pq_context_t camped = { .dwell_permil = 1000, .camped = true };
+    pq_verdict_t v;
+    pq_evaluate(&t, &camped, &v);
+
+    CHECK(v.families & PQ_FAM_BROKEN, "corruption is seen as its own family");
+    CHECK(v.broken_permil > 800, "and measured (%u permil)", v.broken_permil);
+    CHECK(v.fcs_fail_total >= 40, "over a real sample (%u)",
+          (unsigned)v.fcs_fail_total);
+
+    /* THE NEGATIVE. A BUSY channel is loud, retries a lot, and its frames
+     * still decode. That is a Tuesday afternoon in an office, and calling it
+     * an attack is the failure every naive noise-meter detector ships with. */
+    pq_state_table_t busy;
+    pq_reset(&busy);
+    for (unsigned i = 0; i < 12u; i++) {
+        pq_dwell_t d = {
+            .channel = 6, .dwell_ms = 300,
+            .frames = 900, .retries = 300,
+            .noise_floor = -70, .peak_rssi = -40,
+            .busy_permil = 880,
+            .fcs_fail = 20,    /* the ordinary background of a loud room */
+        };
+        pq_observe(&busy, &d);
+    }
+    pq_verdict_t w;
+    pq_evaluate(&busy, &camped, &w);
+    CHECK(!(w.families & PQ_FAM_BROKEN),
+          "a busy channel whose frames decode is not accused");
+    CHECK(w.broken_permil < 250, "its corruption stays background (%u permil)",
+          w.broken_permil);
+
+    /* AND THE REFUSAL. A lens that never asked the radio for failed frames
+     * reports zero, and a zero must never be read as proof of health. */
+    pq_state_table_t unasked;
+    pq_reset(&unasked);
+    for (unsigned i = 0; i < 12u; i++) {
+        pq_dwell_t d = {
+            .channel = 6, .dwell_ms = 300, .frames = 30, .retries = 15,
+            .noise_floor = -70, .peak_rssi = -40, .busy_permil = 850,
+            .fcs_fail = 0,
+        };
+        pq_observe(&unasked, &d);
+    }
+    pq_verdict_t u;
+    pq_evaluate(&unasked, &camped, &u);
+    CHECK(!(u.families & PQ_FAM_BROKEN),
+          "no measurement is not a clean measurement");
+}
+
 void test_squall(void)
 {
+    test_squall_broken_frames();
     banner("squall: busy, broken, or denied");
     pq_state_table_t t;
     pq_verdict_t v;
