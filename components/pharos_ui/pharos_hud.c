@@ -1129,6 +1129,20 @@ void pharos_hud_rebuild(void)
     s_built = false;
     s_aura_rgb = 0xFFFFFFFFu;
     s_zones_detail = -1;
+    /* EVERY DIRTY-CHECK CACHE, NOT SOME OF THEM.
+     *
+     * A rebuild destroys the widgets and makes new ones, so any cache that
+     * remembers "this is already showing X" is now describing objects that no
+     * longer exist - and the value will be skipped as unchanged against a
+     * widget that was never written. Two of these were reset and the rest were
+     * not, so changing the theme silently blanked the charge readout and the
+     * ring's names until something else happened to move them. */
+    s_batt_last = -2;
+    s_g_step = -1;
+    s_h_n = 0;
+    for (unsigned i = 0; i < PHAROS_DISP_HISTORY; i++) {
+        s_ribbon_level[i] = 0xFFu;
+    }
     if (pharos_hud_create() && was < PAGE_N) {
         page_show(was);
     }

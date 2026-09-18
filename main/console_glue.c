@@ -367,7 +367,20 @@ static int cli_alarm(int argc, char **argv)
     if (strcmp(w, "off") == 0) { pharos_audio_set_enabled(false); printf("alarm muted\n"); return 0; }
     if (strcmp(w, "vol") == 0) {
         if (argc < 3) { printf("vol <0-100>\n"); return 1; }
-        pharos_audio_set_volume((uint8_t)atoi(argv[2]));
+        /* CLAMP BEFORE THE CAST, NOT AFTER.
+         *
+         * The cast to uint8_t happened first, so any value whose low byte
+         * landed in range sailed past whatever clamping the setter does:
+         * `alarm vol 300` became 44, and `alarm vol 256` became 0 - silently
+         * muting an alarm the operator had just asked to set. A number that
+         * cannot be a volume should be refused out loud, not folded into one
+         * that can. */
+        const long v = strtol(argv[2], NULL, 10);
+        if (v < 0 || v > 100) {
+            printf("vol must be 0-100 (got %s)\n", argv[2]);
+            return 1;
+        }
+        pharos_audio_set_volume((uint8_t)v);
         printf("volume %u%%\n", (unsigned)pharos_audio_volume());
         return 0;
     }

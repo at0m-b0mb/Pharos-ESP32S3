@@ -1936,6 +1936,7 @@ static void paint(const pharos_lens_t *active)
         s_paints++;
         pharos_hud_create();
         theme_sync();
+        batt_apply();
         paint_detail(active);
         pharos_bsp_display_unlock();
         return;
@@ -1955,6 +1956,7 @@ static void paint(const pharos_lens_t *active)
      * for the whole session. */
     pharos_hud_create();
     theme_sync();
+    batt_apply();
 
     if (!active) {
         struct pharos_lens_display idle;
