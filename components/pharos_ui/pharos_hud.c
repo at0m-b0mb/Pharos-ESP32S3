@@ -362,6 +362,8 @@ static uint32_t tone_colour(pharos_tone_t t)
     case PHAROS_TONE_WARN: return PS_WARN;
     case PHAROS_TONE_BAD:  return PS_BAD;
     case PHAROS_TONE_DIM:  return C_DIMMER;
+    /* The instrument talking about itself. See PHAROS_TONE_LIMIT. */
+    case PHAROS_TONE_LIMIT: return C_ACCENT;
     case PHAROS_TONE_NEUTRAL:
     default:               return C_TEXT;
     }

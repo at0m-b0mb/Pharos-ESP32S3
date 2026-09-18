@@ -390,7 +390,7 @@ static bool k_vigil_row(unsigned index, struct pharos_lens_row *out)
          * dangerous thing this device can show. See PV_BREDR_BLIND. */
         snprintf(out->left, sizeof(out->left), "classic BT");
         snprintf(out->right, sizeof(out->right), "deaf");
-        out->tone = PHAROS_TONE_WARN;
+        out->tone = PHAROS_TONE_LIMIT;
         return true;
     default:
         break;

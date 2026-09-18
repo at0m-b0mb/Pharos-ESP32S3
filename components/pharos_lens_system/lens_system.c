@@ -363,9 +363,11 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
     case ROW_EDITABLE_N + 5:
         snprintf(out->left, sizeof(out->left), "bands heard");
         snprintf(out->right, sizeof(out->right), "2.4 only");
-        /* Amber on purpose: a defender who forgets this device is deaf above
-         * 2.4 GHz will read a quiet screen as a quiet building. */
-        out->tone = PHAROS_TONE_WARN;
+        /* A limit of the instrument, not a finding about the room - but still
+         * said out loud, because somebody who forgets this device is deaf
+         * above 2.4 GHz will read a quiet screen as a quiet building. See
+         * PHAROS_TONE_LIMIT. */
+        out->tone = PHAROS_TONE_LIMIT;
         return true;
     case ROW_EDITABLE_N + 6:
         snprintf(out->left, sizeof(out->left), "screen rotation");

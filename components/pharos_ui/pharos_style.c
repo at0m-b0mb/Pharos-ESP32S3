@@ -131,3 +131,17 @@ int16_t ps_chip_w(unsigned n)
     const int16_t min = (int16_t)(ps_text_w(PS_TYPE_LABEL, 5) + 10);
     return (w >= min) ? w : (int16_t)0;
 }
+
+uint32_t ps_tone_verdict_colour(pharos_tone_t t)
+{
+    switch (t) {
+    case PHAROS_TONE_GOOD: return PS_GOOD;
+    case PHAROS_TONE_WARN: return PS_WARN;
+    case PHAROS_TONE_BAD:  return PS_BAD;
+    /* NEUTRAL, DIM and LIMIT are chrome: they carry no verdict and take their
+     * ink from the theme. LIMIT in particular is the instrument talking about
+     * ITSELF, and giving it a verdict colour is what this returns 0 to
+     * prevent. */
+    default:               return 0u;
+    }
+}

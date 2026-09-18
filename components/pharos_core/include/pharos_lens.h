@@ -125,6 +125,32 @@ typedef enum {
     PHAROS_TONE_GOOD,        /* nothing to do here               */
     PHAROS_TONE_WARN,        /* worth knowing                    */
     PHAROS_TONE_BAD,         /* act on this                      */
+
+    /* A LIMIT OF THE INSTRUMENT, NOT A FINDING ABOUT THE ROOM.
+     *
+     * "This device cannot hear classic Bluetooth" is a permanent fact about
+     * the hardware. It was drawn in amber, and the reasoning was sound as far
+     * as it went: somebody who forgets the device is deaf to a band will read
+     * a quiet screen as a quiet building, and that is the most dangerous
+     * mistake this project can invite.
+     *
+     * But amber is the verdict palette. It means "worth knowing" about the
+     * AIR, and it is the same amber Census uses for a weak network and Watch
+     * for a suspicious burst. Spending it on a condition that can never change
+     * has a cost that compounds: every Rival page has shown the same two
+     * ambers in every session since the lens existed, and a warning that is
+     * always present is a warning nobody reads. The colour meant to prevent
+     * over-confidence was quietly training people out of reading warnings at
+     * all.
+     *
+     * So the limit keeps its visibility and gives up the verdict colour. It is
+     * drawn in the chrome accent - the ink this device already uses for
+     * statements about ITSELF rather than about what it heard - which leaves
+     * amber meaning one thing everywhere.
+     *
+     * This is not a quieter warning. It is a warning about a different
+     * subject, drawn so you can tell which subject it is. */
+    PHAROS_TONE_LIMIT,
 } pharos_tone_t;
 
 struct pharos_lens_row {

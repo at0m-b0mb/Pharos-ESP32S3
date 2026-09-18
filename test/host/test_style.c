@@ -24,8 +24,36 @@
 #include "pharos_style.h"
 #include "test_support.h"
 
+static void test_tone_limit_is_not_a_verdict(void)
+{
+    banner("tone: the instrument talking about itself is not a verdict");
+
+    /* THE CONTRACT THIS EXISTS TO PROTECT.
+     *
+     * Green, amber, orange and red are the verdict, and they mean the same
+     * thing on every page - that is the whole reason a theme may not recolour
+     * them. A permanent limit of the hardware ("this device cannot hear
+     * classic Bluetooth") is not a verdict about the air, and spending a
+     * verdict colour on it had a compounding cost: the same two ambers on
+     * every Rival page in every session, until a warning that is always there
+     * is a warning nobody reads.
+     *
+     * So LIMIT must be visible and must NOT be any of the four. */
+    CHECK(ps_tone_verdict_colour(PHAROS_TONE_LIMIT) == 0u,
+          "LIMIT is entitled to no verdict colour");
+
+    /* And the four that ARE verdicts still get theirs, so this cannot be
+     * satisfied by making everything chrome. */
+    CHECK(ps_tone_verdict_colour(PHAROS_TONE_GOOD) == PS_GOOD, "GOOD is green");
+    CHECK(ps_tone_verdict_colour(PHAROS_TONE_WARN) == PS_WARN, "WARN is amber");
+    CHECK(ps_tone_verdict_colour(PHAROS_TONE_BAD)  == PS_BAD,  "BAD is red");
+    CHECK(ps_tone_verdict_colour(PHAROS_TONE_DIM)  == 0u,
+          "and chrome tones borrow nothing either");
+}
+
 void test_style(void)
 {
+    test_tone_limit_is_not_a_verdict();
     banner("style: the verdict palette is frozen");
     {
         /* These four are a contract with the operator, not a design choice.

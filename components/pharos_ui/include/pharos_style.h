@@ -51,6 +51,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "pharos_lens.h" /* pharos_tone_t: the tone contract lives here */
+
 #include "pharos_round.h"
 
 #ifdef __cplusplus
@@ -77,6 +79,19 @@ typedef enum {
     PS_TYPE_METRIC,    /* 48 - a bare number, when it IS the point */
     PS_TYPE_N,
 } ps_type_t;
+
+/* THE TONE CONTRACT, WHERE IT CAN BE TESTED.
+ *
+ * The rule that matters most about tones - "a verdict colour means the same
+ * thing on every page, and nothing else may borrow one" - lived only as a
+ * switch inside ESP-only code, enforced by reading it.
+ *
+ * The mapping itself cannot move here, because half of it resolves to THEME
+ * colours which are chosen on the device and deliberately mutable, while the
+ * four below are frozen. So what moves is the part that carries the rule: the
+ * frozen colour a tone is entitled to, or 0 for a tone that is not a verdict
+ * and must therefore be drawn from the chrome. */
+uint32_t ps_tone_verdict_colour(pharos_tone_t t);
 
 /* Point size of each step, for layout maths on the host. */
 extern const int16_t PS_TYPE_PX[PS_TYPE_N];

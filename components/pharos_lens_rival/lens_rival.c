@@ -442,12 +442,12 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
     case 1:
         snprintf(out->left, sizeof(out->left), "classic Bluetooth");
         snprintf(out->right, sizeof(out->right), "deaf");
-        out->tone = PHAROS_TONE_WARN;
+        out->tone = PHAROS_TONE_LIMIT;
         return true;
     case 2:
         snprintf(out->left, sizeof(out->left), "sub-GHz / NFC / IR");
         snprintf(out->right, sizeof(out->right), "deaf");
-        out->tone = PHAROS_TONE_WARN;
+        out->tone = PHAROS_TONE_LIMIT;
         return true;
     case 3:
         snprintf(out->left, sizeof(out->left), "hardware identified");
