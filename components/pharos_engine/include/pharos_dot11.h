@@ -25,6 +25,24 @@ extern "C" {
  * from a hand-built frame, and it needs only one beacon to say so. */
 uint8_t pharos_dot11_ie_count(const uint8_t *body, size_t len, size_t start);
 
+/* WHERE THIS FRAME'S ELEMENTS START, AND WHETHER THEY ARE THERE AT ALL.
+ *
+ * Two different questions that were being answered by one flag in the radio
+ * glue, with a remote memory-safety bug in the gap between them. Which offset
+ * the elements begin at is a property of the SUBTYPE - beacons and probe
+ * responses carry twelve bytes of fixed parameters first. Whether they are
+ * reachable is a property of THIS FRAME's length.
+ *
+ * Conflated, `body_len - 12` on a 28-byte beacon underflowed to 65528 and a
+ * parser walked 64 KB past the receive buffer. Answered separately, a runt
+ * frame simply carries no elements.
+ *
+ * Here rather than in the radio because the radio is ESP-only and cannot be
+ * host-tested, and this is exactly the arithmetic that needs a test. Returns
+ * false when the frame is too short to hold its own fixed parameters. */
+bool pharos_dot11_ie_window(uint8_t subtype, size_t body_len,
+                            size_t *out_off, size_t *out_len);
+
 /* Fixed-header parse. buf points at the start of the MAC header, len is what
  * the radio handed us. Returns false if the frame is too short to trust.
  * Fills type/subtype/addresses/seq/flags; the caller supplies rssi/channel. */

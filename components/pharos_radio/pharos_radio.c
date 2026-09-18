@@ -282,7 +282,46 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         const uint8_t *body = payload + 24;
         const size_t blen = (size_t)len - 24u;
         const uint8_t st = ev.u.dot11.subtype;
-        const bool has_fixed = (st == PHAROS_ST_BEACON || st == PHAROS_ST_PROBE_RESP);
+        /* HAS_FIXED MEANS THE FIXED PARAMETERS ARE ACTUALLY THERE.
+         *
+         * This used to mean only "this subtype carries a 12-byte fixed block",
+         * which is a statement about the STANDARD rather than about the frame
+         * in hand. Every element walk below takes its start offset into a
+         * function that guards itself - pharos_dot11_find_ie_from() and
+         * _ie_count() both open with `if (!body || len < start) return` - so a
+         * body shorter than 12 stopped them cleanly. One call did the
+         * arithmetic itself, and `blen - 12u` is unsigned.
+         *
+         * A 28-byte beacon gives blen = 4, so blen - 12u wraps, truncates to
+         * 65528, and pwps_parse walks up to 64 KB past the driver's receive
+         * buffer from inside the promiscuous callback. That is one frame, sent
+         * by anyone, against a detector whose entire job is to keep listening
+         * while somebody is attacking the air - and reading adjacent RAM into
+         * a vendor string that is then drawn on the glass and written into a
+         * report.
+         *
+         * Folding the length check into has_fixed fixes it for the call that
+         * was wrong and for any future one: inside this block the fixed
+         * parameters are now guaranteed present, so `blen - 12` cannot
+         * underflow. A runt beacon simply carries no elements, which is the
+         * correct reading of it. */
+        /* Two separate facts, because conflating them is what went wrong.
+         *
+         * WHICH OFFSET the elements start at is a property of the SUBTYPE: a
+         * beacon and a probe response carry 12 bytes of fixed parameters
+         * first; a probe request does not. WHETHER they are reachable is a
+         * property of THIS FRAME.
+         *
+         * Folding the length test into has_fixed closes the underflow but
+         * quietly answers the first question wrongly for a runt beacon - the
+         * walk would start at 0 and read timestamp bytes as an SSID. Keeping
+         * them apart means a short frame parses no elements, which is the only
+         * honest reading of it. */
+        size_t ie_off = 0, ie_len = 0;
+        const bool has_fixed =
+            pharos_dot11_ie_window(st, blen, &ie_off, &ie_len);
+        const bool subtype_fixed =
+            (st == PHAROS_ST_BEACON || st == PHAROS_ST_PROBE_RESP);
 
         /* IS THIS DISCONNECT ACTUALLY PROTECTED?
          *
@@ -313,19 +352,18 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             }
         }
 
-        if (has_fixed || st == PHAROS_ST_PROBE_REQ) {
+        if (blen >= ie_off && (subtype_fixed || st == PHAROS_ST_PROBE_REQ)) {
             /* Probe REQUESTS carry no fixed parameters; starting the walk 12
              * bytes in would skip their first element, which is the SSID - the
              * only one that matters. */
             /* How richly dressed the frame is, from the same walk. A real
              * access point carries a dozen elements or more; a hand-built
              * flood frame carries the three that make a phone list the name. */
-            ev.u.dot11.ie_count =
-                pharos_dot11_ie_count(body, blen, has_fixed ? 12u : 0u);
+            ev.u.dot11.ie_count = pharos_dot11_ie_count(body, blen, ie_off);
 
             uint8_t ie_len = 0;
             const uint8_t *ssid = pharos_dot11_find_ie_from(
-                body, blen, has_fixed ? 12u : 0u, PHAROS_IE_SSID, &ie_len);
+                body, blen, ie_off, PHAROS_IE_SSID, &ie_len);
             if (ssid && ie_len) {
                 const uint8_t n = ie_len > PHAROS_EV_SSID_MAX ? PHAROS_EV_SSID_MAX : ie_len;
                 memcpy(ev.u.dot11.ssid, ssid, n);
@@ -351,7 +389,7 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             }
             if (!already && s_wps_n < 24u) {
                 pwps_info_t wi;
-                if (pwps_parse(body + 12u, (uint16_t)(blen - 12u), &wi) &&
+                if (pwps_parse(body + ie_off, (uint16_t)ie_len, &wi) &&
                     wi.present) {
                     memcpy(s_wps_seen[s_wps_n++], ev.u.dot11.a3, 6);
                     char model[32];

@@ -157,3 +157,17 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # image linkable on IDF 6.0.
 CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+
+# THE SCREEN, AS THE OPERATOR ACTUALLY SEES IT.
+#
+# Until now the only way to know what the face looked like was tools/render,
+# which re-implements the geometry on a laptop - and a model that quietly
+# disagrees with the firmware will talk you into the wrong fix. It did exactly
+# that: the ring layout validated label positions a quarter-turn from where
+# they were drawn, and no amount of looking at the render could show it.
+#
+# lv_snapshot_take_to_draw_buf() renders the live widget tree into a buffer we
+# supply, so `screen dump` returns what is really on the glass. The buffer is
+# ours and lives in PSRAM, so this costs no internal DMA RAM - which is the
+# scarce thing on this board.
+CONFIG_LV_USE_SNAPSHOT=y

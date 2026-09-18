@@ -52,6 +52,11 @@ const char *pharos_disp_result_name(pharos_disp_result_t r);
  * gauge. Returns false if the PMU did not come up. */
 bool pharos_bsp_battery(pwr_battery_t *out);
 
+/* Stream the LIVE screen out of the console, run-length encoded and base64'd.
+ * See the note on the definition: this renders the real widget tree, so it is
+ * what is on the glass rather than what a model on a laptop believes. */
+bool pharos_bsp_screen_dump(void);
+
 /* ---- the motion sensor ----
  *
  * The board carries a QMI8658 six-axis IMU on the same I2C bus as the touch

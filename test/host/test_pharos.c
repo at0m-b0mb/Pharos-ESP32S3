@@ -376,8 +376,58 @@ static void test_dot11_ies(void)
     }
 }
 
+static void test_dot11_ie_window_cannot_underflow(void)
+{
+    banner("dot11: a runt beacon carries no elements, and cannot underflow");
+
+    /* THE REMOTE MEMORY-SAFETY BUG THIS EXISTS TO PREVENT.
+     *
+     * The radio computed the element window itself as `body_len - 12`, which
+     * is unsigned. A 28-byte beacon gives body_len = 4, so the subtraction
+     * wrapped, truncated to 65528, and a parser walked up to 64 KB past the
+     * driver's receive buffer - from inside the promiscuous callback, on one
+     * frame, sent by anyone. Reproduced under AddressSanitizer against the
+     * real parser before the fix.
+     *
+     * Two questions were being answered by one flag. WHICH offset the
+     * elements start at is a property of the subtype; WHETHER they are
+     * reachable is a property of this frame. */
+    size_t off = 999, len = 999;
+
+    /* Every body length a beacon can arrive with, including the ones that
+     * cannot hold their own fixed parameters. */
+    for (size_t blen = 0; blen <= 64u; blen++) {
+        const bool ok = pharos_dot11_ie_window(PHAROS_ST_BEACON, blen,
+                                               &off, &len);
+        CHECK(off == 12u, "a beacon's elements always start at 12 (blen=%u)",
+              (unsigned)blen);
+        if (blen < 12u) {
+            CHECK(!ok, "blen=%u is too short to have elements", (unsigned)blen);
+            CHECK(len == 0u, "and the length is zero, not enormous (got %u)",
+                  (unsigned)len);
+        } else {
+            CHECK(ok, "blen=%u reaches its elements", (unsigned)blen);
+            CHECK(len == blen - 12u, "with the right length");
+            CHECK(len <= blen, "which can never exceed the body");
+        }
+    }
+
+    /* The exact frame from the report: 28 bytes total, 24 of header, so a
+     * 4-byte body. Before the fix this produced 65528. */
+    CHECK(!pharos_dot11_ie_window(PHAROS_ST_BEACON, 4u, &off, &len),
+          "the 28-byte runt beacon is refused");
+    CHECK(len == 0u, "and yields no window (got %u)", (unsigned)len);
+
+    /* A probe request has no fixed parameters, so even an empty body is a
+     * legitimate window starting at zero. */
+    CHECK(pharos_dot11_ie_window(PHAROS_ST_PROBE_REQ, 0u, &off, &len),
+          "a probe request needs no fixed parameters");
+    CHECK(off == 0u && len == 0u, "and starts at zero");
+}
+
 int main(void)
 {
+    test_dot11_ie_window_cannot_underflow();
     printf("Pharos host tests\n");
     test_bus();
     test_lens();

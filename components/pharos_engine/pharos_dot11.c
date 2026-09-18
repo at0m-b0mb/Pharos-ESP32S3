@@ -23,6 +23,30 @@
  *
  * Bounds-checked exactly as the element search is: a truncated or hostile
  * frame stops the walk and we count only what could be verified. */
+bool pharos_dot11_ie_window(uint8_t subtype, size_t body_len,
+                            size_t *out_off, size_t *out_len)
+{
+    const bool fixed = (subtype == PHAROS_ST_BEACON ||
+                        subtype == PHAROS_ST_PROBE_RESP);
+    const size_t off = fixed ? 12u : 0u;
+    if (out_off) {
+        *out_off = off;
+    }
+    if (body_len < off) {
+        /* Too short to contain the fixed parameters, so there is nothing
+         * after them. Reported as zero rather than computed, because the
+         * subtraction that would compute it is the bug. */
+        if (out_len) {
+            *out_len = 0u;
+        }
+        return false;
+    }
+    if (out_len) {
+        *out_len = body_len - off;
+    }
+    return true;
+}
+
 uint8_t pharos_dot11_ie_count(const uint8_t *body, size_t len, size_t start)
 {
     if (!body || len < start) {

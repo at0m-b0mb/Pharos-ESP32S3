@@ -756,6 +756,11 @@ static int cli_lens(int argc, char **argv)
 static int cli_screen(int argc, char **argv)
 {
     const bool on = !(argc >= 2 && strcmp(argv[1], "off") == 0);
+    if (argc >= 2 && strcmp(argv[1], "dump") == 0) {
+        /* The live widget tree, not a model of it. See the note on
+         * pharos_bsp_screen_dump(). */
+        return pharos_bsp_screen_dump() ? 0 : 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "colour") == 0) {
         if (!pharos_bsp_display_lock(500)) {
             printf("could not take the LVGL lock - the display task is not running\n");
@@ -963,7 +968,7 @@ void pharos_console_start(void)
 
     const esp_console_cmd_t screen = {
         .command = "screen",
-        .help = "screen test | colour | on | off - prove the pixel path",
+        .help = "screen test | colour | dump | on | off - dump sends the real screen",
         .hint = "[test|on|off]",
         .func = &cli_screen,
     };

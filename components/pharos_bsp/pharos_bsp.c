@@ -820,3 +820,150 @@ const char *pharos_disp_result_name(pharos_disp_result_t r)
     default:                   return "?";
     }
 }
+
+/* ---- the screen, as the operator actually sees it ---------------------
+ *
+ * Until this existed, the only way to know what the face looked like was
+ * tools/render, which re-implements the geometry on a laptop. A model that
+ * quietly disagrees with the firmware will talk you into the wrong fix, and it
+ * did: the ring layout validated label positions a quarter-turn from where
+ * they were drawn, and three separate attempts to fix the guard failed because
+ * the render agreed with the guard rather than with the panel.
+ *
+ * This renders the LIVE widget tree - the real objects, the real theme, the
+ * real truncation - into a buffer we supply, and streams it out.
+ *
+ * WHY RUN-LENGTH ENCODED, AND WHY THAT IS NOT A SHORTCUT. The panel is 466x466
+ * at 16 bits, which is 434 KB raw; base64 makes it 580 KB, and the console
+ * would be busy for a long time. But this is a round face on an AMOLED whose
+ * background is true black, so most rows are one colour from end to end and
+ * the whole frame is a few per cent of that. The compression is high precisely
+ * BECAUSE of a design decision made for other reasons.
+ *
+ * The buffer is PSRAM. Internal DMA RAM is the scarce thing on this board -
+ * the draw buffers and the Wi-Fi driver compete for it - and a debug feature
+ * that could starve the display would be a poor trade.
+ */
+#if defined(CONFIG_PHAROS_HAS_VENDOR_BSP) && defined(CONFIG_LV_USE_SNAPSHOT)
+
+#include "draw/snapshot/lv_snapshot.h"
+
+#define FB_W BSP_LCD_H_RES
+#define FB_H BSP_LCD_V_RES
+
+static void fb_emit_base64(const uint8_t *p, size_t n)
+{
+    static const char *T =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    char line[77];
+    unsigned col = 0;
+    size_t i = 0;
+    while (i < n) {
+        const uint32_t a = p[i];
+        const uint32_t b = (i + 1 < n) ? p[i + 1] : 0;
+        const uint32_t c = (i + 2 < n) ? p[i + 2] : 0;
+        const uint32_t v = (a << 16) | (b << 8) | c;
+        line[col++] = T[(v >> 18) & 63];
+        line[col++] = T[(v >> 12) & 63];
+        line[col++] = (i + 1 < n) ? T[(v >> 6) & 63] : '=';
+        line[col++] = (i + 2 < n) ? T[v & 63] : '=';
+        i += 3;
+        if (col >= 76u) {
+            line[col] = '\0';
+            printf("%s\n", line);
+            col = 0;
+        }
+    }
+    if (col) {
+        line[col] = '\0';
+        printf("%s\n", line);
+    }
+}
+
+bool pharos_bsp_screen_dump(void)
+{
+    lv_draw_buf_t *buf = NULL;
+    uint8_t *rle = NULL;
+    bool ok = false;
+
+    if (!pharos_bsp_display_lock(1000)) {
+        printf("dump: display busy\n");
+        return false;
+    }
+
+    /* Ours, in PSRAM, freed before we return. Holding half a megabyte for a
+     * debug feature that is used occasionally would be the wrong trade. */
+    buf = lv_draw_buf_create(FB_W, FB_H, LV_COLOR_FORMAT_RGB565, LV_STRIDE_AUTO);
+    if (!buf) {
+        printf("dump: no buffer\n");
+        goto out;
+    }
+    /* CLEARED FIRST, SO UNRENDERED PIXELS READ AS BLACK RATHER THAN AS
+     * WHATEVER WAS IN PSRAM.
+     *
+     * The first capture came back with a magenta band across the bottom
+     * rows - not on the panel, only in the dump. A debug tool that invents
+     * pixels is worse than no debug tool, because it sends you hunting a
+     * rendering fault that does not exist. If the band survives this it is
+     * real; if it goes black, the snapshot simply did not cover those rows
+     * and the dump must say so rather than paint them. */
+    lv_draw_buf_clear(buf, NULL);
+
+    if (lv_snapshot_take_to_draw_buf(lv_screen_active(), LV_COLOR_FORMAT_RGB565,
+                                     buf) != LV_RESULT_OK) {
+        printf("dump: snapshot failed\n");
+        goto out;
+    }
+
+    /* Runs of identical pixels: count (16-bit) then the pixel (16-bit). A run
+     * never crosses a row, so the decoder can resynchronise on a row boundary
+     * if a byte is lost on the wire. */
+    const size_t cap = (size_t)FB_W * FB_H * 4u / 8u + 1024u;
+    rle = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!rle) {
+        printf("dump: no rle buffer\n");
+        goto out;
+    }
+    size_t out_n = 0;
+    for (uint32_t y = 0; y < FB_H; y++) {
+        const uint16_t *row =
+            (const uint16_t *)((const uint8_t *)buf->data + (size_t)y * buf->header.stride);
+        uint32_t x = 0;
+        while (x < FB_W) {
+            const uint16_t px = row[x];
+            uint32_t run = 1;
+            while (x + run < FB_W && row[x + run] == px && run < 0xFFFFu) {
+                run++;
+            }
+            if (out_n + 4u > cap) {
+                printf("dump: overflow\n");
+                goto out;
+            }
+            rle[out_n++] = (uint8_t)(run & 0xFF);
+            rle[out_n++] = (uint8_t)(run >> 8);
+            rle[out_n++] = (uint8_t)(px & 0xFF);
+            rle[out_n++] = (uint8_t)(px >> 8);
+            x += run;
+        }
+    }
+
+    printf("PHAROSFB %u %u rgb565rle %u\n", (unsigned)FB_W, (unsigned)FB_H,
+           (unsigned)out_n);
+    fb_emit_base64(rle, out_n);
+    printf("PHAROSFB END\n");
+    ok = true;
+
+out:
+    if (rle) heap_caps_free(rle);
+    if (buf) lv_draw_buf_destroy(buf);
+    pharos_bsp_display_unlock();
+    return ok;
+}
+
+#else
+bool pharos_bsp_screen_dump(void)
+{
+    printf("dump: not built with a panel\n");
+    return false;
+}
+#endif
