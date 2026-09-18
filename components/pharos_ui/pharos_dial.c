@@ -196,15 +196,72 @@ static void ring_label_box(const pd_ring_t *r, unsigned i, unsigned n,
                            int16_t w, int16_t h, float *x0, float *y0,
                            float *x1, float *y1)
 {
-    const float step = 360.0f / (float)n;
-    const float a = -90.0f + step * (float)i;
+    /* THE ARC THE RING IS ACTUALLY DRAWN ON.
+     *
+     * This assumed labels were spread evenly around a FULL circle starting at
+     * the top. The home ring is not drawn that way: it follows the gauge's own
+     * 270 degrees and leaves the bottom notch clear for the clock. So every
+     * clearance this scorer proved - the spacing between labels, and crucially
+     * the guarantee that none of them enters the core - was proved about
+     * positions nothing is ever drawn at.
+     *
+     * The first render with real names showed MIRAGE written straight through
+     * "WORTH A LOOK", which is the exact failure the core check exists to
+     * prevent. The check was correct; it was being asked about the wrong
+     * points. A layout that models a different geometry from the renderer is
+     * not a weaker guarantee, it is no guarantee at all. */
+    const float a = (n < 2u) ? -90.0f
+                             : (225.0f + 270.0f * (float)i / (float)(n - 1u));
+    /* pr_polar's convention, because pr_polar is what draws these.
+     *
+     * THE WHOLE POINT OF THIS FUNCTION IS TO MODEL WHERE A LABEL LANDS, and it
+     * was modelling somewhere else entirely: zero degrees here meant EAST
+     * (plain cos/sin) while zero degrees in pr_polar means NORTH. The same
+     * angle therefore described two points a quarter-turn apart, so every
+     * clearance this proved - spacing, the core, the headline - was proved
+     * about positions nothing is drawn at.
+     *
+     * That is what let MIRAGE be written through "WORTH A LOOK" while the
+     * guard reported it clear, and it survived three separate attempts to fix
+     * the guard, because the guard was never wrong about its own point. Two
+     * conventions for one quantity is the bug; there is now one. */
     const float rad = (float)pd_ring_label_r(r, i);
-    const float cx = rad * cosf(a * 3.14159265f / 180.0f);
-    const float cy = rad * sinf(a * 3.14159265f / 180.0f);
+    const float t = (a - 90.0f) * 3.14159265f / 180.0f;
+    const float cx = rad * cosf(t);
+    const float cy = rad * sinf(t);
     *x0 = cx - (float)w / 2.0f;
     *x1 = cx + (float)w / 2.0f;
     *y0 = cy - (float)h / 2.0f;
     *y1 = cy + (float)h / 2.0f;
+}
+
+bool pd_ring_label_fits(const pd_ring_t *r, unsigned i, unsigned n,
+                        int16_t label_w, int16_t label_h)
+{
+    if (!r || n == 0u || i >= n) {
+        return false;
+    }
+    float x0, y0, x1, y1;
+    ring_label_box(r, i, n, label_w, label_h, &x0, &y0, &x1, &y1);
+
+    /* Off the glass. */
+    const float c[4][2] = { { x0, y0 }, { x1, y0 }, { x0, y1 }, { x1, y1 } };
+    for (unsigned k = 0; k < 4u; k++) {
+        if (sqrtf(c[k][0] * c[k][0] + c[k][1] * c[k][1]) > (float)PR_SAFE_R) {
+            return false;
+        }
+    }
+    /* Into the middle, or across the headline's own footprint. */
+    const float nx = (x0 > 0.0f) ? x0 : ((x1 < 0.0f) ? -x1 : 0.0f);
+    const float ny = (y0 > 0.0f) ? y0 : ((y1 < 0.0f) ? -y1 : 0.0f);
+    if (sqrtf(nx * nx + ny * ny) < (float)PD_RING_CORE_R) {
+        return false;
+    }
+    if (x0 < (float)PD_HERO_HALF_W && x1 > -(float)PD_HERO_HALF_W &&
+        y0 < (float)PD_HERO_Y1 && y1 > (float)PD_HERO_Y0) {
+        return false;
+    }
+    return true;
 }
 
 int16_t pd_ring_label_r(const pd_ring_t *r, unsigned i)
@@ -298,6 +355,12 @@ static float ring_score(const pd_ring_t *r, unsigned n, int16_t w, int16_t h)
             const float nx = (ax0 > 0.0f) ? ax0 : ((ax1 < 0.0f) ? -ax1 : 0.0f);
             const float ny = (ay0 > 0.0f) ? ay0 : ((ay1 < 0.0f) ? -ay1 : 0.0f);
             if (sqrtf(nx * nx + ny * ny) < (float)PD_RING_CORE_R) {
+                return -1.0f;
+            }
+            /* ...and out of the HEADLINE's own footprint, which is a wide
+             * short box rather than that circle. See PD_HERO_HALF_W. */
+            if (ax0 < (float)PD_HERO_HALF_W && ax1 > -(float)PD_HERO_HALF_W &&
+                ay0 < (float)PD_HERO_Y1 && ay1 > (float)PD_HERO_Y0) {
                 return -1.0f;
             }
         }
@@ -400,7 +463,19 @@ void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
                 pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = 168,
                                 .staggered = false, .gap_px = 0, .capacity = k };
                 if (ring_score(&t, k, label_w, label_h) >= (float)gap) {
+                    /* TAKE THE RADIUS THAT MADE IT FIT, NOT JUST THE COUNT.
+                     *
+                     * This wrote only `capacity` and dropped `t`, so the
+                     * caller was told "I can name ten" while `out` still held
+                     * the radius chosen for the full count - a radius at which
+                     * those ten do NOT fit. The promise and the geometry
+                     * backing it were computed separately and only one of them
+                     * was kept. */
+                    const int16_t keep = out->r_dot;
+                    *out = t;
+                    out->r_dot = keep;
                     out->capacity = k;
+                    out->gap_px = (int16_t)ring_score(&t, k, label_w, label_h);
                     break;
                 }
             }

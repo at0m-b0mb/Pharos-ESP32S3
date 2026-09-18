@@ -53,6 +53,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "pharos_dial.h"
 #include "pharos_style.h"
 #include "pharos_theme.h"
 
@@ -124,6 +125,7 @@ static uint8_t s_ribbon_level[PHAROS_DISP_HISTORY];
 
 /* HOME */
 static lv_obj_t *s_h_dot[PHAROS_HUD_HOME_MAX];
+static lv_obj_t *s_h_name[PHAROS_HUD_HOME_MAX];
 static lv_obj_t *s_h_clock, *s_h_word, *s_h_sub, *s_h_active, *s_h_ring, *s_h_track;
 static unsigned s_h_n;
 
@@ -733,10 +735,31 @@ bool pharos_hud_create(void)
          * fill; that is what makes 12 look like 12 out of 100. */
         s_h_track = mk_arc(p, PS_RING_R * 2, PS_RING_W, C_TRACK, 100, 135, 270);
         s_h_ring  = mk_arc(p, PS_RING_R * 2, PS_RING_W, PS_GOOD, 0, 135, 270);
+        /* A DOT AND, WHEN THERE IS ROOM, ITS NAME.
+         *
+         * The ring used to be bare dots, with a comment pointing at a note
+         * that does not exist. Meanwhile pharos_ui.c was still running forty
+         * lines of capacity-aware, worst-first label selection whose result
+         * nothing consumed - the LUMEN rewrite dropped the labels and left
+         * the machinery that chose them.
+         *
+         * The cost of that was the whole point of the screen: twelve dots,
+         * two of them amber, and no way to tell WHICH watch wanted attention
+         * without stepping through every one. A ring that can show you
+         * something is wrong but not what is wrong makes you walk the list
+         * anyway, which is the work the ring exists to save.
+         *
+         * Not every dot is named - fourteen names do not fit on a 466 px
+         * circle at any radius, which is what pd_ring_capacity() measures.
+         * The caller names the ones that matter (whichever holds the radio,
+         * whatever has something to report, worst first) and the rest stay
+         * bare. An instrument does not number every tick. */
         for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
             s_h_dot[i] = mk_surface(p, 14, 14, 0, 0, C_TRACK, LV_OPA_COVER,
                                     LV_RADIUS_CIRCLE);
             show(s_h_dot[i], false);
+            s_h_name[i] = mk_label(p, PS_TYPE_LABEL, C_DIMMER, 0, 0, "");
+            show(s_h_name[i], false);
         }
         s_h_clock  = mk_label(p, PS_TYPE_LABEL, C_DIMMER, 0, PS_Y_CLOCK, "");
         s_h_word   = mk_label(p, PS_TYPE_HERO,  C_TEXT,   0, PS_Y_HERO,   "");
@@ -1196,13 +1219,25 @@ void pharos_hud_home(const struct pharos_hud_home *h)
     if (n > PHAROS_HUD_HOME_MAX) n = PHAROS_HUD_HOME_MAX;
     s_h_n = n;
 
-    /* One dot per watch, evenly round the rim. No labels - see the note at
-     * the build site. The dot's colour is what it last found; its OPACITY is
+    /* THE RING'S OWN GEOMETRY, not a guess.
+     *
+     * pd_ring_layout() is pure maths with host tests asserting that no two
+     * label boxes overlap and none escapes the safe radius, for EVERY count
+     * the ring can carry. Where one radius will not do it staggers adjacent
+     * labels between two, so a pair that is horizontally close is vertically
+     * apart. Using it here is what keeps the names off each other and off the
+     * headline. */
+    pd_ring_t ring;
+    pd_ring_layout(n, h->label_w ? h->label_w : 74,
+                   (int16_t)PS_TYPE_PX[PS_TYPE_LABEL], 12, &ring);
+
+    /* One dot per watch, evenly round the rim. The dot's colour is what it
+     * last found; its OPACITY is
      * how long ago, because there is one radio and the watches take turns. A
      * ring that drew a forty-second-old reading in the same ink as a live one
      * would be claiming sixteen receivers this device does not have. */
     for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
-        if (i >= n) { show(s_h_dot[i], false); continue; }
+        if (i >= n) { show(s_h_dot[i], false); show(s_h_name[i], false); continue; }
         const pr_point_t pt = pr_polar(PS_RING_R - 28, home_dot_deg(i, n));
         const bool active = ((int)i == h->active);
         const int size = active ? 20 : 14;
@@ -1216,6 +1251,35 @@ void pharos_hud_home(const struct pharos_hud_home *h)
         if (active) opa = 255u;
         lv_obj_set_style_bg_opa(s_h_dot[i], opa, 0);
         show(s_h_dot[i], true);
+
+        /* The name, for the ones the caller chose to name. Placed on the ring
+         * layout's own radius for this index, which is what makes the stagger
+         * work; faded with the dot, because a name drawn at full strength
+         * beside a forty-second-old reading would claim the reading is live. */
+        /* Chosen by the caller AND placeable at this position. See
+         * pd_ring_label_fits(): capacity answers a different question. */
+        const bool named = h->label_on[i] && h->label[i] && h->label[i][0] &&
+                           pd_ring_label_fits(&ring, i, n,
+                                              h->label_w ? h->label_w : 74,
+                                              (int16_t)PS_TYPE_PX[PS_TYPE_LABEL]);
+        show(s_h_name[i], named);
+        if (named) {
+            const int16_t lr = pd_ring_label_r(&ring, i);
+            const pr_point_t lp = pr_polar(lr, home_dot_deg(i, n));
+            /* Truncated to what the geometry can place; the full name is on
+             * the browse card and the live face. See PD_RING_NAME_MAX. */
+            char nm[PD_RING_NAME_MAX + 1];
+            unsigned k = 0;
+            while (k < PD_RING_NAME_MAX && h->label[i][k]) {
+                nm[k] = h->label[i][k];
+                k++;
+            }
+            nm[k] = '\0';
+            set_text(s_h_name[i], nm);
+            lv_obj_align(s_h_name[i], LV_ALIGN_CENTER, lp.x - PR_CX, lp.y - PR_CY);
+            set_fg(s_h_name[i], active ? C_ACCENT : C_DIMMER);
+            lv_obj_set_style_text_opa(s_h_name[i], opa, 0);
+        }
     }
 
     const uint32_t rgb = ps_alert_colour(h->worst_state);

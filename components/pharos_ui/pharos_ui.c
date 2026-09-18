@@ -32,6 +32,7 @@
 #include "pharos_bus.h"
 #include "pharos_dial.h"
 #include "pharos_hud.h"
+#include "pharos_style.h"
 #include "pharos_dial.h"
 #include "pharos_theme.h"
 #include "pharos_motion.h"
@@ -557,7 +558,23 @@ static void paint_home(void)
                 widest = k;
             }
         }
-        const int16_t lw = (int16_t)((widest ? widest : 7u) * 76u / 10u + 4u);
+        /* MEASURED AGAINST THE FONT IT WILL ACTUALLY BE DRAWN IN.
+         *
+         * This was `widest * 7.6 + 4`, a per-character width that belongs to
+         * a 12 px face. The ring names are set at PS_TYPE_LABEL (16 px), and
+         * a layout that believes its text is narrower than the renderer draws
+         * it is precisely how SENTINEL once ended up written through the
+         * middle of the face. PS_EM_W is the house estimate and deliberately
+         * rounds UP: guessing narrow puts text through the edge of the glass,
+         * guessing wide only costs a few pixels of capacity. */
+        /* Clamped to what the ring actually draws - see PD_RING_NAME_MAX.
+         * Sizing the layout for a longer string than the HUD will render
+         * throws away capacity for text that never appears. */
+        if (widest > PD_RING_NAME_MAX) {
+            widest = PD_RING_NAME_MAX;
+        }
+        const int16_t lw = (int16_t)((widest ? widest : 7u) *
+                                     (unsigned)PS_EM_W(PS_TYPE_PX[PS_TYPE_LABEL]) + 6u);
         /* Handed to the HUD so it sizes the ring against the same width this
          * capacity was computed from - see pharos_hud_home::label_w. */
         h.label_w = lw;

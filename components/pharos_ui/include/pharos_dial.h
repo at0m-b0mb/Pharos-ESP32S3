@@ -88,6 +88,32 @@ unsigned pd_dial_selected(const pd_dial_t *d, float rotation_deg);
  * through "worth a look" on the shipped dial. */
 #define PD_RING_CORE_R 100
 
+/* THE HEADLINE IS A WIDE BOX, NOT A DISC.
+ *
+ * PD_RING_CORE_R keeps labels out of a circle of radius 100 in the middle of
+ * the dial. That is the right shape for the score and the clock, and the wrong
+ * shape for the thing that actually occupies the middle: the verdict word, set
+ * at 36 px and running to about +/-140 px horizontally while being barely 40 px
+ * tall.
+ *
+ * A label at nine o'clock clears the CIRCLE comfortably - measured at 115 px
+ * against a guard of 100 - and is still drawn straight through "WORTH A LOOK",
+ * because at that height the headline extends far past 100. The guard was
+ * satisfied and the screen was unreadable, which is the worst combination: a
+ * check that passes while the thing it protects is broken.
+ *
+ * So the keep-out is the headline's own footprint. Half-width is generous on
+ * purpose - the hero band is the one piece of text allowed to run wide, and a
+ * label overlapping it costs two readings rather than one. */
+/* The band is placed where the hero ACTUALLY sits, not at the centre of the
+ * dial. PS_Y_HERO is -18 and the face is 36 px, so the word occupies roughly
+ * y -40..+4; a box centred on zero would block the wrong rows - too low, and
+ * eating the supporting number's line as well. Kept as literals because this
+ * header is pure geometry and does not depend on the style scale. */
+#define PD_HERO_HALF_W 148
+#define PD_HERO_Y0     (-44)
+#define PD_HERO_Y1     (6)
+
 /* THE WIDEST A RING LABEL CAN ACTUALLY BE.
  *
  * Nine capitals of montserrat_12 - FOOTPRINT is the longest name on the dial -
@@ -96,6 +122,19 @@ unsigned pd_dial_selected(const pd_dial_t *d, float rotation_deg);
  * the renderer drew wider text than that, and SENTINEL, CENSUS and SQUALL ended
  * up written through the middle of the face. The number lives here so the
  * layout and the renderer cannot disagree about it again. */
+/* THE RING CARRIES SHORT NAMES.
+ *
+ * Once the headline's real footprint is respected, a nine-character label -
+ * FOOTPRINT is the longest lens name - can be placed at only two of the
+ * eleven positions. Seven characters fit at eight of them, which is the
+ * difference between a ring that names what matters and a ring that names
+ * almost nothing.
+ *
+ * So the ring truncates. It is an at-a-glance index, not a caption: the full
+ * name is on the browse card and on the live face, one press away. Three of
+ * the twenty-one lenses are affected (SENTINEL, SPECTRUM, FOOTPRINT) and each
+ * is still unambiguous at seven. */
+#define PD_RING_NAME_MAX 7
 #define PD_RING_LABEL_W 74
 typedef struct {
     int16_t r_even, r_odd; /* label radius for even / odd items */
@@ -112,6 +151,23 @@ void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
 
 /* The label radius for item i under that layout. */
 int16_t pd_ring_label_r(const pd_ring_t *r, unsigned i);
+
+/* CAN THE LABEL AT POSITION i BE DRAWN AT ALL?
+ *
+ * The capacity number answers "how many names fit if they are spread evenly",
+ * and the ring does not spread them evenly - it has n fixed dot positions and
+ * names whichever SUBSET has something to say. Those are different questions,
+ * and the difference is not academic: with eleven watches and a capacity of
+ * eight, the layout validated eight evenly-spaced angles while the ring drew
+ * names at eleven-spaced ones, so a label could sit exactly where nothing had
+ * been checked - through the headline.
+ *
+ * This asks about one position, at the angle it is actually drawn at. The
+ * caller checks each name it intends to draw and silently drops the ones that
+ * do not clear. A missing name is a small loss; a name written through the
+ * verdict costs two readings. */
+bool pd_ring_label_fits(const pd_ring_t *r, unsigned i, unsigned n,
+                        int16_t label_w, int16_t label_h);
 
 /* True when no two of the n label boxes overlap and all sit inside the safe
  * radius. This is what the test asserts; it is exported so the device can

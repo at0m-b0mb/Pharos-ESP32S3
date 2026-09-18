@@ -1102,6 +1102,27 @@ static void screen_lumen_home(void)
     lumen_aura(worst);
     lumen_ring(58, 0, worst);
 
+    /* THE REAL RING GEOMETRY, because a render that is only approximately
+     * the firmware is a render that will talk you into the wrong fix.
+     *
+     * This used to draw bare dots at a radius of its own choosing, while the
+     * firmware placed labels with pd_ring_layout(). Looking at it told you
+     * the ring had no names - which was true of the render and, for a while,
+     * accidentally true of the device as well. Both now go through the same
+     * host-tested layout. */
+    static const char *names[11] = {
+        "WATCH", "CENSUS", "MIRAGE", "KARMA", "PROBE", "SQUALL",
+        "HARVEST", "TWIN", "VIGIL", "RIVAL", "WARD",
+    };
+    /* Which ones the caller would have chosen to name: whatever holds the
+     * radio, and anything with something to report. */
+    const bool named[11] = { 0,0,1,0,0,0,1,0,0,0,0 };
+
+    const int16_t lw = (int16_t)(PD_RING_NAME_MAX *
+                                 PS_EM_W(PS_TYPE_PX[PS_TYPE_LABEL]) + 6);
+    pd_ring_t ring;
+    pd_ring_layout(n, lw, (int16_t)PS_TYPE_PX[PS_TYPE_LABEL], 12, &ring);
+
     for (unsigned i = 0; i < n; i++) {
         /* Along the gauge's own 270 degrees, leaving the bottom notch for
          * the clock. */
@@ -1112,6 +1133,18 @@ static void screen_lumen_home(void)
                          : (state[i] == 2) ? PS_HIGH : PS_BAD;
         const int rr = ((int)i == active) ? 10 : 7;
         dot(p.x, p.y, rr, rgb_hex(c));
+
+        if ((named[i] || (int)i == active) &&
+            pd_ring_label_fits(&ring, i, n, lw,
+                               (int16_t)PS_TYPE_PX[PS_TYPE_LABEL])) {
+            const pr_point_t lp = pr_polar(pd_ring_label_r(&ring, i), a);
+            char nm[PD_RING_NAME_MAX + 1];
+            unsigned k = 0;
+            while (k < PD_RING_NAME_MAX && names[i][k]) { nm[k] = names[i][k]; k++; }
+            nm[k] = '\0';
+            text(lp.x, lp.y, PS_TYPE_PX[PS_TYPE_LABEL], 'c',
+                 ((int)i == active) ? C_CYAN : C_DIMMER, nm);
+        }
     }
 
     text(PR_CX, PR_CY + PS_Y_CLOCK, 16, 'c', C_DIMMER, "20:47");

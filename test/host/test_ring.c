@@ -135,8 +135,17 @@ static void test_ring_spacing_at_each_count(void)
     /* What the layout actually delivers. It stops searching once a single
      * radius clears the requirement - a tidy ring beats a marginally wider
      * gap - so these are the chosen arrangement, not the theoretical best. */
+    /* MEASURED ON THE ARC THE RING IS ACTUALLY DRAWN ON.
+     *
+     * These used to read { 8, 38 } ... { 12, 12 }, and they were measured
+     * against a layout that spread labels evenly round a FULL circle. The home
+     * ring follows the gauge's 270 degrees and leaves the bottom notch for the
+     * clock, so it has three quarters of the circumference and the same names
+     * are correspondingly tighter. The old table was not a stricter standard
+     * that we have relaxed; it was a measurement of a dial that does not
+     * exist. */
     struct { unsigned n; int16_t at_least; } want[] = {
-        { 8,  38 }, { 9,  29 }, { 10, 21 }, { 11, 14 }, { 12, 12 },
+        { 6,  60 }, { 7,  36 }, { 8,  26 }, { 9,  16 }, { 10, 6 },
     };
     for (unsigned i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
         pd_ring_t r;
@@ -149,20 +158,48 @@ static void test_ring_spacing_at_each_count(void)
     /* Twelve is the last count that reaches comfortable spacing, and it only
      * just does. Ten leaves half as much again, which is why the shipped
      * default is ten and not thirteen. */
-    for (unsigned n = 2; n <= 12; n++) {
+    /* Comfortable spacing is available up to NINE names on this arc, not
+     * twelve. Past that the layout reports a capacity below the count, which
+     * is the honest answer - the caller then names the watches that matter and
+     * leaves the rest as bare dots. */
+    for (unsigned n = 2; n <= 9; n++) {
         pd_ring_t r;
         pd_ring_layout(n, LBL_W, LBL_H, LBL_GAP, &r);
         CHECK(r.gap_px >= LBL_GAP, "%u watches are comfortably spaced", n);
     }
 
+    /* THE INVARIANT THAT MATTERS, AND IT IS MODEL-INDEPENDENT.
+     *
+     * Whatever the arc, whatever the count: every arrangement the layout
+     * declares usable must actually be usable - no two label boxes touching,
+     * none through the headline, none off the glass. The numbers above are
+     * calibration and may move again; this may not. */
+    for (unsigned n = 2; n <= 16; n++) {
+        pd_ring_t r;
+        pd_ring_layout(n, LBL_W, LBL_H, LBL_GAP, &r);
+        if (r.capacity >= 2u) {
+            CHECK(pd_ring_fits(&r, r.capacity, LBL_W, LBL_H, LBL_GAP),
+                  "%u watches: the %u it says it can name really do fit",
+                  n, r.capacity);
+        }
+    }
+
     /* And the honest upper bound: past twelve the dial is genuinely full, so
      * the default must not be set there and the operator adding a thirteenth
      * is making a knowing trade. */
+    /* `gap_px` now describes the labels that will ACTUALLY BE DRAWN rather
+     * than a hypothetical full set - once the layout has decided to name only
+     * some of them, the spacing it reports is theirs. So the honest test of
+     * "thirteen is too many" is that it refuses to name all thirteen, and that
+     * the subset it does name is properly spaced. */
     pd_ring_t r13;
     pd_ring_layout(13, LBL_W, LBL_H, LBL_GAP, &r13);
-    CHECK(r13.gap_px < LBL_GAP,
-          "thirteen cannot reach comfortable spacing (%d px)", (int)r13.gap_px);
-    CHECK(r13.gap_px > 0, "but it is still drawn without overlapping");
+    CHECK(r13.capacity < 13u,
+          "thirteen is more names than the arc carries (names %u)",
+          r13.capacity);
+    CHECK(r13.capacity >= 2u, "but it still names what it can");
+    CHECK(pd_ring_fits(&r13, r13.capacity, LBL_W, LBL_H, LBL_GAP),
+          "and the ones it names are drawn without overlapping");
 }
 
 /* THE SWEEP: EVERY COUNT THE OPERATOR CAN CONFIGURE, CHECKED.
@@ -246,15 +283,27 @@ static void test_ring_names_the_default_set(void)
     /* HARVEST, seven characters, is the longest of the eleven armed out of the
      * box - not FOOTPRINT, which is off by default. Sizing for the project's
      * longest name instead of the ring's cost a label. */
-    const int16_t harvest_w = (int16_t)(7u * 76u / 10u + 4u);
-    CHECK(pd_ring_capacity(harvest_w, 14, 12) >= 11u,
-          "eleven seven-character names all fit (capacity %u)",
-          pd_ring_capacity(harvest_w, 14, 12));
+    /* Sized at the face the names are drawn in, PS_TYPE_LABEL. The old
+     * numbers used 7.6 px per character, which belongs to a 12 px font. */
+    /* PD_RING_NAME_MAX is the contract: the ring truncates to seven, so seven
+     * is the width the layout is entitled to assume. */
+    const int16_t harvest_w = (int16_t)(PD_RING_NAME_MAX * 10 + 6);
+    CHECK(pd_ring_capacity(harvest_w, 16, 12) >= 8u,
+          "eight seven-character names fit (capacity %u)",
+          pd_ring_capacity(harvest_w, 16, 12));
 
-    /* And the worst case is still handled honestly rather than overflowing. */
-    const int16_t longest_w = (int16_t)(9u * 76u / 10u + 4u);
-    const unsigned cap = pd_ring_capacity(longest_w, 14, 12);
-    CHECK(cap >= 10u && cap <= 16u, "nine-character names still fit %u", cap);
+    /* AND THE REASON THE CONTRACT EXISTS.
+     *
+     * Untruncated, a nine-character name can be placed at only two of the
+     * eleven positions once the headline's footprint is respected - which is
+     * why the ring truncates rather than pretending otherwise. This asserts
+     * the gap between the two, so nobody quietly raises PD_RING_NAME_MAX
+     * without discovering what it costs. */
+    const int16_t longest_w = (int16_t)(9 * 10 + 6);
+    const unsigned untruncated = pd_ring_capacity(longest_w, 16, 12);
+    CHECK(untruncated < pd_ring_capacity(harvest_w, 16, 12),
+          "nine characters would cost capacity (%u vs %u)",
+          untruncated, pd_ring_capacity(harvest_w, 16, 12));
 }
 
 void test_ring(void)
