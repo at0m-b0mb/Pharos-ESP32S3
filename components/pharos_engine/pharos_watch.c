@@ -570,7 +570,18 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
             if (!mac_eq(h->src, sources[s])) continue;
             hits++;
             rssi_sum += h->rssi;
-            if (!(h->flags & PHAROS_DOT11_F_PROTECTED)) {
+            /* PROTECTED, OR CARRYING THE PROOF THAT IT IS.
+             *
+             * 802.11w encrypts unicast robust management frames (Protected
+             * bit set) but protects GROUP-ADDRESSED ones with BIP: integrity
+             * only, no encryption, Protected bit deliberately 0, and the
+             * protection appended as a Management MIC element. Counting the
+             * clear bit alone made every honest broadcast deauth from an
+             * 802.11w network look impossible - and this counter feeds
+             * PW_FORGE_MFP_PROOF, the one finding this engine calls a
+             * contradiction rather than an estimate. */
+            if (!(h->flags & PHAROS_DOT11_F_PROTECTED) &&
+                !(h->flags & PHAROS_DOT11_F_MFP_SEEN)) {
                 unprot++;
             }
             /* RETRANSMISSIONS REUSE THE SEQUENCE NUMBER. That is not a

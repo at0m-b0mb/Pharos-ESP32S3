@@ -284,6 +284,35 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         const uint8_t st = ev.u.dot11.subtype;
         const bool has_fixed = (st == PHAROS_ST_BEACON || st == PHAROS_ST_PROBE_RESP);
 
+        /* IS THIS DISCONNECT ACTUALLY PROTECTED?
+         *
+         * 802.11w protects UNICAST robust management frames with CCMP, which
+         * sets the Protected Frame bit. It protects GROUP-ADDRESSED ones with
+         * BIP, which does not: the body is never encrypted, the bit stays 0,
+         * and the protection is an appended Management MIC element (ID 76).
+         *
+         * Nothing here parsed that element, so PHAROS_DOT11_F_MFP_SEEN was
+         * only ever set by the synthetic scenario generator - three lenses
+         * read a flag that is always zero on real air. Watch then read a clear
+         * Protected bit as PROOF of forgery, which made every legitimate
+         * broadcast deauth an 802.11w access point sends while rebooting or
+         * steering a band into the single strongest claim this device can
+         * make, with the confidence ceiling raised to match.
+         *
+         * A detector must not read its own missing instrumentation as a
+         * finding. The element is two bytes past the reason code and the walk
+         * is the same bounds-checked one every other element uses. */
+        if (st == PHAROS_ST_DEAUTH || st == PHAROS_ST_DISASSOC) {
+            uint8_t mlen = 0;
+            const uint8_t *mmie =
+                pharos_dot11_find_ie_from(body, blen, 2u, 76u, &mlen);
+            /* 16 for BIP-CMAC-128, 24 for the GMAC variants. A length this
+             * element cannot legitimately have is not an MMIE. */
+            if (mmie && (mlen == 16u || mlen == 24u)) {
+                ev.u.dot11.flags |= PHAROS_DOT11_F_MFP_SEEN;
+            }
+        }
+
         if (has_fixed || st == PHAROS_ST_PROBE_REQ) {
             /* Probe REQUESTS carry no fixed parameters; starting the walk 12
              * bytes in would skip their first element, which is the SSID - the

@@ -845,8 +845,74 @@ static void test_watch_hints_fit_the_glass(void)
     }
 }
 
+/* A goodbye an 802.11w access point genuinely sent to everyone: BIP-protected,
+ * so the Protected bit is clear by design and the MMIE is what carries the
+ * proof. */
+static void bip_broadcast_deauth(pw_engine_t *e, ap_t *ap, uint64_t t_us,
+                                 uint8_t flags)
+{
+    ap->seq = (uint16_t)((ap->seq + 1) & 0x0FFF);
+    pharos_ev_dot11_t d = frame(PHAROS_ST_DEAUTH, BCAST, ap->bssid, ap->rssi,
+                                3, ap->seq, flags, 0);
+    pw_observe(e, &d, t_us);
+}
+
+static void test_watch_bip_broadcast_is_not_forgery(void)
+{
+    banner("watch: a BIP-protected broadcast deauth is not proof of forgery");
+
+    /* THE STRONGEST CLAIM THIS ENGINE MAKES, FIRING ON A REBOOTING ROUTER.
+     *
+     * 802.11w protects UNICAST robust management frames with CCMP, which sets
+     * the Protected Frame bit. It protects GROUP-ADDRESSED ones with BIP,
+     * which does not: the body is never encrypted, the bit stays 0, and the
+     * protection is an appended Management MIC element.
+     *
+     * PW_FORGE_MFP_PROOF read that clear bit as a contradiction - "an
+     * unprotected disconnect claiming that BSSID cannot have come from it" -
+     * set hard=true and raised the confidence ceiling. So every legitimate
+     * broadcast deauth an 802.11w network sends while rebooting or steering a
+     * band became the single strongest finding in the product.
+     *
+     * And PHAROS_DOT11_F_MFP_SEEN existed, was read by three lenses, and was
+     * set only by the synthetic scenario generator - never by the radio. The
+     * engine was reading its own missing instrumentation as evidence. */
+    ap_t ap = mk_ap(0x01, -50, PHAROS_RSN_F_MFP_REQUIRED, 3);
+
+    pw_engine_t e;
+    pw_reset(&e);
+    beacons(&e, &ap, 12, 0);
+    for (unsigned i = 0; i < 4u; i++) {
+        bip_broadcast_deauth(&e, &ap, 1500000ull + i * 60000ull,
+                             PHAROS_DOT11_F_MFP_SEEN);
+    }
+
+    pw_context_t camped = { .dwell_permil = 1000, .bus_yield_permil = 1000,
+                            .window_ms = 15000 };
+    pw_verdict_t v;
+    pw_evaluate(&e, 2000000ull, &camped, &v);
+
+    CHECK(!(v.forgery & PW_FORGE_MFP_PROOF),
+          "a frame carrying its MMIE is not called impossible");
+
+    /* THE FINDING MUST SURVIVE. The same frames with no protection of any
+     * kind on an MFP-required network really are impossible. */
+    ap_t bare = mk_ap(0x02, -50, PHAROS_RSN_F_MFP_REQUIRED, 3);
+    pw_engine_t f;
+    pw_reset(&f);
+    beacons(&f, &bare, 12, 0);
+    for (unsigned i = 0; i < 4u; i++) {
+        bip_broadcast_deauth(&f, &bare, 1500000ull + i * 60000ull, 0);
+    }
+    pw_verdict_t w;
+    pw_evaluate(&f, 2000000ull, &camped, &w);
+    CHECK(w.forgery & PW_FORGE_MFP_PROOF,
+          "a genuinely unprotected one still is");
+}
+
 void test_watch(void)
 {
+    test_watch_bip_broadcast_is_not_forgery();
     test_watch_ceiling();
     test_watch_quiet();
     test_watch_volume_alone_never_alarms();
