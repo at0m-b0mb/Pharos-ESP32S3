@@ -96,6 +96,11 @@ typedef enum {
  *
  * So an identification assembled from a flood is reported as the flood, and
  * the operator is told the names in view are attacker-controlled. */
+/* A room too busy for the coherence test to mean anything. Reported rather
+ * than silently dropped: "I am not answering that question here" is a
+ * different statement from "I looked and there was nothing". */
+#define PRV_NOTE_CROWDED   (1u << 8)
+
 #define PRV_NOTE_NAMES_FORGED (1u << 7)
 
 /* DEBRIS IS AN IDENTIFICATION WITH NOTHING STEADY BEHIND IT.
@@ -222,6 +227,30 @@ typedef enum {
  * genuinely busy room. */
 #define PRV_COHERE_DB      6   /* how tight the level cluster must be   */
 #define PRV_COHERE_ADDRS  14   /* distinct addresses inside that band   */
+
+/* AND HOW MUCH OF THE ROOM THAT BAND HAS TO BE.
+ *
+ * The count alone was the whole test, and it has a failure mode that only
+ * shows up somewhere crowded. Reported from a university: thousands of
+ * students, and Rival called it suspicious activity.
+ *
+ * The reasoning behind the count is sound in a quiet room - one radio wearing
+ * many addresses appears at ONE signal level, because it is one transmitter at
+ * one distance. In a lecture hall it collapses. Hundreds of phones at roughly
+ * similar distances, every one of them randomising its address, will fill any
+ * 6 dB band by crowd geometry alone. The test then fires on the population of
+ * the room and forces the ACTIVE band, which says "something is being run".
+ * Nothing was being run.
+ *
+ * What actually separates the two is CONCENTRATION. A flood is one radio
+ * dominating a sparse background, so its band holds most of everything in
+ * view. A crowd is a broad distribution in which every 6 dB slice looks busy
+ * and no slice dominates. So the band must be both large ENOUGH and a large
+ * SHARE of what is tracked.
+ *
+ * This is the same shape as the cap in pharos_flood: a dense city is BUSY, not
+ * attacked, and volume alone may never reach the alarm band. */
+#define PRV_COHERE_SHARE  60   /* percent of tracked addresses, minimum  */
 #define PRV_COHERE_SLOTS  64   /* how many we track at once             */
 #define PRV_COHERE_WINDOW_US 6000000ull
 
@@ -404,7 +433,10 @@ typedef struct {
     uint8_t score;
     uint8_t raw_score;
     uint8_t families;
-    uint8_t notes;
+    /* SIXTEEN BITS, NOT EIGHT. Bits 0..7 were all spoken for, so the ninth
+     * note would have been silently discarded by the assignment - a flag that
+     * is set, never stored, and therefore never shown. */
+    uint16_t notes;
     prv_band_t band;
 
     uint8_t n_devices;      /* distinct KINDS, not addresses */

@@ -486,8 +486,16 @@ static void cohere_note(prv_state_t *s, const uint8_t addr[6], const char *name,
 
     /* Latch here, where the state is writable, rather than deciding afresh in
      * every evaluation. See PRV_FLOOD_HOLD_US. */
-    if (cohere_peak(s, 0) >= PRV_COHERE_ADDRS) {
-        s->coh_flood_us = t_us;
+    /* The latch applies the SAME rule as the verdict. Latching on the count
+     * alone would hold a crowd as a flood for PRV_FLOOD_HOLD_US after the
+     * verdict had already stopped calling it one - the screen would disagree
+     * with itself, and the stale half would be the alarming one. */
+    {
+        const unsigned peak = cohere_peak(s, 0);
+        if (peak >= PRV_COHERE_ADDRS && s->coh_n &&
+            peak * 100u >= (unsigned)s->coh_n * PRV_COHERE_SHARE) {
+            s->coh_flood_us = t_us;
+        }
     }
 }
 
@@ -1185,7 +1193,20 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
         out->cohere_names = s->coh_n_names;
         out->cohere_rssi = coh_at;
 
-        if (tight >= PRV_COHERE_ADDRS) {
+        /* Large enough AND a large enough share of the room. See
+         * PRV_COHERE_SHARE: the count alone fires on a crowd. */
+        const unsigned tracked = s ? s->coh_n : 0u;
+        const bool concentrated =
+            tracked && (tight * 100u >= tracked * PRV_COHERE_SHARE);
+
+        if (tight >= PRV_COHERE_ADDRS && !concentrated) {
+            /* Busy enough to look like a flood, too spread out to be one.
+             * Said out loud rather than dropped: refusing to answer is a
+             * different statement from finding nothing. */
+            out->notes |= PRV_NOTE_CROWDED;
+        }
+
+        if (tight >= PRV_COHERE_ADDRS && concentrated) {
             out->notes |= PRV_NOTE_COHERENT;
             /* Every name in view is now the attacker's to choose. */
             out->notes |= PRV_NOTE_NAMES_FORGED;

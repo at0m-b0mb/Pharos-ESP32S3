@@ -1324,8 +1324,69 @@ static void test_rival_a_turn_on_another_band_is_not_absence(void)
     CHECK_EQ(v.n_flipper, 0);
 }
 
+static void test_rival_a_crowd_is_not_an_attack(void)
+{
+    banner("rival: a lecture hall full of phones is not a flood");
+
+    /* REPORTED FROM A UNIVERSITY. Thousands of students, and Rival called it
+     * suspicious activity.
+     *
+     * The coherence test fires when 14 distinct addresses share a 6 dB signal
+     * band, on the reasoning that one radio wearing many addresses appears at
+     * ONE level because it is one transmitter at one distance. That holds in a
+     * quiet room. In a lecture hall it collapses: hundreds of phones at
+     * similar distances, every one randomising its address, fill any 6 dB band
+     * by crowd geometry alone - and the test then forces the ACTIVE band,
+     * which says "something is being run".
+     *
+     * What separates them is CONCENTRATION, not count. */
+    prv_state_t s;
+    prv_reset(&s);
+
+    /* THE HARD CASE, not a convenient one. Not a crowd spread thinly across a
+     * building - that is easy to tell from a flood. This is a lecture hall:
+     * sixty devices packed into twelve dB because the bodies carrying them are
+     * all at roughly the same distance. Any 6 dB band here holds well over the
+     * fourteen addresses the count test asks for, so only the SHARE can tell
+     * this from one radio. */
+    for (unsigned i = 0; i < 60u; i++) {
+        uint8_t a[6] = { 0x40, 0x11, 0x22, 0x33, (uint8_t)(i >> 8), (uint8_t)i };
+        const int8_t rssi = (int8_t)(-52 - (int)(i % 12));  /* -52 .. -63 */
+        prv_observe_ble(&s, a, NULL, rssi, T0 + (uint64_t)i * 50000ull);
+    }
+
+    prv_verdict_t v;
+    prv_evaluate(&s, T0 + 4000000ull, &v);
+    CHECK(!(v.families & PRV_FAM_ONE_RADIO),
+          "a spread-out crowd does not read as one radio");
+    CHECK(v.band < PRV_BAND_ACTIVE,
+          "and does not reach ACTIVE (band %u, score %u)", v.band, v.score);
+    CHECK(v.notes & PRV_NOTE_CROWDED,
+          "and it says why it declined to answer");
+
+    /* THE FINDING MUST SURVIVE. One radio dominating a sparse room: the same
+     * address count, but concentrated instead of spread. */
+    prv_state_t f;
+    prv_reset(&f);
+    for (unsigned i = 0; i < 24u; i++) {
+        uint8_t a[6] = { 0x50, 0xAA, 0xBB, 0xCC, (uint8_t)(i >> 8), (uint8_t)i };
+        /* One transmitter, one distance: a couple of dB of noise, no more. */
+        const int8_t rssi = (int8_t)(-55 - (int)(i % 3));
+        prv_observe_ble(&f, a, NULL, rssi, T0 + (uint64_t)i * 50000ull);
+    }
+    prv_verdict_t w;
+    prv_evaluate(&f, T0 + 4000000ull, &w);
+    CHECK(w.families & PRV_FAM_ONE_RADIO,
+          "one radio wearing many addresses is still caught");
+    CHECK(w.band >= PRV_BAND_ACTIVE,
+          "and still reaches ACTIVE (band %u, score %u)", w.band, w.score);
+    CHECK(!(w.notes & PRV_NOTE_CROWDED),
+          "and is not excused as a crowd");
+}
+
 void test_rival(void)
 {
+    test_rival_a_crowd_is_not_an_attack();
     test_rival_devboard_access_points();
     test_rival_implant();
     test_rival_serial_bridge_by_profile();

@@ -476,6 +476,14 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
             int rs = v.cohere_rssi < -99 ? -99 : v.cohere_rssi;
             snprintf(out->right, sizeof(out->right), "%u@%ddB", na, rs);
             out->tone = PHAROS_TONE_BAD;
+        } else if (v.notes & PRV_NOTE_CROWDED) {
+            /* Busy enough to look like a flood, too spread out to be one.
+             * Shown rather than left as a bare number, because "I declined to
+             * answer here" and "I looked and found nothing" are different
+             * statements and only one of them invites you to move somewhere
+             * quieter and try again. */
+            snprintf(out->right, sizeof(out->right), "crowd");
+            out->tone = PHAROS_TONE_WARN;
         } else {
             snprintf(out->right, sizeof(out->right), "%u",
                      (unsigned)v.cohere_addrs);
