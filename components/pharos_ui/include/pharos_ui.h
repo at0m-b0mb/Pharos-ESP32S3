@@ -105,6 +105,12 @@ void pharos_ui_aegis_ack(void);
  * it back, and how the `guide` console command works. */
 void pharos_ui_guide_start(void);
 
+/* How much of the battery reaches the glass, and the control that cycles it.
+ * Remembered across boots: a preference somebody sets once should not have to
+ * be set again after every reboot. */
+pharos_batt_mode_t pharos_ui_batt_mode(void);
+void pharos_ui_batt_mode_next(void);
+
 /* Never returns. fence_ok gates the radio lenses: when the transmit fence did
  * not verify clean, the UI still runs but refuses to launch anything holding a
  * radio capability, and says why. */

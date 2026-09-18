@@ -461,6 +461,44 @@ static void home_open(unsigned i)
 static pwr_battery_t s_batt;
 static bool s_batt_ok;
 
+/* ---- how much of the battery reaches the glass ---------------------- */
+
+static pharos_batt_mode_t s_batt_mode = PHAROS_BATT_AUTO;
+
+pharos_batt_mode_t pharos_ui_batt_mode(void) { return s_batt_mode; }
+
+static void batt_mode_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_u8(h, "batt_mode", (uint8_t)s_batt_mode);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void batt_mode_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("pharos", NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint8_t v = 0;
+    if (nvs_get_u8(h, "batt_mode", &v) == ESP_OK && v < PHAROS_BATT_MODE_N) {
+        s_batt_mode = (pharos_batt_mode_t)v;
+    }
+    nvs_close(h);
+}
+
+void pharos_ui_batt_mode_next(void)
+{
+    s_batt_mode = (pharos_batt_mode_t)((s_batt_mode + 1u) % PHAROS_BATT_MODE_N);
+    pharos_hud_battery_mode(s_batt_mode);
+    batt_mode_save();
+    ESP_LOGI(TAG, "battery on screen: %u", (unsigned)s_batt_mode);
+}
+
 static void batt_apply(void)
 {
     if (s_batt_ok) {
@@ -2047,6 +2085,8 @@ void pharos_ui_run(const pharos_bsp_status_t *bsp, bool fence_ok)
              s_motion.present ? "live" : "unavailable (no IMU answered)");
     tower_arm_all();
     ring_load();
+    batt_mode_load();
+    pharos_hud_battery_mode(s_batt_mode);
     s_tower_on = s_fence_ok && s_tower.n > 0;
     s_view = VIEW_HOME;
     s_cursor = 0;

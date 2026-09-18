@@ -103,8 +103,9 @@ static bool s_built;
 
 /* Shared chrome */
 static lv_obj_t *s_tell;
-static lv_obj_t *s_batt_track, *s_batt_fill;
-static int s_batt_last = -2;   /* the permanent receive-only pip */
+static lv_obj_t *s_batt_track, *s_batt_fill, *s_batt_txt;
+static int s_batt_last = -2;
+static pharos_batt_mode_t s_batt_mode = PHAROS_BATT_AUTO;   /* the permanent receive-only pip */
 static lv_obj_t *s_toast;
 
 /* The aura: three nested discs whose COLOUR is the verdict. Opacity is fixed
@@ -668,6 +669,11 @@ bool pharos_hud_create(void)
     s_batt_fill  = mk_arc(scr, 440, 3, C_DIM,   100, 240, 60);
     show(s_batt_track, false);
     show(s_batt_fill, false);
+
+    /* The readout, above everything else. Hidden unless the mode asks for it
+     * or the charge is worth mentioning - see pharos_batt_mode_t. */
+    s_batt_txt = mk_label(scr, PS_TYPE_LABEL, C_DIM, 0, PS_Y_BATT, "");
+    show(s_batt_txt, false);
 
     s_tell = mk_surface(scr, 10, 10, 0, PS_Y_TELL, PS_GOOD, LV_OPA_COVER,
                         LV_RADIUS_CIRCLE);
@@ -1551,6 +1557,14 @@ void pharos_hud_detail(const char *lens, const char *head_left,
 
 /* ---- charge ---------------------------------------------------------- */
 
+void pharos_hud_battery_mode(pharos_batt_mode_t m)
+{
+    if (m < PHAROS_BATT_MODE_N && m != s_batt_mode) {
+        s_batt_mode = m;
+        s_batt_last = -2; /* force the next reading to repaint */
+    }
+}
+
 void pharos_hud_battery(uint8_t pct, bool charging, bool present)
 {
     if (!s_built) return;
@@ -1559,6 +1573,7 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present)
         if (s_batt_last != -1) {
             show(s_batt_track, false);
             show(s_batt_fill, false);
+            show(s_batt_txt, false);
             s_batt_last = -1;
         }
         return;
@@ -1584,6 +1599,23 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present)
                        : (pct <= 25u) ? PS_WARN
                        : C_DIM;
     set_arc_rgb(s_batt_fill, rgb);
+
+    /* THE TWO QUESTIONS THE ARC CANNOT ANSWER: what percentage, and is it
+     * going up. AUTO speaks only when there is something to say. */
+    const bool worth_saying = charging || pct <= PHAROS_BATT_LOW_PCT;
+    const bool want = (s_batt_mode == PHAROS_BATT_ALWAYS) ||
+                      (s_batt_mode == PHAROS_BATT_AUTO && worth_saying);
+    show(s_batt_txt, want);
+    if (want) {
+        char b[16];
+        /* Spelled out rather than drawn as a bolt: a glyph the font does not
+         * carry renders as an empty box, and "is it charging" is exactly the
+         * question that must not be answered by a box. */
+        snprintf(b, sizeof b, charging ? "%u%% CHG" : "%u%%",
+                 (unsigned)(pct > 100u ? 100u : pct));
+        set_text(s_batt_txt, b);
+        set_fg(s_batt_txt, rgb);
+    }
 }
 
 /* ---- the guide -------------------------------------------------------

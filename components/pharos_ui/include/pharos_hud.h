@@ -265,6 +265,31 @@ void pharos_hud_guide(const struct pharos_hud_guide *g);
 
 /* Charge, drawn on the rim above every page. `present` false hides it, which
  * is the honest answer on a board running from USB with no pack fitted. */
+/* HOW MUCH OF THE BATTERY THE OPERATOR WANTS ON THE GLASS.
+ *
+ * The rim arc alone could not answer either question somebody actually asks:
+ * what percentage, and is it going up. A thin coloured arc says "roughly this
+ * full" and says nothing at all about charging, so the only way to find out
+ * was the console - which is exactly where a person holding the device is not
+ * looking.
+ *
+ * ALWAYS is not the default. The screen is the loudest thing about this
+ * device in a dark room, and a permanent readout costs both attention and a
+ * little power, so the default reports itself only when there is something to
+ * say: charging, or low enough to matter. Somebody who wants it all the time
+ * says so once. */
+/* Below this, AUTO speaks up. Chosen so there is time to do something about
+ * it rather than as a round number: a sweep is minutes, not seconds. */
+#define PHAROS_BATT_LOW_PCT 25
+
+typedef enum {
+    PHAROS_BATT_OFF = 0,  /* the rim arc only, as before        */
+    PHAROS_BATT_AUTO,     /* when charging, or when it is low   */
+    PHAROS_BATT_ALWAYS,
+    PHAROS_BATT_MODE_N,
+} pharos_batt_mode_t;
+
+void pharos_hud_battery_mode(pharos_batt_mode_t m);
 void pharos_hud_battery(uint8_t pct, bool charging, bool present);
 
 /* The boot splash and the `screen test` command. */

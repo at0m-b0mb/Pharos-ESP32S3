@@ -181,6 +181,15 @@ uint32_t ps_alert_colour(uint8_t alert);
 #define PS_Y_PAGE    (188)  /* the detail page counter                 */
 #define PS_Y_TELL    (214)  /* the permanent receive-only pip          */
 
+/* CHARGE, ABOVE EVERYTHING ELSE.
+ *
+ * The topmost slot on the face, chosen because it is the only offset free on
+ * every page: the ribbon starts at -150, the guide's pips and the detail
+ * title sit at -196, and nothing else goes above that. At this offset the
+ * chord is 144 px wide, which is fourteen characters at PS_TYPE_LABEL - far
+ * more than "100%" needs. */
+#define PS_Y_BATT    (-212)
+
 /* THE GUIDE'S OWN BANDS.
  *
  * The first draft put its body text at +132/+162 and its hint at +198, which

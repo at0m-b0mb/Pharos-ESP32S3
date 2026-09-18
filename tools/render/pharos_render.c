@@ -1077,6 +1077,16 @@ static void lumen_chips(const char *const *lab, unsigned n, uint8_t lit,
 }
 
 /* The receive-only tell: a fact, not an alert, so it never animates. */
+/* The charge readout, in the topmost slot. Drawn on the home sample so the
+ * one thing that appears on every page is visible in at least one render. */
+static void lumen_batt(const char *txt, const char *colour)
+{
+    if (txt && *txt) {
+        text(PR_CX, PR_CY + PS_Y_BATT, PS_TYPE_PX[PS_TYPE_LABEL], 'c',
+             colour, txt);
+    }
+}
+
 static void lumen_tell(void)
 {
     dot(PR_CX, PR_CY + PS_Y_TELL, 5, C_GREEN);
@@ -1147,6 +1157,7 @@ static void screen_lumen_home(void)
         }
     }
 
+    lumen_batt("96% CHG", C_GREEN);
     text(PR_CX, PR_CY + PS_Y_CLOCK, 16, 'c', C_DIMMER, "20:47");
     glowtext(PR_CX, PR_CY + PS_Y_HERO, 36, 'c', rgb_hex(worst),
              fit_r(PS_TYPE_HERO, PS_Y_HERO, PS_INNER_R, "WORTH A LOOK"));

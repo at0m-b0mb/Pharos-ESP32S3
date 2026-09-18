@@ -227,6 +227,7 @@ enum {
     ROW_VOLUME,
     ROW_REGION,
     ROW_GUIDE,
+    ROW_BATTERY,
     ROW_EDITABLE_N, /* everything from here down is read-only */
 };
 
@@ -297,6 +298,21 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
                                                : PHAROS_TONE_DIM;
         }
         return true;
+    case ROW_BATTERY: {
+        /* The rim arc says "roughly this full" and cannot say what percentage
+         * or whether it is going up - so the only way to find out was the
+         * console, which is where a person holding the device is not looking. */
+        static const char *k_name[PHAROS_BATT_MODE_N] = {
+            "arc only", "when low", "always",
+        };
+        const unsigned m = (unsigned)pharos_ui_batt_mode();
+        snprintf(out->left, sizeof(out->left), "battery on screen");
+        snprintf(out->right, sizeof(out->right), "%s",
+                 k_name[m < PHAROS_BATT_MODE_N ? m : 0]);
+        out->tone = PHAROS_TONE_NEUTRAL;
+        return true;
+    }
+
     case ROW_GUIDE:
         /* Reachable without a laptop. The tour is shown once on a first boot
          * and is otherwise unfindable, which makes it useless the moment the
@@ -478,6 +494,10 @@ static bool k_system_row_edit(unsigned row)
         return true;
     }
 
+    case ROW_BATTERY:
+        pharos_ui_batt_mode_next();
+        return true;
+
     case ROW_GUIDE:
         pharos_ui_guide_start();
         ESP_LOGI(TAG, "replaying the guide from settings");
@@ -559,6 +579,30 @@ static bool k_system_expand(unsigned row, unsigned sub,
                                                 : PHAROS_TONE_DIM;
         return true;
     }
+
+    case ROW_BATTERY:
+        if (sub == 0) {
+            snprintf(out->left, sizeof(out->left), "arc only");
+            snprintf(out->right, sizeof(out->right), "the rim");
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        }
+        if (sub == 1) {
+            snprintf(out->left, sizeof(out->left), "when low, or charging");
+            snprintf(out->right, sizeof(out->right), "under %u%%",
+                     (unsigned)PHAROS_BATT_LOW_PCT);
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        }
+        if (sub == 2) {
+            /* Said plainly because it is a real cost, not a preference: the
+             * screen is the loudest thing about this device in a dark room. */
+            snprintf(out->left, sizeof(out->left), "always on the glass");
+            snprintf(out->right, sizeof(out->right), "costs power");
+            out->tone = PHAROS_TONE_DIM;
+            return true;
+        }
+        return false;
 
     case ROW_GUIDE:
         if (sub == 0) {
