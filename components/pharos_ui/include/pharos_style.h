@@ -190,6 +190,14 @@ uint32_t ps_alert_colour(uint8_t alert);
  * more than "100%" needs. */
 #define PS_Y_BATT    (-212)
 
+/* THE READING, INSIDE THE RING RATHER THAN BESIDE THE ARC.
+ *
+ * PS_Y_BATT is the arc's own band, eleven pixels deep between the score ring
+ * and the glass - too shallow for the 14px face, so a percentage written there
+ * overlapped the ring below and the arc above. This is the clear band inside
+ * the ring: under the arc, above where the ribbon starts at -150. */
+#define PS_Y_BATT_TXT (-176)
+
 /* THE GUIDE'S OWN BANDS.
  *
  * The first draft put its body text at +132/+162 and its hint at +198, which

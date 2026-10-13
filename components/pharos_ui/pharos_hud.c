@@ -104,6 +104,21 @@ static bool s_built;
 
 /* Shared chrome */
 static lv_obj_t *s_tell;
+/* THE CHARGE ARC, AND WHY THE READING IS NOT BESIDE IT.
+ *
+ * The arc lives outside the score ring so the two can never be confused for
+ * one instrument. That leaves a band ELEVEN PIXELS deep between the score
+ * ring's outer edge and the glass, which is the whole reason the percentage
+ * used to look wrong there: the smallest face on this device is fourteen
+ * pixels tall, so any reading written in that band overlapped the score ring
+ * below it and its own arc above it. It was not badly positioned, it was
+ * unpositionable.
+ *
+ * So the arc carries the level on the rim - that is what an arc is for - and
+ * the number sits in the clear band INSIDE the ring, where there is room for
+ * it to be read. */
+#define BATT_R   440 /* outer, clear of the score ring at 412          */
+#define BATT_W_  4   /* a hair thicker than the old 3, with round ends */
 static lv_obj_t *s_batt_track, *s_batt_fill, *s_batt_txt;
 static int s_batt_last = -2;
 static pharos_batt_mode_t s_batt_mode = PHAROS_BATT_AUTO;   /* the permanent receive-only pip */
@@ -677,14 +692,21 @@ bool pharos_hud_create(void)
      * so it cannot collide with any page's content, and it spans only the 60
      * degrees at the top where no page draws. Persistent chrome, like the
      * receive-only pip at the bottom: present on every page, owned by none. */
-    s_batt_track = mk_arc(scr, 440, 3, C_TRACK, 100, 240, 60);
-    s_batt_fill  = mk_arc(scr, 440, 3, C_DIM,   100, 240, 60);
+    s_batt_track = mk_arc(scr, BATT_R, BATT_W_, C_TRACK, 100, 240, 60);
+    s_batt_fill  = mk_arc(scr, BATT_R, BATT_W_, C_DIM,   100, 240, 60);
+    lv_obj_set_style_arc_rounded(s_batt_track, true, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_batt_fill, true, LV_PART_INDICATOR);
     show(s_batt_track, false);
     show(s_batt_fill, false);
 
-    /* The readout, above everything else. Hidden unless the mode asks for it
-     * or the charge is worth mentioning - see pharos_batt_mode_t. */
-    s_batt_txt = mk_label(scr, PS_TYPE_LABEL, C_DIM, 0, PS_Y_BATT, "");
+    /* The reading, in the clear band inside the ring. Small, dim, and silent
+     * unless the mode asks or the charge is worth mentioning - see
+     * pharos_batt_mode_t. An explicit width because an auto-sized label
+     * aligned by its centre grows symmetrically, which is how the first
+     * version of this ran over its own arc. */
+    s_batt_txt = mk_label(scr, PS_TYPE_MICRO, C_DIM, 0, PS_Y_BATT_TXT, "");
+    lv_obj_set_width(s_batt_txt, 120);
+    lv_obj_set_style_text_align(s_batt_txt, LV_TEXT_ALIGN_CENTER, 0);
     show(s_batt_txt, false);
 
     s_tell = mk_surface(scr, 10, 10, 0, PS_Y_TELL, PS_GOOD, LV_OPA_COVER,
@@ -1677,7 +1699,11 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present, bool approx)
     /* Charging is a state, not a level, so it gets its own key rather than
      * sharing the level's. Packed into the dirty check so a steady battery
      * costs nothing per frame. */
-    const int key = (int)pct + (charging ? 1000 : 0) + (approx ? 2000 : 0);
+    const bool worth = charging || pct <= PHAROS_BATT_LOW_PCT;
+    const bool show_txt = (s_batt_mode == PHAROS_BATT_ALWAYS) ||
+                          (s_batt_mode == PHAROS_BATT_AUTO && worth);
+    const int key = (int)pct + (charging ? 1000 : 0) + (approx ? 2000 : 0)
+                  + (show_txt ? 4000 : 0);
     if (key == s_batt_last) return;
     s_batt_last = key;
 
@@ -1694,20 +1720,27 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present, bool approx)
                        : C_DIM;
     set_arc_rgb(s_batt_fill, rgb);
 
-    /* THE TWO QUESTIONS THE ARC CANNOT ANSWER: what percentage, and is it
-     * going up. AUTO speaks only when there is something to say. */
-    const bool worth_saying = charging || pct <= PHAROS_BATT_LOW_PCT;
-    const bool want = (s_batt_mode == PHAROS_BATT_ALWAYS) ||
-                      (s_batt_mode == PHAROS_BATT_AUTO && worth_saying);
+    /* THE TWO QUESTIONS THE CELL CANNOT ANSWER: what percentage, and is it
+     * going up. AUTO speaks only when there is something to say.
+     *
+     * THE GROUP STAYS CENTRED EITHER WAY. With a reading beside it the cell
+     * slides left so the pair is balanced about the vertical axis; alone, the
+     * cell is the only thing there and sits on the axis itself. A chrome
+     * element that jumps off-centre whenever it has something to say looks
+     * like a layout fault rather than a design. */
+    const bool want = show_txt;
     show(s_batt_txt, want);
     if (want) {
-        char b[16];
-        /* Spelled out rather than drawn as a bolt: a glyph the font does not
-         * carry renders as an empty box, and "is it charging" is exactly the
-         * question that must not be answered by a box. */
+        char b[24];
         /* A tilde is the whole apology: the pack voltage disagrees with the
-         * gauge, so this is the gauge's opinion and not a measurement. */
-        snprintf(b, sizeof b, charging ? "%s%u%% CHG" : "%s%u%%",
+         * gauge, so this is the gauge's opinion and not a measurement.
+         *
+         * The bolt is LVGL's own symbol, which the built-in Montserrat faces
+         * carry. It was checked ON THE GLASS before being trusted, because a
+         * glyph the font does not have renders as an empty box and "is it
+         * charging" is exactly the question that must not be answered by a
+         * box - which is why this used to spell out "CHG". */
+        snprintf(b, sizeof b, charging ? LV_SYMBOL_CHARGE " %s%u%%" : "%s%u%%",
                  approx ? "~" : "", (unsigned)(pct > 100u ? 100u : pct));
         set_text(s_batt_txt, b);
         set_fg(s_batt_txt, rgb);
