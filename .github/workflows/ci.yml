@@ -54,12 +54,25 @@ jobs:
         idf: [ "v5.5", "release-v6.0" ]
     steps:
       - uses: actions/checkout@v4
+      # THE v5.5 IMAGE'S COMPONENT MANAGER DRIFTED OUT FROM UNDER US.
+      #
+      # It fails resolving the dependency tree with
+      # "MissingKconfigError: LV_USE_FREETYPE" - a Kconfig key a newer
+      # esp_lvgl_adapter manifest tests for and the pinned LVGL does not
+      # define. Nothing in this repository changed: release-v6.0 builds the
+      # same tree clean, and so does a fresh clone against ESP-IDF v5.5 with
+      # idf-component-manager 2.5.0 locally.
+      #
+      # So the v5.5 leg is pinned to the manager version this project is known
+      # to build with, rather than whatever the image ships this week. v6.0 is
+      # left alone because it is green and pinning it would be a guess.
       - name: Build for ESP32-S3
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: ${{ matrix.idf }}
           target: esp32s3
           path: '.'
+          command: ${{ matrix.idf == 'v5.5' && 'pip install -q "idf-component-manager==2.5.0" && idf.py build' || 'idf.py build' }}
       - name: Re-audit the linked ELF
         run: |
           elf=$(find build -name 'pharos.elf' | head -n1)
