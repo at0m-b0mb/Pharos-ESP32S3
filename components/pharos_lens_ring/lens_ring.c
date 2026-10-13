@@ -51,16 +51,22 @@ static bool k_ring_display(struct pharos_lens_display *o)
     }
     const uint32_t lap = pharos_ui_ring_lap_ms();
 
-    snprintf(o->big, sizeof(o->big), "%u", on);
-    snprintf(o->band, sizeof(o->band), "of %u watching", n);
+    /* THE WORD LEADS AND THE NUMBER FOLLOWS IT, so the word has to stand up on
+     * its own. This read "of 16 watching" over "5", because the count went in
+     * the number slot and a fragment that needs the count in front of it went
+     * in the word slot. The glass showed the two halves of one phrase in the
+     * wrong order. */
+    const bool running = pharos_ui_ring_running();
+    snprintf(o->big, sizeof(o->big), "%u of %u", on, n);
+    snprintf(o->band, sizeof(o->band), "%s", running ? "watching" : "paused");
     /* THE TRADE, ON THE GLASS. One radio: fewer watches means each comes round
      * sooner, and that is the entire reason to switch any of them off. */
     snprintf(o->detail, sizeof(o->detail), "%u.%us a lap", (unsigned)(lap / 1000u),
              (unsigned)((lap % 1000u) / 100u));
     snprintf(o->advice, sizeof(o->advice), "%s",
-             pharos_ui_ring_running() ? "Touch a row to switch it on or off."
-                                      : "Rotation paused - nothing is watching.");
-    if (!pharos_ui_ring_running()) {
+             running ? "Touch a row to switch it on or off."
+                     : "Rotation paused - nothing is watching.");
+    if (!running) {
         snprintf(o->why, sizeof(o->why), "%s", "top row starts it again");
     }
 

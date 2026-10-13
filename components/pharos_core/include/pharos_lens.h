@@ -39,6 +39,16 @@ typedef enum {
 #define PHAROS_DISP_FAMILIES 4
 #define PHAROS_DISP_HISTORY 16
 
+/* "1 device", not "1 devices".
+ *
+ * A plural that does not agree is the cheapest possible tell that nobody read
+ * the screen, and it undermines the numbers beside it - a reader who catches
+ * the device getting English wrong starts wondering what else it got wrong. */
+static inline const char *pharos_plural(unsigned n)
+{
+    return (n == 1u) ? "" : "s";
+}
+
 struct pharos_lens_display {
     char big[16];     /* the headline: a score, a grade, a word     */
     char band[24];    /* what that headline MEANS                   */

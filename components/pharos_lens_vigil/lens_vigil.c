@@ -305,8 +305,11 @@ static bool k_vigil_display(struct pharos_lens_display *o)
     pv_verdict_t v = s_verdict;
     snprintf(o->big, sizeof(o->big), "%u", v.score);
     snprintf(o->band, sizeof(o->band), "%s", pv_band_name(v.band));
-    snprintf(o->detail, sizeof(o->detail), "%u tags  %u following  %u places",
-             v.n_tags, v.n_following, v.n_locales);
+    snprintf(o->detail, sizeof(o->detail),
+             "%u tag%s  %u following  %u place%s",
+             v.n_tags, pharos_plural((unsigned)v.n_tags),
+             v.n_following,
+             v.n_locales, pharos_plural((unsigned)v.n_locales));
     snprintf(o->advice, sizeof(o->advice), "%s", v.headline ? v.headline : "");
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
 

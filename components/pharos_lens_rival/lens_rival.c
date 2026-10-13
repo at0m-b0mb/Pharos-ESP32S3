@@ -196,8 +196,12 @@ static void rival_event(const pharos_event_t *ev)
                 if (n > PR_NAME_MAX) {
                     n = PR_NAME_MAX;
                 }
-                memcpy(name, &d[i + 2], n);
-                name[n] = '\0';
+                /* A BLE local name is chosen entirely by the advertiser and
+                 * this one is printed to the serial console. Raw, an ESC byte
+                 * in it starts an ANSI sequence on the operator's terminal.
+                 * See pharos_copy_printable(). */
+                (void)pharos_copy_printable(name, (unsigned)sizeof name,
+                                            &d[i + 2], n);
                 break;
             }
             i = (uint8_t)(i + 1u + l);

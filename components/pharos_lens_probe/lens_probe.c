@@ -191,8 +191,14 @@ static bool k_probe_display(struct pharos_lens_display *o)
         return true;
     }
     snprintf(o->big, sizeof(o->big), "%u", worst.exposure);
-    snprintf(o->band, sizeof(o->band), "%s", pp_grade_name(worst.grade));
-    snprintf(o->detail, sizeof(o->detail), "%u devices  %u leaking names", n, leaky);
+    /* THE BIGGEST THING ON THE GLASS HAS TO SAY SOMETHING. An ungraded worst
+     * case renders as "--", which is honest about the grade and useless as a
+     * headline - it was the hero word with "0" underneath it. */
+    snprintf(o->band, sizeof(o->band), "%s",
+             (worst.grade == PP_GRADE_UNGRADED) ? "nothing named"
+                                                : pp_grade_name(worst.grade));
+    snprintf(o->detail, sizeof(o->detail), "%u device%s  %u leaking name%s",
+             n, pharos_plural(n), leaky, pharos_plural(leaky));
     snprintf(o->advice, sizeof(o->advice), "%s",
              leaky ? "Names announced to everyone." : "Nothing named yet.");
     if (worst.networks) {

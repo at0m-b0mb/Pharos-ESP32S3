@@ -848,7 +848,16 @@ static bool k_twin_display(struct pharos_lens_display *o)
     pt_verdict_t v = s_twin_worst;
     snprintf(o->big, sizeof(o->big), "%u", v.score);
     snprintf(o->band, sizeof(o->band), "%s", pt_band_name(v.band));
-    snprintf(o->detail, sizeof(o->detail), "\"%s\"  ceil %u", s_twin_ssid, v.ceiling);
+    /* EMPTY QUOTATION MARKS ARE NOT A NAME. Before any network has been
+     * named this printed a bare pair of quotes next to the ceiling, which on
+     * the glass reads as a rendering fault rather than as "nothing yet". */
+    if (s_twin_ssid[0]) {
+        snprintf(o->detail, sizeof(o->detail), "\"%s\"  ceil %u",
+                 s_twin_ssid, v.ceiling);
+    } else {
+        snprintf(o->detail, sizeof(o->detail), "no name yet  ceil %u",
+                 v.ceiling);
+    }
     snprintf(o->advice, sizeof(o->advice), "%s", pt_band_advice(v.band));
     o->score = v.score; o->ceiling = v.ceiling; o->has_score = true;
 

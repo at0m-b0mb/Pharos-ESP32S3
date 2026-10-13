@@ -151,7 +151,11 @@ typedef struct {
      * three or four that make a phone list the name. Zero for frames that are
      * not beacons or probe responses. */
     uint8_t ie_count;
-    char ssid[PHAROS_EV_SSID_MAX];
+    /* One byte longer than the longest legal SSID, so a full 32-character
+     * name still fits WITH a terminator. Consumers read ssid_len, but the
+     * console and the glass read the string, and a 32-byte buffer holding 32
+     * characters has nowhere to put the NUL. */
+    char ssid[PHAROS_EV_SSID_MAX + 1];
 } pharos_ev_dot11_t;
 
 #define PHAROS_BLE_ADV_MAX 31
@@ -177,6 +181,49 @@ typedef struct {
  * The ring is fixed. This is here because a walker that trusts a length wider
  * than its own buffer is one bad event away from reading out of bounds, and
  * the walkers should not have to know how the event reached them. */
+/* COPY TEXT THAT CAME OFF THE AIR FROM A STRANGER.
+ *
+ * An SSID is thirty-two bytes chosen entirely by whoever is transmitting, and
+ * a BLE local name is chosen the same way. Both are drawn onto the glass, both
+ * are printed to the serial console, and both go into reports.
+ *
+ * Copied raw they do three things. A byte the font does not carry draws as an
+ * empty box - "P4wnP1" appeared on the detail page as a box followed by its
+ * name. Control bytes corrupt the console. And an ESC byte starts an ANSI
+ * escape sequence, which means a network name within radio range can move the
+ * operator's terminal cursor, recolour it, or clear it - the receive-only
+ * device would be the delivery mechanism.
+ *
+ * pharos_wps.c has had this guard on vendor and model strings since it was
+ * written. SSIDs and device names never got it; this is that same guard, in
+ * one place, for everything that arrives as somebody else's text.
+ *
+ * Returns the number of characters written, which is NOT the same as the
+ * number offered: a name made entirely of bytes we will not render comes back
+ * empty, and a caller that says "hidden" for an empty SSID needs to be able to
+ * tell that apart from a name it simply refused to draw. */
+static inline unsigned pharos_copy_printable(char *dst, unsigned cap,
+                                             const uint8_t *src, unsigned len)
+{
+    unsigned w = 0;
+    if (!dst || cap == 0u) {
+        return 0;
+    }
+    if (src) {
+        for (unsigned i = 0; i < len && w + 1u < cap; i++) {
+            const unsigned char c = src[i];
+            if (c >= 0x20u && c < 0x7Fu) {
+                dst[w++] = (char)c;
+            }
+        }
+    }
+    while (w && dst[w - 1] == ' ') {
+        w--; /* trailing padding is common and looks like a bug on the glass */
+    }
+    dst[w] = '\0';
+    return w;
+}
+
 /* NIMBLE HANDS ADDRESSES OVER LEAST-SIGNIFICANT BYTE FIRST.
  *
  * Everything else in this firmware carries a MAC the way 802.11 does and the

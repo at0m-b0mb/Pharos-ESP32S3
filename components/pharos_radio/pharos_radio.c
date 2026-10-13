@@ -365,9 +365,11 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             const uint8_t *ssid = pharos_dot11_find_ie_from(
                 body, blen, ie_off, PHAROS_IE_SSID, &ie_len);
             if (ssid && ie_len) {
-                const uint8_t n = ie_len > PHAROS_EV_SSID_MAX ? PHAROS_EV_SSID_MAX : ie_len;
-                memcpy(ev.u.dot11.ssid, ssid, n);
-                ev.u.dot11.ssid_len = n;
+                /* Somebody else's text, cleaned at the one door it comes in
+                 * through. See pharos_copy_printable(). */
+                ev.u.dot11.ssid_len = (uint8_t)pharos_copy_printable(
+                    ev.u.dot11.ssid, (unsigned)sizeof ev.u.dot11.ssid, ssid,
+                    ie_len);
             }
         }
         if (has_fixed) {
