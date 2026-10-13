@@ -2048,6 +2048,11 @@ void pharos_hud_splash(const char *version, bool fence_clean)
 void pharos_hud_colourbars(void) {}
 void pharos_hud_battery(uint8_t p, bool c, bool q, bool a)
 { (void)p; (void)c; (void)q; (void)a; }
+/* The no-panel build needs one of these for every entry point the real build
+ * has, which is what check_sources.sh stage 6 exists to prove. This one was
+ * missing from the moment the battery gained a mode, and CI has been red on it
+ * since. */
+void pharos_hud_battery_mode(pharos_batt_mode_t m) { (void)m; }
 void pharos_hud_advice_page(const char *l, const char *a) { (void)l; (void)a; }
 void pharos_hud_guide(const struct pharos_hud_guide *g) { (void)g; }
 
