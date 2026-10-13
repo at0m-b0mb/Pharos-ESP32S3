@@ -70,6 +70,39 @@ def shoot(dev, out, cmds, settle, timeout, tries):
     raise FrameError(str(last))
 
 
+SAFE_R = 224          # pharos_round.h: PR_SAFE_R, where the glass stops
+CENTRE = 233
+
+
+def escapes(img):
+    """Count lit pixels outside the safe radius.
+
+    tools/render bounds-checks the SIMULATED face against this radius. This is
+    the same check against what the panel actually drew - which catches the
+    cases the simulation cannot know about, like a real font being wider than
+    the 0.6em estimate the layout was solved with."""
+    px = img.load()
+    w, h = img.size
+    n, far = 0, 0
+    r2max = SAFE_R * SAFE_R
+    for y in range(h):
+        dy = y - CENTRE
+        dy2 = dy * dy
+        if dy2 > r2max and abs(dy) - SAFE_R > w:
+            continue
+        for x in range(w):
+            dx = x - CENTRE
+            r2 = dx * dx + dy2
+            if r2 <= r2max:
+                continue
+            r, g, b = px[x, y]
+            if r + g + b > 60:
+                n += 1
+                if r2 > far:
+                    far = r2
+    return n, int(far ** 0.5)
+
+
 def sheet(shots, path, cols=5, cell=200, pad=10):
     """A contact sheet you can take in at one glance - the point is to spot
     the one screen that looks wrong among twenty that look right."""
@@ -96,7 +129,7 @@ def main():
     ap.add_argument('--port')
     ap.add_argument('--lens', nargs='*', help="only these lens ids")
     ap.add_argument('--detail', action='store_true',
-                    help="also capture each lens' detail page")
+                    help="also capture each lens' advice page and detail rows")
     ap.add_argument('--settle', type=float, default=3.0)
     ap.add_argument('--timeout', type=float, default=40.0)
     ap.add_argument('--tries', type=int, default=3)
@@ -114,7 +147,11 @@ def main():
     for lid in ids:
         views = [('', [f"lens {lid}"])]
         if a.detail:
-            views.append(('.detail', [f"lens {lid}", "nav detail"]))
+            # The bottom strip has three stops: the face, then the full advice,
+            # then the rows. One tap reaches the advice, two reach the detail.
+            views.append(('.advice', [f"lens {lid}", "nav detail"]))
+            views.append(('.detail',
+                          [f"lens {lid}", "nav detail", "nav detail"]))
         for suffix, cmds in views:
             name = lid + suffix
             path = os.path.join(a.out, name.replace('.', '_') + '.png')
@@ -122,8 +159,16 @@ def main():
                 img, skipped = shoot(dev, path, cmds, a.settle, a.timeout,
                                      a.tries)
                 shots.append((name, img))
-                note = f"  ({skipped} log lines stepped over)" if skipped else ""
-                print(f"  ok   {name}{note}")
+                esc, far = escapes(img)
+                if esc:
+                    failed.append((name, f"{esc} lit pixels past the "
+                                         f"{SAFE_R}px safe radius (to r={far})"))
+                    print(f"  ESC  {name}: {esc} px outside the glass "
+                          f"(furthest r={far})")
+                else:
+                    note = (f"  ({skipped} log lines stepped over)"
+                            if skipped else "")
+                    print(f"  ok   {name}{note}")
             except (FrameError, StaleFirmware) as e:
                 failed.append((name, str(e)))
                 print(f"  FAIL {name}: {e}")
