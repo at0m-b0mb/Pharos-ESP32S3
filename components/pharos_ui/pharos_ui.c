@@ -13,6 +13,7 @@
  * reaches for first sit at the top. main.c never names a lens; adding one .c
  * file to the build adds it to this dial automatically.
  */
+#include <stdarg.h>
 #include "pharos_ui.h"
 
 #include <stdio.h>
@@ -1689,6 +1690,36 @@ void pharos_ui_ring_reset(void)
     ESP_LOGI(TAG, "ring: reset to defaults");
 }
 
+/* APPEND, AND ADVANCE BY WHAT WAS ACTUALLY WRITTEN.
+ *
+ * snprintf returns the length it WOULD have written, not what it did. The
+ * dump below used `k += snprintf(buf + k, ...)`, so the moment one line was
+ * truncated k ran past cap - and every later call then formed `buf + k`, a
+ * pointer more than one past the end of the object. That is undefined
+ * behaviour even though the paired size argument is 0 and nothing is copied.
+ *
+ * The visible half of the same bug was that the operator's own `tower` output
+ * was cut without saying so. This keeps k inside the buffer, which makes the
+ * pointer arithmetic valid, and the caller can tell it filled up. */
+static size_t ui_append(char *buf, size_t cap, size_t k, const char *fmt, ...)
+{
+    if (!buf || cap == 0u) {
+        return 0u;
+    }
+    if (k >= cap - 1u) {
+        return cap - 1u; /* full - never advance past the last byte */
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = vsnprintf(buf + k, cap - k, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        return k;
+    }
+    const size_t room = cap - k - 1u;
+    return k + (((size_t)n < room) ? (size_t)n : room);
+}
+
 void pharos_ui_tower_dump(char *buf, size_t cap)
 {
     if (!buf || !cap) {
@@ -1699,7 +1730,7 @@ void pharos_ui_tower_dump(char *buf, size_t cap)
     ptw_summarise(&s_tower, now, &sum);
     static const char *fresh[] = { "fresh", "ageing", "expired" };
     size_t k = 0;
-    k += (size_t)snprintf(buf + k, (k < cap) ? cap - k : 0,
+    k = ui_append(buf, cap, k,
                           "watchtower: %s, %u armed, dwell %ums, %u rotations\n"
                           "  headline: %s   (reporting %u, quiet %u, unknown %u,"
                           " alarms %u)\n",
@@ -1717,8 +1748,7 @@ void pharos_ui_tower_dump(char *buf, size_t cap)
          * visits - and telling a watch that is switched off from one that has
          * simply not had its turn yet is the first thing anybody asks of it. */
         if (!w->armed) {
-            k += (size_t)snprintf(buf + k, (k < cap) ? cap - k : 0,
-                                  "   %-11s off\n", w->name);
+            k = ui_append(buf, cap, k, "   %-11s off\n", w->name);
             continue;
         }
         /* And what it CAUGHT, which a live reading cannot show - see
@@ -1732,12 +1762,19 @@ void pharos_ui_tower_dump(char *buf, size_t cap)
             snprintf(latched, sizeof(latched), "  [caught %s %us ago]",
                      ptw_state_name(w->peak_state), (unsigned)pa);
         }
-        k += (size_t)snprintf(buf + k, (k < cap) ? cap - k : 0,
+        k = ui_append(buf, cap, k,
                               "%s %-11s %-9s %3u/%-3u  %-7s %us ago  visits=%u%s\n",
                               (i == s_tower.cursor) ? " >" : "  ", w->name,
                               ptw_state_name(w->state), w->score, w->ceiling,
                               fresh[f], (unsigned)age_s, (unsigned)w->visits,
                               latched);
+    }
+    /* SAY SO IF IT DID NOT ALL FIT, rather than ending mid-watch and letting
+     * the reader assume that was the last one. */
+    if (k >= cap - 1u && cap > 24u) {
+        const char *mark = "  ... (output truncated)\n";
+        const size_t len = strlen(mark);
+        memcpy(buf + cap - 1u - len, mark, len);
     }
     if (k < cap) {
         buf[k] = '\0';

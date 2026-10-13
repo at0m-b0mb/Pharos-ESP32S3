@@ -45,7 +45,11 @@ static uint64_t feed(pm_engine_t *e, uint64_t t, double secs, double step_hz,
 static void test_motion_absent_is_not_still(void)
 {
     banner("motion: no sensor reads UNKNOWN, never STILL");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, false);
 
@@ -66,7 +70,11 @@ static void test_motion_absent_is_not_still(void)
 static void test_motion_desk_is_still(void)
 {
     banner("motion: a device on a desk is STILL, and stays STILL");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
 
@@ -89,7 +97,11 @@ static void test_motion_desk_is_still(void)
 static void test_motion_walking_counts_steps(void)
 {
     banner("motion: a walk is recognised and its steps counted");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
 
@@ -114,7 +126,11 @@ static void test_motion_walking_counts_steps(void)
 static void test_motion_fidget_is_not_a_walk(void)
 {
     banner("motion: fast shaking is not gait");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
 
@@ -146,7 +162,11 @@ static void test_motion_fidget_is_not_a_walk(void)
 static void test_motion_vehicle(void)
 {
     banner("motion: sustained motion with no gait reads as moving, not walking");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
 
@@ -168,7 +188,11 @@ static void test_motion_vehicle(void)
 static void test_motion_stopping_is_noticed(void)
 {
     banner("motion: it notices when the walking stops");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
 
@@ -189,7 +213,11 @@ static void test_motion_stopping_is_noticed(void)
 static void test_motion_orientation_independent(void)
 {
     banner("motion: gravity is estimated, so orientation does not matter");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
 
@@ -209,7 +237,11 @@ static void test_motion_orientation_independent(void)
 static void test_motion_travel_gate(void)
 {
     banner("motion: the gate Vigil needs opens only after real travel");
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
 
@@ -240,7 +272,11 @@ static void test_motion_degenerate(void)
     pm_observe(NULL, 0, 0, 0, T0);
     CHECK(pm_has_travelled(NULL, 0), "and a NULL engine does not veto");
 
-    pm_engine_t e;
+    /* Zero-initialised: pm_reset() PRESERVES e->present, so it reads that
+     * field before clearing the rest. The firmware's engine is a static and
+     * is already zero; a stack one here is not, and UBSan rightly calls
+     * loading a bool from indeterminate memory what it is. */
+    pm_engine_t e = {0};
     pm_reset(&e);
     pm_set_present(&e, true);
     pm_evaluate(&e, T0, &v);

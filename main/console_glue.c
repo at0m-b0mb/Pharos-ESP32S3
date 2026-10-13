@@ -659,7 +659,9 @@ static int cli_survey(int argc, char **argv)
 static int cli_tower(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    static char buf[1024];
+    /* Sixteen watches at about a hundred bytes each, plus the header - 1024
+     * cut the list off around the twelfth and said nothing about it. */
+    static char buf[2560];
     pharos_ui_tower_dump(buf, sizeof(buf));
     printf("%s", buf);
     return 0;

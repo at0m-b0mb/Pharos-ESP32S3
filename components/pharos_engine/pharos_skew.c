@@ -5,6 +5,7 @@
  * parts per million over int64 microseconds, which needs no float and cannot
  * drift with one.
  */
+#include <stdint.h>
 #include "pharos_skew.h"
 
 #include <string.h>
@@ -85,11 +86,26 @@ static bool fit_ppm(const psk_ap_t *a, int32_t *ppm, uint64_t *span_us,
     }
 
     const int64_t d_off = a->min_off[newest] - a->min_off[oldest];
-    /* ppm = drift / elapsed * 1e6. Both are microseconds and span is at least
-     * twenty seconds, so this cannot divide by zero and cannot overflow: the
-     * drift over any plausible window is far inside int64 even multiplied by
-     * a million. */
-    const int64_t p = (d_off * 1000000) / (int64_t)span;
+    /* ppm = drift / elapsed * 1e6. Span is at least twenty seconds so this
+     * cannot divide by zero.
+     *
+     * IT COULD OVERFLOW, THOUGH, AND THE COMMENT THAT USED TO BE HERE SAID IT
+     * COULD NOT. It reasoned about "any plausible window", and the drift is
+     * not plausible when the other end picked it: a beacon's TSF is
+     * unauthenticated. Offsets are bounded at ingest now (PSK_MAX_OFF_US), but
+     * two of them can still differ by more than int64 can carry through a
+     * multiply by a million - so the multiply is only performed when it fits.
+     *
+     * Beyond that the answer is not in doubt: a drift that large is not a
+     * crystal under any span this engine accepts, so it goes straight to the
+     * clamp it would have hit anyway. */
+    const int64_t SAFE = INT64_MAX / 1000000;
+    int64_t p;
+    if (d_off > SAFE || d_off < -SAFE) {
+        p = (d_off > 0) ? 100000 : -100000;
+    } else {
+        p = (d_off * 1000000) / (int64_t)span;
+    }
     if (ppm) {
         /* A number outside this range is not a crystal, it is a clock that
          * was reset or a frame from a different network entirely. Clamped so
@@ -115,7 +131,32 @@ void psk_observe(psk_engine_t *e, const uint8_t bssid[6], uint64_t tsf,
 
     const uint64_t bucket = local_us / (1000000ull * PSK_BUCKET_S);
     const unsigned idx = (unsigned)(bucket % PSK_SLOTS);
-    const int64_t off = (int64_t)tsf - (int64_t)local_us;
+    /* THE DIFFERENCE IS TAKEN UNSIGNED, THEN BOUNDED, THEN NARROWED.
+     *
+     * Both sides are uint64. Casting them to int64 first and subtracting is
+     * the obvious way and it is undefined: a TSF above INT64_MAX becomes a
+     * large negative, and subtracting our uptime from it overflows. UBSan
+     * reports it as "-9223372036854775808 - 17000000 cannot be represented",
+     * which is exactly what a beacon claiming 2^63 microseconds produces.
+     *
+     * Unsigned subtraction wraps by definition, so the magnitude is computed
+     * there and only narrowed once PSK_MAX_OFF_US says it fits. Dropped rather
+     * than clamped: a clamped lie still reads as data, and this engine's whole
+     * output is "did this radio's clock change". */
+    int64_t off;
+    if (tsf >= local_us) {
+        const uint64_t d = tsf - local_us;
+        if (d > (uint64_t)PSK_MAX_OFF_US) {
+            return;
+        }
+        off = (int64_t)d;
+    } else {
+        const uint64_t d = local_us - tsf;
+        if (d > (uint64_t)PSK_MAX_OFF_US) {
+            return;
+        }
+        off = -(int64_t)d;
+    }
 
     /* A new bucket takes the slot over; within one bucket the smallest offset
      * wins. See the note in the header on why the minimum. */

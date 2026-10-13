@@ -95,6 +95,27 @@ extern "C" {
  * two independent parts. */
 #define PSK_CHANGE_PPM 25
 
+/* THE TSF IS A NUMBER A STRANGER CHOSE, AND IT IS SIXTY-FOUR BITS WIDE.
+ *
+ * The offset this engine stores is (the AP's timestamp) minus (our uptime),
+ * lifted straight out of a beacon body with no range check. A beacon is
+ * unauthenticated, so anyone in range writes that field - and the fit then
+ * subtracts two offsets and multiplies by a million, both signed. With a TSF
+ * near the top of its range that is signed overflow, which is undefined
+ * behaviour, and the fabricated result is a "the clock changed" finding
+ * against whichever BSSID the sender named.
+ *
+ * A TSF is microseconds since the radio came up. Twelve years is already far
+ * past anything that will be seen in the field, and a value beyond it is not a
+ * crystal to be measured - it is a reset, a different network, or a lie. Those
+ * samples are dropped rather than clamped: a clamped lie still reads as data.
+ *
+ * Bounding at ingest is only half of it. Two offsets a bucket apart cannot
+ * differ by more than twice this, but twice this still exceeds what can be
+ * multiplied by a million inside int64, so fit_ppm() guards the multiply as
+ * well. Both, because either alone leaves the arithmetic reachable. */
+#define PSK_MAX_OFF_US 400000000000000ll /* ~12.7 years, in microseconds */
+
 typedef struct {
     uint8_t bssid[6];
     bool used;

@@ -4,6 +4,7 @@
  * access point of having been replaced, and a false accusation sends somebody
  * looking for an attacker who does not exist.
  */
+#include <stdint.h>
 #include <string.h>
 
 #include "pharos_skew.h"
@@ -181,8 +182,67 @@ static void test_skew_table_is_bounded(void)
     CHECK(e.n <= PSK_MAX_APS, "the table holds (%u)", e.n);
 }
 
+static void test_skew_survives_a_hostile_tsf(void)
+{
+    banner("skew: a TSF a stranger chose must not overflow the fit");
+    /* A BEACON IS UNAUTHENTICATED AND ITS TIMESTAMP IS SIXTY-FOUR BITS WIDE.
+     *
+     * The offset stored here is (their timestamp) minus (our uptime), and the
+     * fit subtracts two offsets and multiplies by a million - both signed.
+     * Fed a TSF near the top of its range that is signed overflow, which is
+     * undefined behaviour, and the fabricated answer is a "the clock changed"
+     * finding against whichever BSSID the sender named.
+     *
+     * Run the suite under -fsanitize=undefined and this is the test that
+     * catches it coming back. */
+    const uint8_t bssid[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    psk_engine_t e;
+    psk_verdict_t v;
+
+    /* The extremes, alternating, one beacon per bucket. */
+    psk_reset(&e);
+    uint64_t seen = 1000000ull;
+    for (unsigned i = 0; i < PSK_SLOTS * 2u; i++) {
+        psk_observe(&e, bssid, (i & 1u) ? (uint64_t)INT64_MAX : 1ull, seen);
+        seen += 1000000ull * PSK_BUCKET_S;
+    }
+    psk_evaluate(&e, bssid, &v);
+    CHECK(v.ppm >= -100000 && v.ppm <= 100000,
+          "ppm escaped its clamp at %d", (int)v.ppm);
+    CHECK(v.from_ppm >= -100000 && v.from_ppm <= 100000, "from_ppm escaped");
+    CHECK(v.to_ppm >= -100000 && v.to_ppm <= 100000, "to_ppm escaped");
+
+    /* The whole unsigned range, including values that read as negative once
+     * cast to int64 - which is how the subtraction is actually done. */
+    psk_reset(&e);
+    seen = 1000000ull;
+    const uint64_t nasty[] = {
+        1ull, (uint64_t)INT64_MAX, UINT64_MAX, UINT64_MAX / 2ull,
+        (uint64_t)INT64_MAX + 1ull, 2ull, UINT64_MAX - 1ull, 3ull,
+        (uint64_t)INT64_MAX - 1ull, 4ull, UINT64_MAX / 4ull, 5ull,
+    };
+    for (unsigned i = 0; i < sizeof nasty / sizeof nasty[0]; i++) {
+        psk_observe(&e, bssid, nasty[i], seen);
+        seen += 1000000ull * PSK_BUCKET_S;
+    }
+    psk_evaluate(&e, bssid, &v);
+    CHECK(v.ppm >= -100000 && v.ppm <= 100000,
+          "ppm escaped its clamp at %d on the unsigned range", (int)v.ppm);
+
+    /* AND THE BOUND MUST NOT HAVE SWALLOWED THE REAL SIGNAL. An ordinary
+     * access point, whose timestamp tracks our own clock, is still measured. */
+    psk_reset(&e);
+    uint64_t tsf = 500000ull;
+    uint64_t local = 1000000ull;
+    (void)feed(&e, bssid, local, 30u, 0, &tsf, 0u);
+    psk_evaluate(&e, bssid, &v);
+    CHECK(v.have_skew || v.measuring,
+          "a plausible access point must still be measurable");
+}
+
 void test_skew(void)
 {
+    test_skew_survives_a_hostile_tsf();
     test_skew_measures_a_crystal();
     test_skew_refuses_a_short_baseline();
     test_skew_catches_a_swapped_radio();
