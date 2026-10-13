@@ -390,4 +390,96 @@ void test_style(void)
         CHECK(PS_GAUGE_SWEEP == 270, "the sweep is no longer 270 degrees");
         CHECK(PS_GAUGE_START == 135, "the arc no longer opens at the bottom");
     }
+
+    banner("style: wrapping the advice across the wide middle");
+    {
+        enum { NL = 7, SZ = 44 };
+        char out[NL][SZ];
+        /* Short text takes one line and leaves the rest cleared. */
+        unsigned n = ps_wrap("Preserve the log.", 40, &out[0][0], NL, SZ);
+        CHECK(n == 1, "a short line should use one line, used %u", n);
+        CHECK(strcmp(out[0], "Preserve the log.") == 0, "got '%s'", out[0]);
+        CHECK(out[1][0] == '\0', "unused lines must be cleared");
+
+        /* It breaks on spaces, never mid-word, and no line exceeds the cap. */
+        const char *real =
+            "Radios here answer only for networks they also announce. That is "
+            "what an ordinary access point does, so there is nothing to act on.";
+        n = ps_wrap(real, 40, &out[0][0], NL, SZ);
+        CHECK(n >= 3, "a 130-character string needs several lines, used %u", n);
+        for (unsigned i = 0; i < n; i++) {
+            CHECK(strlen(out[i]) <= 40, "line %u is %u chars, cap is 40", i,
+                  (unsigned)strlen(out[i]));
+            CHECK(out[i][0] != ' ', "line %u starts with a space", i);
+        }
+        /* Every word survives, in order: join the lines and compare. */
+        char join[320];
+        join[0] = '\0';
+        for (unsigned i = 0; i < n; i++) {
+            if (i) { strcat(join, " "); }
+            strcat(join, out[i]);
+        }
+        CHECK(strcmp(join, real) == 0, "wrapping lost or reordered text:\n  '%s'",
+              join);
+
+        /* THE TAIL IS MARKED, NOT DROPPED. Showing half a sentence as though
+         * it were the whole one is the bug this page exists to fix - it must
+         * not come back in the page's own wrapper. */
+        char small[2][12];
+        n = ps_wrap("one two three four five six seven", 10, &small[0][0], 2, 12);
+        CHECK(n == 2, "should fill both lines, used %u", n);
+        CHECK(strstr(small[1], "..") != NULL,
+              "an overflowing wrap must mark its last line, got '%s'", small[1]);
+        for (unsigned i = 0; i < 2; i++) {
+            CHECK(strlen(small[i]) <= 10, "line %u exceeded the cap: '%s'", i,
+                  small[i]);
+        }
+
+        /* A word longer than a line is cut rather than allowed to run off the
+         * circle, and the cap still holds. */
+        n = ps_wrap("supercalifragilisticexpialidocious", 10, &small[0][0], 2, 12);
+        CHECK(n > 0, "a single long word must still produce a line");
+        CHECK(strlen(small[0]) <= 10, "a long word escaped the cap: '%s'",
+              small[0]);
+
+        /* Degenerate inputs must not write anything. */
+        CHECK(ps_wrap(NULL, 40, &out[0][0], NL, SZ) == 0, "NULL text");
+        CHECK(ps_wrap("", 40, &out[0][0], NL, SZ) == 0, "empty text");
+        CHECK(ps_wrap("x", 0, &out[0][0], NL, SZ) == 0, "a zero cap");
+        CHECK(ps_wrap("x", 40, &out[0][0], 0, SZ) == 0, "no lines");
+
+        /* THE PAGE MUST HOLD WHAT THE CONTRACT CAN CARRY.
+         *
+         * Seven lines of forty is 280 against a 255-character field, but word
+         * wrapping loses the ragged end of every line, so the arithmetic alone
+         * proves nothing. Wrap a genuinely full field of realistic words and
+         * require that NOTHING is marked as dropped. */
+        {
+            struct pharos_lens_display probe;
+            char full[sizeof probe.advice];
+            const char *w[] = { "the", "radio", "answered", "a", "network",
+                                "name", "nobody", "announced", "which", "is",
+                                "how", "a", "phone", "gets", "captured" };
+            unsigned k = 0;
+            full[0] = '\0';
+            for (unsigned i = 0; k + 1u < sizeof full - 1u; i++) {
+                const char *word = w[i % (sizeof w / sizeof w[0])];
+                const unsigned wl = (unsigned)strlen(word);
+                if (k + wl + 2u >= sizeof full) { break; }
+                if (k) { full[k++] = ' '; }
+                memcpy(full + k, word, wl);
+                k += wl;
+                full[k] = '\0';
+            }
+            CHECK(k > sizeof(probe.advice) - 12u,
+                  "the probe string should nearly fill the field, got %u", k);
+
+            char page[7][44];
+            const unsigned used = ps_wrap(full, 40, &page[0][0], 7, 44);
+            CHECK(used > 0, "a full field must wrap to something");
+            CHECK(strstr(page[used - 1u], "..") == NULL,
+                  "a full advice field did not fit the page - last line '%s'",
+                  page[used - 1u]);
+        }
+    }
 }

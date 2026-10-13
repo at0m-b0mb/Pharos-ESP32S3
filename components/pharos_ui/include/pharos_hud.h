@@ -292,6 +292,15 @@ typedef enum {
 void pharos_hud_battery_mode(pharos_batt_mode_t m);
 void pharos_hud_battery(uint8_t pct, bool charging, bool present, bool approx);
 
+/* The whole of the advice, on a page of its own.
+ *
+ * The live face shows two lines of it because the bottom of a circle has room
+ * for two; the engines write a hundred characters. This is the rest, wrapped
+ * across the wide middle. Reached by the same bottom-strip tap that leads to
+ * the detail rows, one stop before them: verdict, then what to do, then the
+ * numbers. */
+void pharos_hud_advice_page(const char *lens, const char *advice);
+
 /* The boot splash and the `screen test` command. */
 void pharos_hud_splash(const char *version, bool fence_clean);
 void pharos_hud_toast(const char *msg);

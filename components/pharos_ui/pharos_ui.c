@@ -151,7 +151,7 @@ void pharos_ui_aegis_ack(void)
  *
  * So the callback records an intent and returns. The UI task, which owns the
  * lens lifecycle already, performs it on the next tick. */
-typedef enum { VIEW_HOME = 0, VIEW_BROWSE, VIEW_LIVE, VIEW_DETAIL,
+typedef enum { VIEW_HOME = 0, VIEW_BROWSE, VIEW_LIVE, VIEW_ADVICE, VIEW_DETAIL,
                VIEW_OPENED, VIEW_GUIDE } view_t;
 
 static const pharos_lens_t *s_order[PHAROS_MAX_LENSES];
@@ -1119,17 +1119,27 @@ static void nav_apply(void)
             s_view = VIEW_LIVE;
             return;
         }
-        if (s_view == VIEW_LIVE && live && live->row) {
+        /* ONE STRIP, THREE STOPS: verdict, then what to do, then the numbers.
+         *
+         * The strip already meant "show me what you actually found", and the
+         * advice is the first answer to that - the face can only fit two lines
+         * of it and the engines write a hundred characters. Putting the full
+         * text one tap in costs no new gesture to learn, and it sits in
+         * reading order ahead of the rows it tells you what to do about. */
+        if (s_view == VIEW_LIVE) {
+            s_view = VIEW_ADVICE;
+            return;
+        }
+        if (s_view == VIEW_ADVICE && live && live->row) {
             s_detail_page = 0;
             s_detail_cursor = 0;
             s_view = VIEW_DETAIL;
             return;
         }
-        if (s_view == VIEW_LIVE) {
-            if (pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
-                pharos_hud_toast("no detail here");
-                pharos_bsp_display_unlock();
-            }
+        if (s_view == VIEW_ADVICE) {
+            /* No rows behind it, so the strip closes the loop instead of
+             * stranding the operator on a page with nowhere forward. */
+            s_view = VIEW_LIVE;
         }
         return;
     }
@@ -1936,6 +1946,28 @@ static void paint(const pharos_lens_t *active)
     }
     if (s_view == VIEW_BROWSE) {
         return; /* the browse card is painted when the cursor moves */
+    }
+    if (s_view == VIEW_ADVICE) {
+        if (!pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {
+            s_paint_misses++;
+            return;
+        }
+        s_paints++;
+        pharos_hud_create();
+        theme_sync();
+        batt_apply();
+        {
+            struct pharos_lens_display d;
+            memset(&d, 0, sizeof(d));
+            if (active && active->display) {
+                (void)active->display(&d);
+            }
+            pharos_hud_advice_page(active ? lens_caps(active) : "PHAROS",
+                                   d.advice[0] ? d.advice
+                                               : "Nothing to act on yet.");
+        }
+        pharos_bsp_display_unlock();
+        return;
     }
     if (s_view == VIEW_DETAIL || s_view == VIEW_OPENED) {
         if (!pharos_bsp_display_lock(PHAROS_PAINT_LOCK_MS)) {

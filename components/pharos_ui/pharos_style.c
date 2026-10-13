@@ -5,6 +5,7 @@
  * answer, and finding it out by flashing a device and photographing the glass
  * is how the old dial shipped with SENTINEL written through its own headline.
  */
+#include <string.h>
 #include "pharos_style.h"
 
 const int16_t PS_TYPE_PX[PS_TYPE_N] = {
@@ -152,4 +153,69 @@ int16_t ps_gauge_tick(uint8_t pct)
         pct = 100u;
     }
     return (int16_t)((PS_GAUGE_SWEEP * (int)pct) / 100);
+}
+
+unsigned ps_wrap(const char *s, unsigned cap, char *out, unsigned nlines,
+                 unsigned linesz)
+{
+    if (!out || !nlines || linesz < 4u) {
+        return 0;
+    }
+    for (unsigned i = 0; i < nlines; i++) {
+        out[i * linesz] = '\0';
+    }
+    if (!s || !*s) {
+        return 0;
+    }
+    unsigned max = (cap < linesz - 1u) ? cap : linesz - 1u;
+    if (max == 0u) {
+        return 0;
+    }
+
+    const char *p = s;
+    unsigned used = 0;
+    while (*p && used < nlines) {
+        while (*p == ' ') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        const unsigned len = (unsigned)strlen(p);
+        unsigned cut = max;
+        if (len <= max) {
+            cut = len;
+        } else {
+            /* The last space at or before the limit. A word longer than the
+             * line is cut where it must be - better a split word than a line
+             * that runs off a circle. */
+            while (cut > 0u && p[cut] != ' ') {
+                cut--;
+            }
+            if (cut == 0u) {
+                cut = max;
+            }
+        }
+        memcpy(out + used * linesz, p, cut);
+        out[used * linesz + cut] = '\0';
+        used++;
+        p += cut;
+    }
+
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p && used > 0u) {
+        /* Text remains and there are no lines left for it. Say so on the last
+         * line rather than ending mid-sentence as if that were the end. */
+        char *last = out + (used - 1u) * linesz;
+        unsigned n = (unsigned)strlen(last);
+        if (n + 2u > max) {
+            n = (max >= 2u) ? (max - 2u) : 0u;
+        }
+        last[n] = '.';
+        last[n + 1u] = '.';
+        last[n + 2u] = '\0';
+    }
+    return used;
 }

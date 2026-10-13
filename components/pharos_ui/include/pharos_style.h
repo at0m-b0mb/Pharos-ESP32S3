@@ -257,6 +257,22 @@ uint32_t ps_alert_colour(uint8_t alert);
  * Relative to the rotation, never absolute. */
 int16_t ps_gauge_tick(uint8_t pct);
 
+/* WRAP A SENTENCE ACROSS SEVERAL LINES, BREAKING ON WORDS.
+ *
+ * The bottom of a round face is narrow - two lines there hold about fifty
+ * characters and the advice strings average a hundred - so the full text gets
+ * a page of its own across the WIDE middle, where a line holds forty. This is
+ * what fills it. Fixed lines, never an LVGL wrapping label: a label whose
+ * height changes with its text moves the region that was invalidated, which is
+ * lesson 4 in pharos_hud.c.
+ *
+ * Writes up to `nlines` strings of `linesz` bytes each into `out`, laid out
+ * end to end, and returns how many it used. If the text does not fit, the last
+ * line it wrote is marked - silently dropping the tail is how the face came to
+ * show half a sentence in the first place. */
+unsigned ps_wrap(const char *s, unsigned cap, char *out, unsigned nlines,
+                 unsigned linesz);
+
 /* THE WORKING RADIUS ON A PAGE THAT HAS A GAUGE.
  *
  * PR_SAFE_R is where the GLASS stops. On the live and home faces the score

@@ -93,6 +93,7 @@ typedef enum {
     PAGE_LIVE,
     PAGE_DETAIL,
     PAGE_GUIDE,
+    PAGE_ADVICE,
     PAGE_BARS,
     PAGE_N,
 } hud_page_t;
@@ -120,6 +121,17 @@ static uint32_t s_aura_rgb = 0xFFFFFFFFu;
 static lv_obj_t *s_l_ribbon[PHAROS_DISP_HISTORY];
 static lv_obj_t *s_l_ctx, *s_l_sim, *s_l_word, *s_l_score, *s_l_detail;
 static lv_obj_t *s_l_why, *s_l_action, *s_l_action2;
+
+/* THE ADVICE PAGE.
+ *
+ * The face can show two lines of advice and the engines write a hundred
+ * characters. The wide middle of the circle holds forty characters a line, so
+ * the whole sentence lives here instead of being cut at the bottom of the
+ * glass where there is no room for it. */
+#define HUD_ADVICE_LINES 7
+#define HUD_ADVICE_CAP   40
+#define HUD_ADVICE_STEP  28
+static lv_obj_t *s_a_title, *s_a_line[HUD_ADVICE_LINES], *s_a_hint;
 static lv_obj_t *s_l_ring, *s_l_track, *s_l_ceil;
 static lv_obj_t *s_l_chip[PHAROS_DISP_FAMILIES], *s_l_chip_txt[PHAROS_DISP_FAMILIES];
 static uint8_t s_ribbon_level[PHAROS_DISP_HISTORY];
@@ -873,6 +885,20 @@ bool pharos_hud_create(void)
         s_l_action2 = mk_label(p, PS_TYPE_LABEL, C_ACCENT, 0, PS_Y_ACTION2, "");
     }
 
+    /* ---- ADVICE ----
+     *
+     * Seven lines down the middle of the circle, where the chord is widest.
+     * Fixed labels at fixed offsets, never a wrapping one - see lesson 4. */
+    {
+        lv_obj_t *p = s_page[PAGE_ADVICE];
+        s_a_title = mk_label(p, PS_TYPE_LABEL, C_DIMMER, 0, -150, "");
+        for (unsigned i = 0; i < HUD_ADVICE_LINES; i++) {
+            const int dy = (int)i * HUD_ADVICE_STEP;
+            s_a_line[i] = mk_label(p, PS_TYPE_LABEL, C_TEXT, 0, dy, "");
+        }
+        s_a_hint = mk_label(p, PS_TYPE_MICRO, C_DIMMER, 0, 150, "");
+    }
+
     /* ---- DETAIL ---- */
     {
         lv_obj_t *p = s_page[PAGE_DETAIL];
@@ -1533,6 +1559,45 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
     }
 }
 
+/* ---- ADVICE ----------------------------------------------------------- */
+
+void pharos_hud_advice_page(const char *lens, const char *advice)
+{
+    if (!s_built) {
+        return;
+    }
+    page_show(PAGE_ADVICE);
+    toast_tick();
+
+    set_text_fit(s_a_title, PS_TYPE_LABEL, -150, lens ? lens : "");
+
+    char lines[HUD_ADVICE_LINES][HUD_ADVICE_CAP + 4];
+    const unsigned n = ps_wrap(advice, HUD_ADVICE_CAP, &lines[0][0],
+                               HUD_ADVICE_LINES, (unsigned)sizeof lines[0]);
+
+    /* CENTRE THE BLOCK ON WHAT IT ACTUALLY USES.
+     *
+     * Seven fixed offsets made a three-line answer sit against the top of the
+     * circle with a hand's width of nothing under it, which reads as a page
+     * that failed to finish rather than one that was short. Only re-aligned
+     * when the line COUNT changes: moving a label invalidates both the region
+     * it left and the one it arrives at, and a steady reading must not. */
+    static unsigned s_shown = (unsigned)-1;
+    if (n != s_shown) {
+        for (unsigned i = 0; i < HUD_ADVICE_LINES; i++) {
+            const int dy = (int)(i * HUD_ADVICE_STEP)
+                         - (int)((n ? n - 1u : 0u) * HUD_ADVICE_STEP) / 2;
+            lv_obj_align(s_a_line[i], LV_ALIGN_CENTER, 0, dy);
+        }
+        s_shown = n;
+    }
+    for (unsigned i = 0; i < HUD_ADVICE_LINES; i++) {
+        set_text(s_a_line[i], (i < n) ? lines[i] : "");
+    }
+    set_text(s_a_hint, n ? "tap the strip for the numbers"
+                         : "nothing to add yet");
+}
+
 /* ---- DETAIL ----------------------------------------------------------- */
 
 void pharos_hud_detail(const char *lens, const char *head_left,
@@ -1902,6 +1967,7 @@ void pharos_hud_splash(const char *version, bool fence_clean)
 void pharos_hud_colourbars(void) {}
 void pharos_hud_battery(uint8_t p, bool c, bool q, bool a)
 { (void)p; (void)c; (void)q; (void)a; }
+void pharos_hud_advice_page(const char *l, const char *a) { (void)l; (void)a; }
 void pharos_hud_guide(const struct pharos_hud_guide *g) { (void)g; }
 
 #endif /* ESP_PLATFORM */

@@ -43,7 +43,14 @@ struct pharos_lens_display {
     char big[16];     /* the headline: a score, a grade, a word     */
     char band[24];    /* what that headline MEANS                   */
     char detail[48];  /* the supporting numbers                     */
-    char advice[96];  /* what to do about it                        */
+    /* WHAT TO DO ABOUT IT, AT THE LENGTH THE ENGINES ACTUALLY WRITE.
+     *
+     * This was 96 characters, which truncated 48 of the 101 advice strings in
+     * the engine tree - the median is 93 and the long ones run past 500. The
+     * face can only ever show two lines of it, so the rest was cut here and
+     * never missed. Now there is a page that shows the whole thing, the field
+     * has to be able to hold it: at 256 only 5 of the 101 are still cut. */
+    char advice[256]; /* what to do about it                        */
     uint8_t score;    /* 0..100, drives the gauge and its colour    */
     uint8_t raw_score;/* what the evidence earned BEFORE the caps   */
     uint8_t ceiling;  /* the most this observation could have earned*/
