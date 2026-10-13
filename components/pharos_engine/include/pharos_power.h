@@ -34,7 +34,36 @@ typedef struct {
     uint16_t mv;           /* pack voltage                       */
     bool charging;
     bool present;
+    bool soc_approx;       /* the pack voltage contradicts soc_pct */
 } pwr_battery_t;
+
+/* THE PACK CURVE, AND WHY A SECOND OPINION IS KEPT AT ALL.
+ *
+ * A linear 3.3-4.2 V map. It is rough - voltage sags under load and rises
+ * under charge - but it is monotonic and it is always available, which the
+ * fuel gauge is not.
+ *
+ * The AXP2101's coulomb counter restarts at zero after a reset and climbs
+ * back as it re-learns. Observed on this device: a pack reading 43% and
+ * charging was reflashed, came back reading 0%, and walked up through 2, 3
+ * and 8 over the following minutes. A charging pack cannot lose 43 points,
+ * so that 0% was not a measurement - but the device drew it in alarm red and
+ * called it BAD, which is the one thing a gauge must never do on a number it
+ * does not trust. */
+#define PWR_MV_EMPTY 3300u
+#define PWR_MV_FULL  4200u
+
+uint8_t pwr_soc_from_mv(uint16_t mv);
+
+/* How far the gauge and the curve may disagree before the gauge stops being
+ * evidence. Charging lifts the curve and load drops it, so the bound is wide:
+ * this catches a gauge that has reset, not a gauge that is merely imprecise. */
+#define PWR_SOC_DISAGREE_PCT 20u
+
+/* True when the pack voltage contradicts the gauge. The reading is still
+ * reported - inventing a better number is not on offer - but it is reported
+ * as approximate, and nothing raises an alarm on it. */
+bool pwr_soc_is_approx(uint8_t gauge_pct, uint16_t mv);
 
 /* Baseline draw of the board with the radio idle and the screen off, in mA.
  * Measured on hardware at M1; until then this is a documented estimate and

@@ -89,3 +89,28 @@ char *pwr_format(uint32_t minutes, char *buf, unsigned buflen)
     buf[n < buflen ? n : buflen - 1] = '\0';
     return buf;
 }
+
+uint8_t pwr_soc_from_mv(uint16_t mv)
+{
+    if (mv <= PWR_MV_EMPTY) {
+        return 0u;
+    }
+    if (mv >= PWR_MV_FULL) {
+        return 100u;
+    }
+    return (uint8_t)(((uint32_t)(mv - PWR_MV_EMPTY) * 100u)
+                     / (PWR_MV_FULL - PWR_MV_EMPTY));
+}
+
+bool pwr_soc_is_approx(uint8_t gauge_pct, uint16_t mv)
+{
+    /* No voltage means no second opinion, so there is nothing to contradict
+     * the gauge with. Say nothing rather than cast doubt for free. */
+    if (mv == 0u) {
+        return false;
+    }
+    const uint8_t curve = pwr_soc_from_mv(mv);
+    const int diff = (int)curve - (int)gauge_pct;
+    const int mag = diff < 0 ? -diff : diff;
+    return mag > (int)PWR_SOC_DISAGREE_PCT;
+}

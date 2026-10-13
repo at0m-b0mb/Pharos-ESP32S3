@@ -297,7 +297,7 @@ void test_power(void)
     CHECK(p.minutes < nameplate, "estimate stays under the datasheet figure");
 
     /* No battery, or a nonsense pack, must not divide by zero. */
-    pwr_battery_t none = { 0, 0, 0, false, false };
+    pwr_battery_t none = { 0, 0, 0, false, false, false };
     pwr_plan(&none, 130, PWR_SCREEN_ACTIVE, &p);
     CHECK(p.insufficient, "absent battery reported");
     CHECK_EQ(p.minutes, 0);
@@ -323,4 +323,43 @@ void test_power(void)
     pwr_format(260, tiny, sizeof(tiny));
     CHECK(strlen(tiny) < sizeof(tiny), "truncated within the buffer: '%s'", tiny);
     CHECK(pwr_format(1, NULL, 0) == NULL, "null buffer handled");
+
+    banner("power: a gauge the pack voltage contradicts is not evidence");
+    {
+        /* The curve itself: monotonic, clamped, and linear between. */
+        CHECK(pwr_soc_from_mv(3300) == 0, "3.30 V is the empty end");
+        CHECK(pwr_soc_from_mv(4200) == 100, "4.20 V is the full end");
+        CHECK(pwr_soc_from_mv(3000) == 0, "below empty must clamp, not wrap");
+        CHECK(pwr_soc_from_mv(4500) == 100, "above full must clamp");
+        CHECK(pwr_soc_from_mv(3750) == 50, "the midpoint is 50%%, got %u",
+              (unsigned)pwr_soc_from_mv(3750));
+        for (uint16_t mv = 3300; mv < 4200; mv += 25) {
+            CHECK(pwr_soc_from_mv(mv) <= pwr_soc_from_mv((uint16_t)(mv + 25)),
+                  "the curve went backwards at %u mV", (unsigned)mv);
+        }
+
+        /* THE READING THAT STARTED THIS, measured on the device: the gauge
+         * said 9% while the pack sat at 3.62 V, which the curve puts near 35.
+         * A 26-point gap is the coulomb counter having restarted at zero after
+         * a reset, not a battery about to die - and the row drew it in alarm
+         * red. */
+        CHECK(pwr_soc_is_approx(9, 3620),
+              "9%% at 3.62 V must be flagged; the curve says %u",
+              (unsigned)pwr_soc_from_mv(3620));
+        /* The 0% that a charging pack reported straight after a reflash,
+         * twenty minutes after the same pack read 43%. */
+        CHECK(pwr_soc_is_approx(0, 3620), "0%% at 3.62 V must be flagged");
+
+        /* A gauge that agrees with the pack is left alone. The bound is wide
+         * on purpose: charging lifts the curve and load drops it, and neither
+         * of those is a broken gauge. */
+        CHECK(!pwr_soc_is_approx(35, 3620), "an agreeing gauge must not be flagged");
+        CHECK(!pwr_soc_is_approx(50, 3750), "an exact agreement must not be flagged");
+        CHECK(!pwr_soc_is_approx(30, 3750), "a 20-point gap is still within tolerance");
+        CHECK(pwr_soc_is_approx(70, 3400), "70%% on a nearly flat pack must be flagged");
+
+        /* No voltage is no second opinion. Doubt has to be earned. */
+        CHECK(!pwr_soc_is_approx(0, 0), "without a voltage there is nothing to contradict");
+        CHECK(!pwr_soc_is_approx(100, 0), "without a voltage there is nothing to contradict");
+    }
 }

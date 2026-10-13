@@ -351,8 +351,15 @@ static bool k_system_row(unsigned index, struct pharos_lens_row *out)
     case ROW_EDITABLE_N + 2:
         snprintf(out->left, sizeof(out->left), "battery");
         if (have_batt && b.present) {
-            snprintf(out->right, sizeof(out->right), "%u%%", (unsigned)b.soc_pct);
-            out->tone = (b.soc_pct < 20u) ? PHAROS_TONE_BAD
+            snprintf(out->right, sizeof(out->right), "%s%u%%",
+                     b.soc_approx ? "~" : "", (unsigned)b.soc_pct);
+            /* A reading the pack voltage contradicts is not evidence, and a
+             * pack already on the charger is a problem being solved. Neither
+             * earns the alarm colour - this row read a flat BAD at 9% on a
+             * charging pack sitting at 3.62 V, which is a false alarm about
+             * the operator's own battery. */
+            out->tone = (b.soc_approx || b.charging) ? PHAROS_TONE_DIM
+                      : (b.soc_pct < 20u) ? PHAROS_TONE_BAD
                       : (b.soc_pct < 50u) ? PHAROS_TONE_WARN : PHAROS_TONE_GOOD;
         } else {
             snprintf(out->right, sizeof(out->right), "USB");

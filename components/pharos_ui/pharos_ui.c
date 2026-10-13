@@ -502,7 +502,8 @@ void pharos_ui_batt_mode_next(void)
 static void batt_apply(void)
 {
     if (s_batt_ok) {
-        pharos_hud_battery(s_batt.soc_pct, s_batt.charging, s_batt.present);
+        pharos_hud_battery(s_batt.soc_pct, s_batt.charging, s_batt.present,
+                           s_batt.soc_approx);
     }
 }
 

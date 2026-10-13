@@ -290,7 +290,7 @@ typedef enum {
 } pharos_batt_mode_t;
 
 void pharos_hud_battery_mode(pharos_batt_mode_t m);
-void pharos_hud_battery(uint8_t pct, bool charging, bool present);
+void pharos_hud_battery(uint8_t pct, bool charging, bool present, bool approx);
 
 /* The boot splash and the `screen test` command. */
 void pharos_hud_splash(const char *version, bool fence_clean);

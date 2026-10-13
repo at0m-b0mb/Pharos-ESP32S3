@@ -1594,7 +1594,7 @@ void pharos_hud_battery_mode(pharos_batt_mode_t m)
     }
 }
 
-void pharos_hud_battery(uint8_t pct, bool charging, bool present)
+void pharos_hud_battery(uint8_t pct, bool charging, bool present, bool approx)
 {
     if (!s_built) return;
 
@@ -1612,7 +1612,7 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present)
     /* Charging is a state, not a level, so it gets its own key rather than
      * sharing the level's. Packed into the dirty check so a steady battery
      * costs nothing per frame. */
-    const int key = (int)pct + (charging ? 1000 : 0);
+    const int key = (int)pct + (charging ? 1000 : 0) + (approx ? 2000 : 0);
     if (key == s_batt_last) return;
     s_batt_last = key;
 
@@ -1640,8 +1640,10 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present)
         /* Spelled out rather than drawn as a bolt: a glyph the font does not
          * carry renders as an empty box, and "is it charging" is exactly the
          * question that must not be answered by a box. */
-        snprintf(b, sizeof b, charging ? "%u%% CHG" : "%u%%",
-                 (unsigned)(pct > 100u ? 100u : pct));
+        /* A tilde is the whole apology: the pack voltage disagrees with the
+         * gauge, so this is the gauge's opinion and not a measurement. */
+        snprintf(b, sizeof b, charging ? "%s%u%% CHG" : "%s%u%%",
+                 approx ? "~" : "", (unsigned)(pct > 100u ? 100u : pct));
         set_text(s_batt_txt, b);
         set_fg(s_batt_txt, rgb);
     }
@@ -1898,7 +1900,8 @@ void pharos_hud_splash(const char *version, bool fence_clean)
     (void)version; (void)fence_clean;
 }
 void pharos_hud_colourbars(void) {}
-void pharos_hud_battery(uint8_t p, bool c, bool q) { (void)p; (void)c; (void)q; }
+void pharos_hud_battery(uint8_t p, bool c, bool q, bool a)
+{ (void)p; (void)c; (void)q; (void)a; }
 void pharos_hud_guide(const struct pharos_hud_guide *g) { (void)g; }
 
 #endif /* ESP_PLATFORM */

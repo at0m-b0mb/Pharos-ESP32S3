@@ -37,6 +37,7 @@
 #include "sdkconfig.h"
 
 #include "pharos_bsp.h"
+#include "pharos_power.h"
 
 #include "board_pins.h"
 
@@ -731,6 +732,12 @@ bool pharos_bsp_battery(pwr_battery_t *out)
     }
     if (axp_rd(AXP_REG_SOC, &soc, 1) && soc <= 100u) {
         out->soc_pct = soc;
+        /* The gauge answered, which is not the same as the gauge being right.
+         * See pwr_soc_is_approx(): the counter restarts at zero after a reset
+         * and climbs back, and a pack that was charging at 43 percent does not
+         * reappear at 0. The reading stands - we have nothing better - but it
+         * is marked, so nothing downstream raises an alarm on it. */
+        out->soc_approx = pwr_soc_is_approx(out->soc_pct, out->mv);
     } else if (out->mv) {
         /* No fuel gauge answer: fall back to the pack curve, and be clear in
          * the only way code can be - a linear 3.3-4.2 V map is a rough guide,
@@ -741,6 +748,7 @@ bool pharos_bsp_battery(pwr_battery_t *out)
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
         out->soc_pct = (uint8_t)pct;
+        out->soc_approx = true; /* the curve is a guide, never a gauge */
     }
     return out->present;
 }
