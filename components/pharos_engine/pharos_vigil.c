@@ -81,11 +81,28 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
                     const uint8_t status = p[4 < plen ? 4 : plen - 1];
                     return (status & 0x04) ? PV_KIND_FINDMY_LOST : PV_KIND_FINDMY;
                 }
-                return PV_KIND_UNKNOWN; /* other Apple traffic: phones, buds */
+                /* Other Apple traffic - phones, buds. KEEP WALKING.
+                 *
+                 * This used to return UNKNOWN, which abandons the whole
+                 * advertisement. An advertisement holds SEVERAL AD structures,
+                 * and pv_observe_adv() drops anything classified UNKNOWN - so
+                 * a four-byte Apple element placed before the real one made
+                 * everything after it invisible to the lens. On an
+                 * anti-stalking tool that is not a missed detail, it is the
+                 * whole job: the cheapest possible way to hide a tracker from
+                 * it was to put a scrap of Apple-shaped data in front. */
             }
-            if (company == 0x0075 && plen >= 4) { /* Samsung */
-                return PV_KIND_SMARTTAG;
-            }
+            /* NO SMARTTAG CLAIM FROM A COMPANY ID.
+             *
+             * 0x0075 is Samsung, not a Galaxy SmartTag - every Galaxy phone,
+             * every pair of Buds and every Watch advertises under it. Claiming
+             * SMARTTAG here put every Samsung device in the room into a
+             * stalking lens as a tracker, which is exactly the false positive
+             * this project refuses to make.
+             *
+             * The honest signal is already below: SmartTags carry the
+             * SmartThings Find service UUID 0xFD5A, and that is what names
+             * one. */
         } else if ((type == 0x08 || type == 0x09) && plen >= 3) {
             /* Shortened or complete local name. Two things announce
              * themselves here by name, and both are worth knowing about.

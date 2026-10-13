@@ -595,4 +595,58 @@ void test_vigil(void)
     for (int k = 0; k < PV_KIND_COUNT; k++) {
         CHECK(pv_kind_name((pv_kind_t)k)[0] != '\0', "kind %d named", k);
     }
+
+    banner("vigil: a decoy element must not hide what follows it");
+    {
+        /* AN ADVERTISEMENT IS SEVERAL AD STRUCTURES, AND THE WALK MUST SEE
+         * ALL OF THEM. pv_observe_adv() drops anything classified UNKNOWN, so
+         * a classifier that gives up part way through does not merely miss a
+         * detail - it makes the device invisible to an anti-stalking lens. */
+
+        /* A four-byte Apple manufacturer element: a company ID and one byte,
+         * carrying no Find My type. On its own it is nothing. */
+        const uint8_t decoy[] = { 0x03, 0xFF, 0x4C, 0x00 };
+        CHECK(pv_classify(decoy, sizeof decoy) == PV_KIND_UNKNOWN,
+              "an Apple scrap alone should name nothing");
+
+        /* The same scrap, followed by a Flipper announcing itself by name.
+         * The Flipper must still be found. */
+        const uint8_t hidden_flipper[] = {
+            0x03, 0xFF, 0x4C, 0x00,                       /* the decoy      */
+            0x0A, 0x09, 'F', 'l', 'i', 'p', 'p', 'e', 'r', ' ', 'X'
+        };
+        CHECK(pv_classify(hidden_flipper, sizeof hidden_flipper) == PV_KIND_FLIPPER,
+              "a decoy in front of a Flipper hid it; got %d",
+              (int)pv_classify(hidden_flipper, sizeof hidden_flipper));
+
+        /* And in front of a SmartTag's service UUID. */
+        const uint8_t hidden_tag[] = {
+            0x03, 0xFF, 0x4C, 0x00,                       /* the decoy      */
+            0x03, 0x16, 0x5A, 0xFD                        /* 0xFD5A         */
+        };
+        CHECK(pv_classify(hidden_tag, sizeof hidden_tag) == PV_KIND_SMARTTAG,
+              "a decoy in front of a SmartTag hid it; got %d",
+              (int)pv_classify(hidden_tag, sizeof hidden_tag));
+
+        /* A real Find My element still wins when it is actually there. */
+        const uint8_t findmy[] = { 0x06, 0xFF, 0x4C, 0x00, 0x12, 0x19, 0x04 };
+        const pv_kind_t k = pv_classify(findmy, sizeof findmy);
+        CHECK(k == PV_KIND_FINDMY || k == PV_KIND_FINDMY_LOST,
+              "a Find My element should still be named, got %d", (int)k);
+    }
+
+    banner("vigil: a company ID is not a tracker");
+    {
+        /* 0x0075 IS SAMSUNG, NOT A GALAXY SMARTTAG. Every Galaxy phone, every
+         * pair of Buds and every Watch advertises under it, and this lens
+         * accuses whatever it names of possibly following somebody. */
+        const uint8_t galaxy[] = { 0x05, 0xFF, 0x75, 0x00, 0x42, 0x01 };
+        CHECK(pv_classify(galaxy, sizeof galaxy) != PV_KIND_SMARTTAG,
+              "a Samsung company ID alone must not be called a SmartTag");
+
+        /* The honest signal: the SmartThings Find service UUID. */
+        const uint8_t smarttag[] = { 0x03, 0x16, 0x5A, 0xFD };
+        CHECK(pv_classify(smarttag, sizeof smarttag) == PV_KIND_SMARTTAG,
+              "0xFD5A must still name a SmartTag");
+    }
 }
