@@ -117,8 +117,8 @@ static lv_obj_t *s_tell;
  * So the arc carries the level on the rim - that is what an arc is for - and
  * the number sits in the clear band INSIDE the ring, where there is room for
  * it to be read. */
-#define BATT_R   440 /* outer, clear of the score ring at 412          */
-#define BATT_W_  4   /* a hair thicker than the old 3, with round ends */
+#define BATT_R   446 /* outer, clear of the score ring at 412          */
+#define BATT_W_  3   /* thin, so the reading fits inside it on the rim  */
 static lv_obj_t *s_batt_track, *s_batt_fill, *s_batt_txt;
 /* What the charge reading WANTS to do, decided by the battery mode, kept so a
  * page change can overrule it. See batt_place(). */
@@ -527,11 +527,12 @@ static void split_two(const char *s, unsigned cap, char *a, unsigned an,
  * nothing, which was the point of putting it there. */
 static void batt_place(hud_page_t page)
 {
-    const bool home = (page == PAGE_HOME);
+    /* One position, on the rim, on every page that has one free. The detail
+     * and browse pages put their own title across that band, and a page that
+     * is a dense list is not one somebody is reading their battery on. */
     const bool room = (page == PAGE_HOME || page == PAGE_LIVE ||
                        page == PAGE_ADVICE);
-    lv_obj_align(s_batt_txt, LV_ALIGN_CENTER, 0,
-                 home ? PS_Y_BATT_HOME : PS_Y_BATT_TXT);
+    lv_obj_align(s_batt_txt, LV_ALIGN_CENTER, 0, PS_Y_BATT_RIM);
     show(s_batt_txt, s_batt_want && room);
 }
 
@@ -733,7 +734,7 @@ bool pharos_hud_create(void)
      * pharos_batt_mode_t. An explicit width because an auto-sized label
      * aligned by its centre grows symmetrically, which is how the first
      * version of this ran over its own arc. */
-    s_batt_txt = mk_label(scr, PS_TYPE_MICRO, C_DIM, 0, PS_Y_BATT_TXT, "");
+    s_batt_txt = mk_label(scr, PS_TYPE_MICRO, C_DIM, 0, PS_Y_BATT_RIM, "");
     lv_obj_set_width(s_batt_txt, 120);
     lv_obj_set_style_text_align(s_batt_txt, LV_TEXT_ALIGN_CENTER, 0);
     show(s_batt_txt, false);

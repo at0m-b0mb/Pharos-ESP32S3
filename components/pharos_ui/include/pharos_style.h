@@ -190,21 +190,22 @@ uint32_t ps_alert_colour(uint8_t alert);
  * more than "100%" needs. */
 #define PS_Y_BATT    (-212)
 
-/* THE READING, INSIDE THE RING RATHER THAN BESIDE THE ARC.
+/* ON THE RIM, WHERE THE WORK IS NOT.
  *
- * PS_Y_BATT is the arc's own band, eleven pixels deep between the score ring
- * and the glass - too shallow for the 14px face, so a percentage written there
- * overlapped the ring below and the arc above. This is the clear band inside
- * the ring: under the arc, above where the ribbon starts at -150. */
-#define PS_Y_BATT_TXT (-176)
+ * The reading belongs with its arc, outside the score ring, so it never sits
+ * in the area the lens is using. The obvious place is the two ENDS of the arc
+ * - a bolt at one, the digits at the other - and the geometry refuses it: a
+ * horizontal text box 30 degrees off the top has its far corner at radius 228
+ * to 232 against a safe radius of 224, and pulling it in far enough to fit
+ * puts its near edge at 195, inside the score ring at 206. Measured, not
+ * guessed.
+ *
+ * Straight up is the one place on the rim where a horizontal box stays inside
+ * a circle, because that is where the box is squarest to the arc. So the bolt
+ * and the digits go there together, between the score ring below and the
+ * charge arc above, with the whole thing out of the working area. */
+#define PS_Y_BATT_RIM (-209)
 
-/* ...EXCEPT ON THE HOME FACE, WHERE THAT BAND BELONGS TO THE RING.
- *
- * The watch ring puts a name at the top of the dial, and the charge reading
- * landed on it. Home has its own clear space: the bottom notch, which the
- * gauge's 270 degrees deliberately leaves open and where the clock already
- * lives. Time and charge together is what a watch face does anyway. */
-#define PS_Y_BATT_HOME (160)
 
 /* THE GUIDE'S OWN BANDS.
  *
