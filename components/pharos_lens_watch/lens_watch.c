@@ -70,8 +70,19 @@ static bool watch_mount(void)
     memset(&s_verdict, 0, sizeof(s_verdict));
     s_lock_ms = 0;
     s_survey_ms = 0;
-    s_manual = false;
-    s_camp_requested = false;
+    /* WHAT THE OPERATOR ASKED FOR IS NOT SESSION STATE.
+     *
+     * s_manual and s_camp_requested are a standing choice - "watch THIS
+     * channel, and do not wander off it" - and mount used to wipe both. That
+     * never showed while the console restarted the radio itself, because it
+     * did so after setting them and never passed through mount. Now that the
+     * restart is a lens request applied on the UI task, activate() calls
+     * on_mount() first, so `watch camp 6` set the channel, mount erased it,
+     * and the radio came back hopping. Measured on the device.
+     *
+     * Harvest and Locate already keep theirs across a mount; this is the one
+     * that did not. The engine, the verdict and the timers above ARE session
+     * state and are still reset. `watch survey` is how the choice is undone. */
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
     }
@@ -294,11 +305,11 @@ void pharos_lens_watch_camp(uint8_t channel)
     s_lock_ms = 0;
     s_camp_requested = true;
     s_camp_channel = channel;
-    if (pharos_lens_active() && strcmp(pharos_lens_active()->id, "wifi.watch") == 0) {
-        pharos_radio_rx_stop();
-        watch_start();
-        ESP_LOGI(TAG, "camping on channel %u (operator)", channel);
-    }
+    /* STATE ONLY. The radio is restarted by whoever owns the lens lifecycle
+     * - see the note in console_glue.c. Tearing the Wi-Fi driver down and
+     * bringing it back up here ran that on the caller's task, which for the
+     * console is the REPL's small stack, racing the UI task's own switch. */
+    ESP_LOGI(TAG, "camp on channel %u requested (operator)", channel);
 }
 
 void pharos_lens_watch_survey(void)
@@ -307,11 +318,7 @@ void pharos_lens_watch_survey(void)
     s_lock_ms = 0;
     s_survey_ms = 0;
     s_camp_requested = false;
-    if (pharos_lens_active() && strcmp(pharos_lens_active()->id, "wifi.watch") == 0) {
-        pharos_radio_rx_stop();
-        watch_start();
-        ESP_LOGI(TAG, "surveying (operator); lock-on re-armed");
-    }
+    ESP_LOGI(TAG, "survey requested (operator); lock-on re-armed");
 }
 
 bool pharos_lens_watch_report(char *buf, size_t cap, prt_redact_t redact, uint32_t salt)

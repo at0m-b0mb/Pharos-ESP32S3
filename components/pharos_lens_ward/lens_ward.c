@@ -119,7 +119,20 @@ static void ward_note_network(const pharos_ev_dot11_t *d)
             return;
         }
     }
-    if (s_n_seen >= WARD_MAX_SEEN) {
+    /* WHICH SLOT THIS GOES IN - REPLACING ONE IS NOT THE SAME AS REWINDING.
+     *
+     * The full-table path used to do `s_n_seen = worst`, write at that index,
+     * and then increment - leaving the list length at worst + 1. Every entry
+     * ABOVE the faintest one fell outside the list and was gone: with the
+     * faintest at index 3 of 16, twelve learned networks vanished on a single
+     * eviction. "Adopt nearest" then picked the nearest of whatever few
+     * survived, which is how it could end up guarding the wrong network.
+     *
+     * A replacement writes over one slot and leaves the length alone. */
+    unsigned slot;
+    if (s_n_seen < WARD_MAX_SEEN) {
+        slot = s_n_seen++;
+    } else {
         /* Replace the faintest: the list exists to offer the nearest. */
         unsigned worst = 0;
         for (unsigned i = 1; i < s_n_seen; i++) {
@@ -128,9 +141,9 @@ static void ward_note_network(const pharos_ev_dot11_t *d)
         if (d->rssi <= s_seen[worst].rssi) {
             return;
         }
-        s_n_seen = worst; /* overwrite that slot below */
+        slot = worst;
     }
-    ward_seen_t *e = &s_seen[s_n_seen < WARD_MAX_SEEN ? s_n_seen : 0];
+    ward_seen_t *e = &s_seen[slot];
     memset(e, 0, sizeof(*e));
     memcpy(e->bssid, d->a3, 6);
     const uint8_t n = d->ssid_len > 32 ? 32 : d->ssid_len;
@@ -139,7 +152,6 @@ static void ward_note_network(const pharos_ev_dot11_t *d)
     e->channel = d->channel;
     e->rssi = d->rssi;
     e->in_use = true;
-    if (s_n_seen < WARD_MAX_SEEN) s_n_seen++;
 }
 static unsigned s_n_impostors;
 static uint32_t s_impostor_frames;

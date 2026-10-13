@@ -50,6 +50,8 @@ extern void pharos_lens_harvest_camp(uint8_t channel);
 extern void pharos_lens_harvest_survey(void);
 extern void pharos_lens_watch_survey(void);
 extern void pharos_lens_locate_set_target(const uint8_t bssid[6], uint8_t channel);
+extern void pharos_lens_squall_camp(uint8_t channel);
+extern void pharos_lens_squall_survey(void);
 extern unsigned pharos_lens_sentinel_adopt(void);
 extern bool pharos_lens_sentinel_snapshot(ps_verdict_t *out);
 extern bool pharos_lens_harvest_snapshot(ph_verdict_t *out);
@@ -85,6 +87,29 @@ static bool glue_activate(const char *id)
 }
 static void glue_deactivate(void) { pharos_ui_request_stop(); }
 
+/* APPLY A RADIO CHANGE ON THE TASK THAT OWNS THE RADIO.
+ *
+ * This file's own header states the rule: the console FILES a request rather
+ * than acting, because doing it here runs Wi-Fi initialisation on the REPL's
+ * small stack and races the analytics loop. The camp and target paths broke it
+ * - they called straight into the lens, which tore the Wi-Fi driver down and
+ * brought it back up on this task while the UI task was free to be switching
+ * lenses at the same moment.
+ *
+ * The lens entry points are pure state now, and the restart is a lens request
+ * for the lens that is already running: pharos_lens_activate() always does a
+ * full stop-then-start, so re-requesting the active lens IS the retune, and it
+ * happens on the UI task under the lens mutex like every other switch.
+ *
+ * Nothing is filed when the lens is only PENDING - its on_start has not run
+ * yet, and it will read the state we just set when it does. */
+static void retune(const char *id, const pharos_lens_t *active)
+{
+    if (active && strcmp(active->id, id) == 0) {
+        (void)pharos_ui_request_lens(id);
+    }
+}
+
 static void glue_set_channel(int channel)
 {
     /* Dispatched by whichever lens is up. Harvest needs this more than Watch
@@ -104,12 +129,23 @@ static void glue_set_channel(int channel)
     } else if (strcmp(id, "wifi.harvest") == 0) {
         if (channel < 0) pharos_lens_harvest_survey();
         else pharos_lens_harvest_camp((uint8_t)channel);
+    } else if (strcmp(id, "wifi.squall") == 0) {
+        /* Advertised by `squall [camp <ch>|survey]` since the command was
+         * written, and nothing implemented it: the command parsed, reported
+         * success and surveyed anyway. */
+        if (channel < 0) pharos_lens_squall_survey();
+        else pharos_lens_squall_camp((uint8_t)channel);
+    } else {
+        return; /* this lens has no channel to set */
     }
+    retune(id, a);
 }
 
 static void glue_set_target(const uint8_t bssid[6])
 {
+    const pharos_lens_t *a = pharos_lens_active();
     pharos_lens_locate_set_target(bssid, 0);
+    retune("wifi.locate", a);
 }
 
 static void glue_set_region(int region)

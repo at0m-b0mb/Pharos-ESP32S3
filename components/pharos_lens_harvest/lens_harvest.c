@@ -85,23 +85,15 @@ void pharos_lens_harvest_camp(uint8_t channel)
 {
     s_camp_requested = true;
     s_camp_channel = channel;
-    if (pharos_lens_active() &&
-        strcmp(pharos_lens_active()->id, "wifi.harvest") == 0) {
-        pharos_radio_rx_stop();
-        harvest_start();
-        ESP_LOGI(TAG, "camping on channel %u (operator)", channel);
-    }
+    /* State only; the restart belongs to whoever owns the lens lifecycle.
+     * See the note in console_glue.c. */
+    ESP_LOGI(TAG, "camp on channel %u requested (operator)", channel);
 }
 
 void pharos_lens_harvest_survey(void)
 {
     s_camp_requested = false;
-    if (pharos_lens_active() &&
-        strcmp(pharos_lens_active()->id, "wifi.harvest") == 0) {
-        pharos_radio_rx_stop();
-        harvest_start();
-        ESP_LOGI(TAG, "surveying all channels (operator)");
-    }
+    ESP_LOGI(TAG, "survey of all channels requested (operator)");
 }
 
 static void harvest_stop(void)

@@ -190,21 +190,27 @@ uint32_t ps_alert_colour(uint8_t alert);
  * more than "100%" needs. */
 #define PS_Y_BATT    (-212)
 
-/* ON THE RIM, WHERE THE WORK IS NOT.
+/* THE READING SITS WITH THE CLOCK, AND ONLY ON HOME.
  *
- * The reading belongs with its arc, outside the score ring, so it never sits
- * in the area the lens is using. The obvious place is the two ENDS of the arc
- * - a bolt at one, the digits at the other - and the geometry refuses it: a
- * horizontal text box 30 degrees off the top has its far corner at radius 228
- * to 232 against a safe radius of 224, and pulling it in far enough to fit
- * puts its near edge at 195, inside the score ring at 206. Measured, not
- * guessed.
+ * It has been three places and two of them were wrong. Inside the dial it was
+ * in the working area and landed on the watch ring's top label. On the rim it
+ * was pressed against its own arc, because the band between the score ring and
+ * the glass is eleven pixels deep and the smallest face here is fourteen -
+ * there is no version of "beside the arc" that is not touching it.
  *
- * Straight up is the one place on the rim where a horizontal box stays inside
- * a circle, because that is where the box is squarest to the arc. So the bolt
- * and the digits go there together, between the score ring below and the
- * charge arc above, with the whole thing out of the working area. */
-#define PS_Y_BATT_RIM (-209)
+ * The arc's ENDS do not work either, and that is geometry rather than taste: a
+ * horizontal text box 30 degrees off the top has its far CORNER at radius 228
+ * to 232 against a safe radius of 224, so it hangs off the glass, and pulling
+ * it in until the corner fits puts its near edge at 195, inside the score ring
+ * at 206. Measured on this panel, not guessed.
+ *
+ * So the number goes where a watch face puts it: the bottom notch, beside the
+ * clock, which the gauge's 270 degrees deliberately leaves open. And it goes
+ * there only on HOME. Every working face shows the arc alone - colour already
+ * says charging, fill already says how much, and a lens face has better uses
+ * for the glass than a figure the operator is not reading. The exact value is
+ * a row in sys.audit for anyone who wants it. */
+#define PS_Y_BATT_HOME (160)
 
 
 /* THE GUIDE'S OWN BANDS.

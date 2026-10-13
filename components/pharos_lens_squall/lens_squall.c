@@ -47,9 +47,31 @@ static bool squall_mount(void)
     return s_lock != NULL && pharos_bus_init(&s_bus, s_slots, SQUALL_RING);
 }
 
+/* THE CONSOLE ALREADY OFFERED `squall camp <ch>` AND NOTHING IMPLEMENTED IT.
+ *
+ * The command parsed, reported success, and changed nothing - the lens always
+ * surveyed. Camping matters more here than almost anywhere: the band state is
+ * judged against measured dwell, so a thin sample on a hopping receiver is
+ * exactly the reading that cannot tell a loud channel from a jammed one. */
+static bool s_camp_requested;
+static uint8_t s_camp_channel;
+
+void pharos_lens_squall_camp(uint8_t channel)
+{
+    s_camp_requested = true;
+    s_camp_channel = channel;
+}
+
+void pharos_lens_squall_survey(void)
+{
+    s_camp_requested = false;
+}
+
 static bool squall_start(void)
 {
-    pharos_scan_plan_t plan = pharos_scan_plan_survey();
+    pharos_scan_plan_t plan = s_camp_requested
+                                  ? pharos_scan_plan_camp(s_camp_channel)
+                                  : pharos_scan_plan_survey();
     /* Long enough per visit that a dwell summary means something, short enough
      * that the whole band is covered in a few seconds - jamming is a condition
      * to be mapped across channels, not chased on one. */

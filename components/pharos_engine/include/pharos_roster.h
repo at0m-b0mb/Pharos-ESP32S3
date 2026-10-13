@@ -190,6 +190,21 @@ void rd_observe_wifi(rd_roster_t *r, const uint8_t mac[6], bool is_ap,
 void rd_observe_wps(rd_roster_t *r, const uint8_t bssid[6], const char *vendor,
                     const char *model, bool pin_exposed, uint64_t t_us);
 
+/* PULL THE FIELDS A ROSTER ENTRY NEEDS OUT OF ONE ADVERTISEMENT.
+ *
+ * The lens was handed the whole 31-byte advertisement and passed NULL and 0
+ * for both of these, so rd_observe_ble()'s name-leak branch was unreachable
+ * and class_from_appearance() was always asked about zero - which meant every
+ * BLE-only device in the room fell through to RD_WEARABLE, including printers,
+ * speakers and laptops. A roster that calls everything a wearable is not a
+ * roster.
+ *
+ * `name` is filled with printable characters only - it is somebody else's text
+ * and it reaches the glass and the console. Returns true if anything was
+ * found. */
+bool rd_ble_parse_adv(const uint8_t *data, unsigned len,
+                      char *name, unsigned name_cap, uint16_t *appearance);
+
 /* Fold in one BLE advertisement. `name` may be NULL; `appearance` is the GAP
  * appearance value or 0. `addr_random` is true for a randomised address. */
 void rd_observe_ble(rd_roster_t *r, const uint8_t addr[6], bool addr_random,

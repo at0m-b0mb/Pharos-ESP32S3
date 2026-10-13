@@ -149,7 +149,15 @@ static void roster_event(const pharos_event_t *ev)
                        ev->u.wps.model, ev->u.wps.pin_exposed, ev->t_us);
     } else if (ev->type == PHAROS_EV_BLE_ADV) {
         const pharos_ev_ble_t *b = &ev->u.ble;
-        rd_observe_ble(&s_roster, b->addr, b->addr_type != 0, NULL, 0, NULL, 0,
+        /* THE ADVERTISEMENT WAS BEING THROWN AWAY. This passed NULL and 0 for
+         * the name and the appearance, so the name-leak exposure could never
+         * be raised and every BLE-only device was classed RD_WEARABLE. */
+        char name[PR_ROSTER_NAME + 1];
+        uint16_t appearance = 0;
+        (void)rd_ble_parse_adv(b->data, pharos_ev_ble_len(b), name,
+                               (unsigned)sizeof name, &appearance);
+        rd_observe_ble(&s_roster, b->addr, b->addr_type != 0,
+                       name[0] ? name : NULL, appearance, NULL, 0,
                        b->rssi, ev->t_us);
     }
     xSemaphoreGive(s_lock);

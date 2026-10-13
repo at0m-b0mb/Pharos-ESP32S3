@@ -527,13 +527,10 @@ static void split_two(const char *s, unsigned cap, char *a, unsigned an,
  * nothing, which was the point of putting it there. */
 static void batt_place(hud_page_t page)
 {
-    /* One position, on the rim, on every page that has one free. The detail
-     * and browse pages put their own title across that band, and a page that
-     * is a dense list is not one somebody is reading their battery on. */
-    const bool room = (page == PAGE_HOME || page == PAGE_LIVE ||
-                       page == PAGE_ADVICE);
-    lv_obj_align(s_batt_txt, LV_ALIGN_CENTER, 0, PS_Y_BATT_RIM);
-    show(s_batt_txt, s_batt_want && room);
+    /* Home only, beside the clock. See PS_Y_BATT_HOME for why nowhere else
+     * on this face works. */
+    lv_obj_align(s_batt_txt, LV_ALIGN_CENTER, 0, PS_Y_BATT_HOME);
+    show(s_batt_txt, s_batt_want && page == PAGE_HOME);
 }
 
 /* ---- pages ------------------------------------------------------------ */
@@ -734,7 +731,7 @@ bool pharos_hud_create(void)
      * pharos_batt_mode_t. An explicit width because an auto-sized label
      * aligned by its centre grows symmetrically, which is how the first
      * version of this ran over its own arc. */
-    s_batt_txt = mk_label(scr, PS_TYPE_MICRO, C_DIM, 0, PS_Y_BATT_RIM, "");
+    s_batt_txt = mk_label(scr, PS_TYPE_MICRO, C_DIM, 0, PS_Y_BATT_HOME, "");
     lv_obj_set_width(s_batt_txt, 120);
     lv_obj_set_style_text_align(s_batt_txt, LV_TEXT_ALIGN_CENTER, 0);
     show(s_batt_txt, false);

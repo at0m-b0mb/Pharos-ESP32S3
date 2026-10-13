@@ -297,6 +297,49 @@ static rd_class_t class_from_appearance(uint16_t appearance)
     }
 }
 
+bool rd_ble_parse_adv(const uint8_t *data, unsigned len,
+                      char *name, unsigned name_cap, uint16_t *appearance)
+{
+    if (name && name_cap) {
+        name[0] = '\0';
+    }
+    if (appearance) {
+        *appearance = 0;
+    }
+    if (!data || len < 2u) {
+        return false;
+    }
+
+    bool found = false;
+    unsigned i = 0;
+    /* AD structures: [len][type][payload...]. len counts the type byte. */
+    while (i + 1u < len) {
+        const unsigned l = data[i];
+        if (l == 0u || i + 1u + l > len) {
+            break; /* malformed or truncated - stop rather than over-read */
+        }
+        const unsigned type = data[i + 1];
+        const uint8_t *p = &data[i + 2];
+        const unsigned plen = l - 1u;
+
+        if ((type == 0x09u || type == 0x08u) && plen && name && name_cap) {
+            /* 0x09 is the complete local name, 0x08 a shortened one. Take the
+             * complete one if both are present, which is why this does not
+             * stop at the first. */
+            if (type == 0x09u || name[0] == '\0') {
+                if (pharos_copy_printable(name, name_cap, p, plen)) {
+                    found = true;
+                }
+            }
+        } else if (type == 0x19u && plen >= 2u && appearance) {
+            *appearance = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+            found = true;
+        }
+        i += 1u + l;
+    }
+    return found;
+}
+
 void rd_observe_ble(rd_roster_t *r, const uint8_t addr[6], bool addr_random,
                     const char *name, uint16_t appearance,
                     const uint8_t *svc_uuids16, unsigned n_uuids, int8_t rssi,

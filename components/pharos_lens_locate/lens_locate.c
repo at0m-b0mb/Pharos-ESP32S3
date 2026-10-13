@@ -109,11 +109,9 @@ void pharos_lens_locate_set_target(const uint8_t bssid[6], uint8_t channel)
         pl_reset(&s_engine, s_target);
         xSemaphoreGive(s_lock);
     }
-    /* If we are the active lens, re-camp on the new channel. */
-    if (pharos_lens_active() && strcmp(pharos_lens_active()->id, "wifi.locate") == 0) {
-        pharos_radio_rx_stop();
-        locate_start();
-    }
+    /* State only. Re-camping means tearing the Wi-Fi driver down and bringing
+     * it back up, which belongs on the task that owns the lens lifecycle and
+     * not on whichever one happened to call this. See console_glue.c. */
     ESP_LOGI(TAG, "target %02X:%02X:%02X:%02X:%02X:%02X ch%u",
              bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], channel);
 }

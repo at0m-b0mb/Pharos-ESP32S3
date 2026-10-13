@@ -486,4 +486,52 @@ void test_roster(void)
     test_roster_expiry_and_capacity();
     test_roster_export_redacts();
     test_roster_degenerate();
+
+    banner("roster: the advertisement is parsed, not thrown away");
+    {
+        /* THE LENS PASSED NULL AND 0 FOR BOTH OF THESE, so the name-leak
+         * exposure was unreachable and class_from_appearance() was always
+         * asked about zero - every BLE-only device fell through to
+         * RD_WEARABLE, printers and speakers included. */
+        char nm[PR_ROSTER_NAME + 1];
+        uint16_t app = 0;
+
+        /* Complete local name, AD type 0x09. */
+        const uint8_t adv[] = {
+            0x02, 0x01, 0x06,                               /* flags        */
+            0x0D, 0x09, 'K','a','i',0x27,'s',' ','i','P','h','o','n','e'
+        };
+        CHECK(rd_ble_parse_adv(adv, sizeof adv, nm, sizeof nm, &app),
+              "a complete local name should be found");
+        CHECK(strcmp(nm, "Kai's iPhone") == 0, "got '%s'", nm);
+
+        /* Appearance, AD type 0x19, little-endian. */
+        const uint8_t printer[] = { 0x03, 0x19, 0x80, 0x00 };
+        CHECK(rd_ble_parse_adv(printer, sizeof printer, nm, sizeof nm, &app),
+              "an appearance should be found");
+        CHECK(app == 0x0080, "appearance should be 0x0080, got 0x%04x", app);
+
+        /* The complete name wins over a shortened one, in either order. */
+        const uint8_t both[] = {
+            0x04, 0x08, 'A','B','C',
+            0x07, 0x09, 'A','B','C','D','E','F'
+        };
+        CHECK(rd_ble_parse_adv(both, sizeof both, nm, sizeof nm, &app), "both");
+        CHECK(strcmp(nm, "ABCDEF") == 0, "complete name should win, got '%s'", nm);
+
+        /* SOMEBODY ELSE'S TEXT. A name goes to the glass and the console, so
+         * control bytes must not survive the trip. */
+        const uint8_t nasty[] = { 0x06, 0x09, 'a', 0x1B, '[', '2', 'J' };
+        CHECK(rd_ble_parse_adv(nasty, sizeof nasty, nm, sizeof nm, &app), "nasty");
+        CHECK(strchr(nm, 0x1B) == NULL, "an escape byte survived: '%s'", nm);
+
+        /* Malformed input must stop, not over-read. */
+        const uint8_t zero_len[] = { 0x00, 0x09, 'x' };
+        (void)rd_ble_parse_adv(zero_len, sizeof zero_len, nm, sizeof nm, &app);
+        const uint8_t overrun[] = { 0x40, 0x09, 'x' };
+        (void)rd_ble_parse_adv(overrun, sizeof overrun, nm, sizeof nm, &app);
+        CHECK(nm[0] == '\0', "a truncated element must yield no name");
+        CHECK(!rd_ble_parse_adv(NULL, 0, nm, sizeof nm, &app), "NULL input");
+        CHECK(!rd_ble_parse_adv(adv, 1, nm, sizeof nm, &app), "a 1-byte advert");
+    }
 }
