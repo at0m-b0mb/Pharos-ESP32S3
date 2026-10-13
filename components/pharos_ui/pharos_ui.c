@@ -1299,11 +1299,19 @@ unsigned pharos_ui_pump(void)
     unsigned n = 0;
     const pharos_lens_t *lens = pharos_lens_active();
     if (lens && lens->ingest && lens->on_event) {
-        struct pharos_bus *bus = lens->ingest();
-        if (bus) {
+        /* Both rings, on this core, under ONE budget - so a lens that listens
+         * to two radios cannot starve the loop twice over. See ingest_aux. */
+        struct pharos_bus *buses[2] = {
+            lens->ingest(),
+            lens->ingest_aux ? lens->ingest_aux() : NULL,
+        };
+        for (unsigned b = 0; b < 2; b++) {
+            if (!buses[b]) {
+                continue;
+            }
             pharos_event_t ev;
             /* Bounded per call so one very busy lens cannot starve the loop. */
-            while (n < 256 && pharos_bus_pop((pharos_bus_t *)bus, &ev)) {
+            while (n < 256 && pharos_bus_pop((pharos_bus_t *)buses[b], &ev)) {
                 lens->on_event(&ev);
                 n++;
             }

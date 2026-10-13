@@ -41,6 +41,12 @@ static const char *TAG = "lens.vigil";
 
 EXT_RAM_BSS_ATTR static pharos_event_t s_slots[VIGIL_RING];
 static pharos_bus_t s_bus;
+/* ONE PRODUCER PER RING. The Wi-Fi callback and the NimBLE host task
+ * are different tasks on different cores, and pharos_bus_push is
+ * single-producer by implementation - sharing one ring between them
+ * tears events across a union. See pharos_lens_t.ingest_aux. */
+EXT_RAM_BSS_ATTR static pharos_event_t s_ble_slots[VIGIL_RING];
+static pharos_bus_t s_ble_bus;
 
 EXT_RAM_BSS_ATTR static pv_state_t s_engine;
 static pv_verdict_t s_verdict;
@@ -71,7 +77,8 @@ static bool vigil_mount(void)
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
     }
-    return s_lock != NULL && pharos_bus_init(&s_bus, s_slots, VIGIL_RING);
+    return s_lock != NULL && pharos_bus_init(&s_bus, s_slots, VIGIL_RING) &&
+           pharos_bus_init(&s_ble_bus, s_ble_slots, VIGIL_RING);
 }
 
 static bool vigil_start(void)
@@ -83,7 +90,7 @@ static bool vigil_start(void)
     if (!pharos_radio_rx_start(&plan, &s_bus)) {
         return false;
     }
-    if (!pharos_radio_ble_scan_start(&s_bus)) {
+    if (!pharos_radio_ble_scan_start(&s_ble_bus)) {
         ESP_LOGE(TAG, "BLE observer would not start - Vigil cannot see tags");
         pharos_radio_rx_stop();
         return false;
@@ -110,7 +117,8 @@ static void vigil_event(const pharos_event_t *ev)
     pharos_pulse_note(&s_pulse, ev->t_us);
     if (ev->type == PHAROS_EV_BLE_ADV) {
         pv_observe_adv(&s_engine, ev->u.ble.addr, ev->u.ble.addr_type,
-                       ev->u.ble.rssi, ev->u.ble.data, ev->u.ble.data_len,
+                       ev->u.ble.rssi, ev->u.ble.data,
+                       pharos_ev_ble_len(&ev->u.ble),
                        ev->t_us);
         return;
     }
@@ -290,6 +298,7 @@ static bool k_vigil_stage(uint8_t *stage, uint8_t *score, uint8_t *ceiling)
 }
 
 static struct pharos_bus *vigil_ingest(void) { return &s_bus; }
+static struct pharos_bus *vigil_ingest_ble(void) { return &s_ble_bus; }
 
 static bool k_vigil_display(struct pharos_lens_display *o)
 {
@@ -436,6 +445,7 @@ static const pharos_lens_t k_vigil = {
     .on_tick = vigil_tick,
     .on_event = vigil_event,
     .ingest = vigil_ingest,
+    .ingest_aux = vigil_ingest_ble,
     .stage_report = k_vigil_stage,
     .display = k_vigil_display,
     .row = k_vigil_row,

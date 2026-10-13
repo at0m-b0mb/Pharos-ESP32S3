@@ -1,4 +1,7 @@
 /* Pharos host tests, part three: probe-request privacy and the power planner. */
+#include <string.h>
+
+#include "pharos_event.h"
 #include "pharos_power.h"
 #include "pharos_probe.h"
 #include "test_support.h"
@@ -361,5 +364,38 @@ void test_power(void)
         /* No voltage is no second opinion. Doubt has to be earned. */
         CHECK(!pwr_soc_is_approx(0, 0), "without a voltage there is nothing to contradict");
         CHECK(!pwr_soc_is_approx(100, 0), "without a voltage there is nothing to contradict");
+    }
+
+    banner("event: a BLE length may never exceed the buffer that holds it");
+    {
+        /* The radio clamps on the way in, so a well-formed event is untouched. */
+        pharos_ev_ble_t b;
+        memset(&b, 0, sizeof b);
+        b.data_len = 0;
+        CHECK(pharos_ev_ble_len(&b) == 0, "an empty advertisement stays empty");
+        b.data_len = 17;
+        CHECK(pharos_ev_ble_len(&b) == 17, "an ordinary length is passed through");
+        b.data_len = PHAROS_BLE_ADV_MAX;
+        CHECK(pharos_ev_ble_len(&b) == PHAROS_BLE_ADV_MAX,
+              "a full advertisement is passed through");
+
+        /* THE ONE THAT MATTERS. A torn event across the payload union can put
+         * a byte of an attacker's 802.11 frame in this field; every walker
+         * then indexes a 31-byte array with it. Three lenses shared one
+         * single-producer ring between the Wi-Fi task and the NimBLE task,
+         * which is how such an event could be built. The ring is fixed - this
+         * is the belt to that pair of braces. */
+        b.data_len = (uint8_t)(PHAROS_BLE_ADV_MAX + 1);
+        CHECK(pharos_ev_ble_len(&b) == PHAROS_BLE_ADV_MAX,
+              "one past the buffer must clamp");
+        b.data_len = 255;
+        CHECK(pharos_ev_ble_len(&b) == PHAROS_BLE_ADV_MAX,
+              "the widest possible byte must clamp, got %u",
+              (unsigned)pharos_ev_ble_len(&b));
+        for (unsigned v = 0; v <= 255u; v++) {
+            b.data_len = (uint8_t)v;
+            CHECK(pharos_ev_ble_len(&b) <= PHAROS_BLE_ADV_MAX,
+                  "length %u escaped the buffer", v);
+        }
     }
 }

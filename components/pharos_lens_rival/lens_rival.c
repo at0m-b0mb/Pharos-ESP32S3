@@ -27,6 +27,12 @@ static const char *TAG = "lens.rival";
 
 EXT_RAM_BSS_ATTR static pharos_event_t s_slots[RIVAL_RING];
 static pharos_bus_t s_bus;
+/* ONE PRODUCER PER RING. The Wi-Fi callback and the NimBLE host task
+ * are different tasks on different cores, and pharos_bus_push is
+ * single-producer by implementation - sharing one ring between them
+ * tears events across a union. See pharos_lens_t.ingest_aux. */
+EXT_RAM_BSS_ATTR static pharos_event_t s_ble_slots[RIVAL_RING];
+static pharos_bus_t s_ble_bus;
 EXT_RAM_BSS_ATTR static prv_state_t s_engine;
 static prv_verdict_t s_verdict;
 static SemaphoreHandle_t s_lock;
@@ -128,7 +134,8 @@ static bool rival_mount(void)
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
     }
-    return s_lock && pharos_bus_init(&s_bus, s_slots, RIVAL_RING);
+    return s_lock && pharos_bus_init(&s_bus, s_slots, RIVAL_RING) &&
+           pharos_bus_init(&s_ble_bus, s_ble_slots, RIVAL_RING);
 }
 
 static bool rival_start(void)
@@ -141,7 +148,7 @@ static bool rival_start(void)
     if (!pharos_radio_rx_start(&plan, &s_bus)) {
         return false;
     }
-    if (!pharos_radio_ble_scan_start(&s_bus)) {
+    if (!pharos_radio_ble_scan_start(&s_ble_bus)) {
         /* Half of this lens is the Bluetooth half. Say so and stop, rather
          * than running a crippled scan that looks the same on the glass. */
         ESP_LOGE(TAG, "BLE observer would not start - Rival is half blind");
@@ -176,7 +183,7 @@ static void rival_event(const pharos_event_t *ev)
         char name[PR_NAME_MAX + 1];
         name[0] = '\0';
         const uint8_t *d = ev->u.ble.data;
-        const uint8_t dlen = ev->u.ble.data_len;
+        const uint8_t dlen = pharos_ev_ble_len(&ev->u.ble);
         uint8_t i = 0;
         while (i + 1u < dlen) {
             const uint8_t l = d[i];
@@ -196,12 +203,12 @@ static void rival_event(const pharos_event_t *ev)
             i = (uint8_t)(i + 1u + l);
         }
         raw_note(ev->u.ble.addr, name, ev->u.ble.rssi,
-                 ev->u.ble.data, ev->u.ble.data_len);
+                 ev->u.ble.data, dlen);
         /* The RAW payload goes to the engine, not just the name. A passive
          * listener never sees the scan response, so the advertisement is the
          * only place a signature can be - and it is where the Flipper's is. */
         prv_observe_ble_adv(&s_engine, ev->u.ble.addr, name[0] ? name : NULL,
-                            ev->u.ble.data, ev->u.ble.data_len,
+                            ev->u.ble.data, dlen,
                             ev->u.ble.rssi, ev->t_us);
         return;
     }
@@ -269,6 +276,7 @@ bool pharos_lens_rival_snapshot(prv_verdict_t *out)
 }
 
 static struct pharos_bus *rival_ingest(void) { return &s_bus; }
+static struct pharos_bus *rival_ingest_ble(void) { return &s_ble_bus; }
 
 static bool k_rival_display(struct pharos_lens_display *o)
 {
@@ -595,6 +603,7 @@ static const pharos_lens_t k_rival = {
     .on_tick = rival_tick,
     .on_event = rival_event,
     .ingest = rival_ingest,
+    .ingest_aux = rival_ingest_ble,
     .display = k_rival_display,
     .row = k_rival_row,
     .row_head_left = "HARDWARE IN RANGE",

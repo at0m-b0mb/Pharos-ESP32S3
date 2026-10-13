@@ -29,6 +29,12 @@ static const char *TAG = "lens.roster";
 
 EXT_RAM_BSS_ATTR static pharos_event_t s_slots[ROSTER_RING];
 static pharos_bus_t s_bus;
+/* ONE PRODUCER PER RING. The Wi-Fi callback and the NimBLE host task
+ * are different tasks on different cores, and pharos_bus_push is
+ * single-producer by implementation - sharing one ring between them
+ * tears events across a union. See pharos_lens_t.ingest_aux. */
+EXT_RAM_BSS_ATTR static pharos_event_t s_ble_slots[ROSTER_RING];
+static pharos_bus_t s_ble_bus;
 EXT_RAM_BSS_ATTR static rd_roster_t s_roster;
 static SemaphoreHandle_t s_lock;
 
@@ -38,7 +44,8 @@ static bool roster_mount(void)
         s_lock = xSemaphoreCreateMutex();
     }
     rd_reset(&s_roster);
-    return s_lock && pharos_bus_init(&s_bus, s_slots, ROSTER_RING);
+    return s_lock && pharos_bus_init(&s_bus, s_slots, ROSTER_RING) &&
+           pharos_bus_init(&s_ble_bus, s_ble_slots, ROSTER_RING);
 }
 
 static bool roster_start(void)
@@ -50,7 +57,7 @@ static bool roster_start(void)
     plan.want_mgmt = true;
     plan.want_data = true;
     const bool wifi = pharos_radio_rx_start(&plan, &s_bus);
-    const bool ble = pharos_radio_ble_scan_start(&s_bus);
+    const bool ble = pharos_radio_ble_scan_start(&s_ble_bus);
     if (!ble) {
         ESP_LOGW(TAG, "BLE scan would not start; Wi-Fi devices only");
     }
@@ -149,6 +156,7 @@ static void roster_event(const pharos_event_t *ev)
 }
 
 static struct pharos_bus *roster_ingest(void) { return &s_bus; }
+static struct pharos_bus *roster_ingest_ble(void) { return &s_ble_bus; }
 
 static void roster_tick(uint32_t dt_ms)
 {
@@ -405,6 +413,7 @@ static const pharos_lens_t k_roster = {
     .on_tick = roster_tick,
     .on_event = roster_event,
     .ingest = roster_ingest,
+    .ingest_aux = roster_ingest_ble,
     .display = k_roster_display,
     .row = k_roster_row,
     .row_head_left = "DEVICE",

@@ -165,6 +165,24 @@ typedef struct {
     uint8_t data[PHAROS_BLE_ADV_MAX];
 } pharos_ev_ble_t;
 
+/* THE LENGTH, NEVER LARGER THAN THE BUFFER THAT HOLDS IT.
+ *
+ * The radio clamps data_len to PHAROS_BLE_ADV_MAX when it fills the event, so
+ * on a well-formed event this changes nothing. It exists for the event that is
+ * NOT well formed: the payload is a union, and anything that lets an 802.11
+ * event's bytes land in a BLE event's length byte hands every advertisement
+ * walker a length an attacker picked, against a 31-byte array. That happened -
+ * three lenses shared one single-producer ring between two radio tasks.
+ *
+ * The ring is fixed. This is here because a walker that trusts a length wider
+ * than its own buffer is one bad event away from reading out of bounds, and
+ * the walkers should not have to know how the event reached them. */
+static inline uint8_t pharos_ev_ble_len(const pharos_ev_ble_t *b)
+{
+    return (b->data_len > PHAROS_BLE_ADV_MAX) ? (uint8_t)PHAROS_BLE_ADV_MAX
+                                              : b->data_len;
+}
+
 typedef struct {
     uint8_t channel;
     uint8_t band;         /* 0 = 2.4 GHz */

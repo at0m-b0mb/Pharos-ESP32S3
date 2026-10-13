@@ -217,6 +217,28 @@ typedef struct pharos_lens {
      * so a lens can allocate its bus lazily in on_mount. */
     struct pharos_bus *(*ingest)(void);
 
+    /* A SECOND RING, FOR A LENS THAT LISTENS TO TWO RADIOS AT ONCE.
+     *
+     * The bus is single-producer by contract AND by implementation: push()
+     * reads head, writes the slot, then writes head+1, with no atomic step
+     * anywhere. Three lenses - rival, roster and vigil - handed the SAME ring
+     * to pharos_radio_rx_start() and pharos_radio_ble_scan_start(), so the
+     * Wi-Fi driver callback and the NimBLE host task pushed to it from two
+     * tasks on two cores. Two producers that read the same head write the same
+     * slot, and because the event payload is a UNION, the result is an event
+     * whose type says BLE while its length byte came from an 802.11 frame an
+     * attacker chose. Every BLE advertisement walker then trusts that length
+     * against a 31-byte buffer.
+     *
+     * The fix is one producer per ring, which is what the bus always said it
+     * needed. Both rings are drained by the SAME analytics loop, one after the
+     * other, so this adds no core-crossing of its own - draining the second
+     * one from on_tick would have moved BLE events onto the UI core and raced
+     * the engine state against on_event instead.
+     *
+     * NULL for the lenses that listen to one radio, which is most of them. */
+    struct pharos_bus *(*ingest_aux)(void);
+
     /* Optional: report this lens' current finding to the Aegis correlator.
      *
      * Only one lens runs at a time, so no lens can see another's verdict. This

@@ -774,6 +774,23 @@ bool pharos_radio_ble_scan_start(pharos_bus_t *bus)
     if (!bus) {
         return false;
     }
+    /* ONE PRODUCER PER RING, ENFORCED RATHER THAN DOCUMENTED.
+     *
+     * pharos_bus_push reads head, writes the slot, then writes head+1, with no
+     * atomic step anywhere - it is single-producer by implementation, not just
+     * by comment. This callback runs on the NimBLE host task; promisc_cb runs
+     * on the Wi-Fi task, on the other core. Pointed at one ring they write the
+     * same slot, and because the payload is a union the consumer can see an
+     * event whose type says BLE and whose length byte came from an 802.11
+     * frame an attacker chose.
+     *
+     * Three lenses did exactly that. They have their own ring now, and this is
+     * what stops the fourth one doing it silently. */
+    if (bus == s.bus) {
+        ESP_LOGE(TAG, "refusing to share the 802.11 ring with BLE: that ring "
+                      "takes one producer and this would be the second");
+        return false;
+    }
     s_ble_bus = bus;
 
     /* THE HOST BEING UP IS NOT THE SAME AS THE RADIO LISTENING, AND CONFLATING
