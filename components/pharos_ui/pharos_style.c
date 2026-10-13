@@ -145,3 +145,11 @@ uint32_t ps_tone_verdict_colour(pharos_tone_t t)
     default:               return 0u;
     }
 }
+
+int16_t ps_gauge_tick(uint8_t pct)
+{
+    if (pct > 100u) {
+        pct = 100u;
+    }
+    return (int16_t)((PS_GAUGE_SWEEP * (int)pct) / 100);
+}

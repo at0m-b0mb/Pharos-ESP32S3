@@ -804,13 +804,13 @@ bool pharos_hud_create(void)
     {
         lv_obj_t *p = s_page[PAGE_LIVE];
 
-        s_l_track = mk_arc(p, PS_RING_R * 2, PS_RING_W, C_TRACK, 100, 135, 270);
-        s_l_ring  = mk_arc(p, PS_RING_R * 2, PS_RING_W, PS_GOOD, 0, 135, 270);
+        s_l_track = mk_arc(p, PS_RING_R * 2, PS_RING_W, C_TRACK, 100, PS_GAUGE_START, PS_GAUGE_SWEEP);
+        s_l_ring  = mk_arc(p, PS_RING_R * 2, PS_RING_W, PS_GOOD, 0, PS_GAUGE_START, PS_GAUGE_SWEEP);
 
         /* The ceiling: a hard stop drawn as a TICK across the arc, never as a
          * second band. Two bars of the same weight showing different numbers
          * read as a bug rather than as a limit. */
-        s_l_ceil = mk_arc(p, PS_RING_R * 2, PS_RING_W + 8, PS_BAD, 0, 135, 270);
+        s_l_ceil = mk_arc(p, PS_RING_R * 2, PS_RING_W + 8, PS_BAD, 0, PS_GAUGE_START, PS_GAUGE_SWEEP);
         lv_obj_set_style_arc_rounded(s_l_ceil, false, LV_PART_INDICATOR);
         lv_arc_set_angles(s_l_ceil, 0, 0);
 
@@ -856,8 +856,21 @@ bool pharos_hud_create(void)
             show(s_l_chip_txt[i], false);
         }
 
-        s_l_why    = mk_label(p, PS_TYPE_LABEL, C_DIM,    0, PS_Y_ACTION - 26, "");
-        s_l_action = mk_label(p, PS_TYPE_LABEL, C_ACCENT, 0, PS_Y_ACTION + 4, "");
+        s_l_why     = mk_label(p, PS_TYPE_LABEL, C_DIM,    0, PS_Y_ACTION - 26, "");
+        /* BOTH ACTION LINES, AT THE OFFSETS THEIR CAPACITY IS MEASURED AT.
+         *
+         * The second one was declared, cleared on the idle path and written to
+         * on the live path - and never built. Both setters begin `if (!o)
+         * return;`, so every write to it was a silent no-op and the device has
+         * never once shown the half of the advice that says what to DO. The
+         * split logic shipped; the label it splits into did not.
+         *
+         * They are drawn at exactly PS_Y_ACTION and PS_Y_ACTION2 because that
+         * is where ps_capacity() is asked how much fits. The first line used to
+         * be nudged 4 px down from the offset it was measured at, which quietly
+         * bought it two characters of credit the chord does not have. */
+        s_l_action  = mk_label(p, PS_TYPE_LABEL, C_ACCENT, 0, PS_Y_ACTION, "");
+        s_l_action2 = mk_label(p, PS_TYPE_LABEL, C_ACCENT, 0, PS_Y_ACTION2, "");
     }
 
     /* ---- DETAIL ---- */
@@ -1452,7 +1465,9 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
 
     /* The ceiling tick: where this observation could not have got past. */
     if (d->has_score && d->ceiling > 0 && d->ceiling < 100) {
-        const int32_t at = 135 + (int32_t)(270 * d->ceiling / 100);
+        /* Relative to the arc's rotation, which already carries the start.
+         * See PS_GAUGE_START - this used to add it a second time. */
+        const int32_t at = ps_gauge_tick((uint8_t)d->ceiling);
         lv_arc_set_angles(s_l_ceil, at, at + 2);
         show(s_l_ceil, true);
     } else {

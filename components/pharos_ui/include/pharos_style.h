@@ -237,6 +237,26 @@ uint32_t ps_alert_colour(uint8_t alert);
 #define PS_RING_R    206 /* the score arc's radius                  */
 #define PS_RING_W    14  /* ...and its weight                       */
 
+/* THE GAUGE'S ANGLE SPACE, AND WHY IT IS A FUNCTION AND NOT A SUM.
+ *
+ * The score arc opens at the bottom: it starts at PS_GAUGE_START and sweeps
+ * PS_GAUGE_SWEEP degrees clockwise from there. The start is applied ONCE, as
+ * the LVGL arc's ROTATION, so every angle handed to that arc afterwards is
+ * already relative to it.
+ *
+ * The ceiling tick added PS_GAUGE_START a second time. That put it 135 degrees
+ * from where it belonged - and because the arc's own opening is at the bottom,
+ * a mid-range ceiling landed in that opening, on top of the advice line. A
+ * marker that says "this observation could not have got past here" pointing at
+ * the wrong place is worse than no marker, so the conversion lives here, gets
+ * host-tested, and is never written out as an addition again. */
+#define PS_GAUGE_START 135
+#define PS_GAUGE_SWEEP 270
+
+/* Where a tick for pct of full scale sits, in the arc's OWN angle space.
+ * Relative to the rotation, never absolute. */
+int16_t ps_gauge_tick(uint8_t pct);
+
 /* THE WORKING RADIUS ON A PAGE THAT HAS A GAUGE.
  *
  * PR_SAFE_R is where the GLASS stops. On the live and home faces the score

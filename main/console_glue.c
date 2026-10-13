@@ -754,7 +754,11 @@ static int cli_lens(int argc, char **argv)
         for (unsigned i = 0; i < pharos_lens_count(); i++) {
             const pharos_lens_t *l = pharos_lens_at(i);
             const pharos_lens_t *a = pharos_lens_active();
-            printf("  %c %-14s %s\n", (a && a == l) ? '*' : ' ', l->id, l->summary);
+            /* 16, not 14: "train.footprint" is fifteen characters, so a
+             * 14-wide column swallowed the separator and the summaries after
+             * it lost their alignment - and anything parsing this list on two
+             * spaces lost that lens entirely. */
+            printf("  %c %-16s %s\n", (a && a == l) ? '*' : ' ', l->id, l->summary);
         }
         return 0;
     }

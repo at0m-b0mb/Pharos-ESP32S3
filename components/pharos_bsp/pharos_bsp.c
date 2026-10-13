@@ -851,6 +851,17 @@ const char *pharos_disp_result_name(pharos_disp_result_t r)
 #define FB_W BSP_LCD_H_RES
 #define FB_H BSP_LCD_V_RES
 
+/* Every payload line carries this marker.
+ *
+ * THE DUMP SHARES THE CONSOLE WITH THE LOGGER, AND THE LOGGER DOES NOT WAIT.
+ * The first version emitted bare base64 lines, so any ESP_LOG that landed
+ * mid-transfer was spliced into the payload by the host decoder and every
+ * pixel after it was invented. That is the worst failure a debug tool can
+ * have: it sent us hunting a rendering fault that was never on the glass.
+ * A marker the logger cannot forge makes a stray line skippable instead of
+ * fatal, and the checksum below catches anything the marker misses. */
+#define FB_MARK "FB:"
+
 static void fb_emit_base64(const uint8_t *p, size_t n)
 {
     static const char *T =
@@ -870,21 +881,35 @@ static void fb_emit_base64(const uint8_t *p, size_t n)
         i += 3;
         if (col >= 76u) {
             line[col] = '\0';
-            printf("%s\n", line);
+            printf(FB_MARK "%s\n", line);
             col = 0;
         }
     }
     if (col) {
         line[col] = '\0';
-        printf("%s\n", line);
+        printf(FB_MARK "%s\n", line);
     }
+}
+
+/* FNV-1a over the encoded bytes. Not a security hash - it is here so the
+ * host can tell a clean frame from a mangled one rather than painting
+ * whatever arrived. */
+static uint32_t fb_fnv1a(const uint8_t *p, size_t n)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++) {
+        h ^= p[i];
+        h *= 16777619u;
+    }
+    return h;
 }
 
 bool pharos_bsp_screen_dump(void)
 {
     lv_draw_buf_t *buf = NULL;
     uint8_t *rle = NULL;
-    bool ok = false;
+    size_t out_n = 0;
+    bool encoded = false;
 
     if (!pharos_bsp_display_lock(1000)) {
         printf("dump: display busy\n");
@@ -896,7 +921,7 @@ bool pharos_bsp_screen_dump(void)
     buf = lv_draw_buf_create(FB_W, FB_H, LV_COLOR_FORMAT_RGB565, LV_STRIDE_AUTO);
     if (!buf) {
         printf("dump: no buffer\n");
-        goto out;
+        goto unlock;
     }
     /* CLEARED FIRST, SO UNRENDERED PIXELS READ AS BLACK RATHER THAN AS
      * WHATEVER WAS IN PSRAM.
@@ -912,19 +937,22 @@ bool pharos_bsp_screen_dump(void)
     if (lv_snapshot_take_to_draw_buf(lv_screen_active(), LV_COLOR_FORMAT_RGB565,
                                      buf) != LV_RESULT_OK) {
         printf("dump: snapshot failed\n");
-        goto out;
+        goto unlock;
     }
 
-    /* Runs of identical pixels: count (16-bit) then the pixel (16-bit). A run
-     * never crosses a row, so the decoder can resynchronise on a row boundary
-     * if a byte is lost on the wire. */
-    const size_t cap = (size_t)FB_W * FB_H * 4u / 8u + 1024u;
+    /* Worst case is four bytes per pixel - every pixel differing from its
+     * neighbour. The face is a circle on true black so the real figure is
+     * nearer a tenth of that, but sizing for the real figure meant a busy
+     * screen could not be captured at all. PSRAM can afford the honesty. */
+    const size_t cap = (size_t)FB_W * FB_H * 4u + 1024u;
     rle = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
     if (!rle) {
         printf("dump: no rle buffer\n");
-        goto out;
+        goto unlock;
     }
-    size_t out_n = 0;
+    /* Runs of identical pixels: count (16-bit) then the pixel (16-bit). A run
+     * never crosses a row, so the decoder can resynchronise on a row boundary
+     * if a byte is lost on the wire. */
     for (uint32_t y = 0; y < FB_H; y++) {
         const uint16_t *row =
             (const uint16_t *)((const uint8_t *)buf->data + (size_t)y * buf->header.stride);
@@ -937,7 +965,7 @@ bool pharos_bsp_screen_dump(void)
             }
             if (out_n + 4u > cap) {
                 printf("dump: overflow\n");
-                goto out;
+                goto unlock;
             }
             rle[out_n++] = (uint8_t)(run & 0xFF);
             rle[out_n++] = (uint8_t)(run >> 8);
@@ -946,18 +974,29 @@ bool pharos_bsp_screen_dump(void)
             x += run;
         }
     }
+    encoded = true;
 
-    printf("PHAROSFB %u %u rgb565rle %u\n", (unsigned)FB_W, (unsigned)FB_H,
-           (unsigned)out_n);
-    fb_emit_base64(rle, out_n);
-    printf("PHAROSFB END\n");
-    ok = true;
-
-out:
-    if (rle) heap_caps_free(rle);
+unlock:
+    /* THE PANEL BUFFER GOES BACK BEFORE THE WIRE WORK STARTS, AND SO DOES THE
+     * LOCK. Emitting 70 KB of base64 takes seconds; the first version held the
+     * LVGL lock for all of it, so the UI task's own lock attempt timed out and
+     * logged a failure - which then landed in the middle of this payload. The
+     * capture is a snapshot, already copied, and owes the display nothing. */
     if (buf) lv_draw_buf_destroy(buf);
     pharos_bsp_display_unlock();
-    return ok;
+
+    if (!encoded) {
+        if (rle) heap_caps_free(rle);
+        return false;
+    }
+
+    printf("PHAROSFB2 %u %u rgb565rle %u %08x\n", (unsigned)FB_W, (unsigned)FB_H,
+           (unsigned)out_n, (unsigned)fb_fnv1a(rle, out_n));
+    fb_emit_base64(rle, out_n);
+    printf("PHAROSFB END\n");
+
+    heap_caps_free(rle);
+    return true;
 }
 
 #else

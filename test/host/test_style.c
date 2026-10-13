@@ -352,4 +352,42 @@ void test_style(void)
                   "card %u has almost no width at dy=%d", i, (int)dy);
         }
     }
+
+    banner("style: the ceiling tick lives in the arc's own angle space");
+    {
+        /* THE TICK USED TO ADD PS_GAUGE_START A SECOND TIME.
+         *
+         * The arc carries the start as its LVGL rotation, so an angle handed
+         * to it afterwards is already relative. Adding the start again moved
+         * every ceiling marker 135 degrees - and since the arc opens at the
+         * bottom, a mid-range ceiling landed in that opening, printed across
+         * the advice line. Measured on the glass before the fix: a ceiling of
+         * 56 drew at 62 degrees absolute when it belonged at 286.
+         *
+         * These assertions are what stop it being written as a sum again. */
+        CHECK(ps_gauge_tick(0) == 0, "0%% must sit at the arc's own origin");
+        CHECK(ps_gauge_tick(100) == PS_GAUGE_SWEEP,
+              "100%% must sit at the far end of the sweep");
+        CHECK(ps_gauge_tick(50) == PS_GAUGE_SWEEP / 2, "50%% must halve the sweep");
+
+        /* The specific value that was wrong on the device. */
+        CHECK(ps_gauge_tick(56) == 151, "a ceiling of 56 belongs at 151, got %d",
+              (int)ps_gauge_tick(56));
+
+        /* No output may carry the start offset: the whole range must stay
+         * inside the sweep, which is the property the bug violated. */
+        for (unsigned pct = 0; pct <= 100u; pct++) {
+            const int16_t at = ps_gauge_tick((uint8_t)pct);
+            CHECK(at >= 0 && at <= PS_GAUGE_SWEEP,
+                  "tick for %u%% escaped the sweep at %d", pct, (int)at);
+        }
+        /* Out of range clamps rather than wrapping past the sweep. */
+        CHECK(ps_gauge_tick(200) == PS_GAUGE_SWEEP, "an impossible pct must clamp");
+
+        /* The opening at the bottom is what made the bug visible. Keep the
+         * geometry that makes that true: a 270-degree sweep from 135 leaves
+         * the bottom 90 degrees clear. */
+        CHECK(PS_GAUGE_SWEEP == 270, "the sweep is no longer 270 degrees");
+        CHECK(PS_GAUGE_START == 135, "the arc no longer opens at the bottom");
+    }
 }
