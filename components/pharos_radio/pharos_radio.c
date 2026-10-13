@@ -320,8 +320,7 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         size_t ie_off = 0, ie_len = 0;
         const bool has_fixed =
             pharos_dot11_ie_window(st, blen, &ie_off, &ie_len);
-        const bool subtype_fixed =
-            (st == PHAROS_ST_BEACON || st == PHAROS_ST_PROBE_RESP);
+        const bool subtype_fixed = pharos_dot11_body_is_ie_chain(st);
 
         /* IS THIS DISCONNECT ACTUALLY PROTECTED?
          *
@@ -372,7 +371,25 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
                     ie_len);
             }
         }
-        if (has_fixed) {
+        /* BEACONS AND PROBE RESPONSES ONLY, AND IT MATTERS WHICH TEST SAYS SO.
+         *
+         * has_fixed comes from pharos_dot11_ie_window(), which answers "is
+         * this body long enough to hold its fixed parameters". For every
+         * subtype that HAS no fixed parameters the offset is zero, so the
+         * length test cannot fail and the answer is unconditionally true. It
+         * is not a test of whether the body is an element chain.
+         *
+         * Everything below assumes it is one, and two of the parses here are
+         * hard-coded to the beacon's offset of 12. Run against a deauth, the
+         * two-byte reason code IS the first tag/len pair - so a single frame
+         * from anyone in range could name any BSSID it liked and have the
+         * roster assert that router's make, model and an exposed WPS PIN
+         * against it. Worse, the BSSID was then marked as already announced,
+         * which suppressed the real model from the AP's own beacons.
+         *
+         * subtype_fixed is the test that was wanted, and the SSID walk twenty
+         * lines above was already using it. */
+        if (subtype_fixed && has_fixed) {
             /* THE MODEL NUMBER, WHICH THE ACCESS POINT VOLUNTEERS.
              *
              * Emitted ONCE per BSSID. Beacons arrive about ten times a second

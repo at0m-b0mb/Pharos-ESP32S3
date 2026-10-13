@@ -43,6 +43,20 @@ uint8_t pharos_dot11_ie_count(const uint8_t *body, size_t len, size_t start);
 bool pharos_dot11_ie_window(uint8_t subtype, size_t body_len,
                             size_t *out_off, size_t *out_len);
 
+/* IS THIS SUBTYPE'S BODY AN ELEMENT CHAIN AT ALL?
+ *
+ * Not the same question as pharos_dot11_ie_window(), which answers "is the
+ * body long enough to hold its fixed parameters". For a subtype that HAS no
+ * fixed parameters the offset is zero, the length test cannot fail, and that
+ * function returns true unconditionally - so using it as a subtype test reads
+ * correct and is not.
+ *
+ * It was used that way, and a crafted deauthentication frame could have its
+ * two-byte reason code parsed as the first tag/len pair of an element chain -
+ * letting anyone in range assert a router make, model and an exposed WPS PIN
+ * against any BSSID they named. This is the test that was meant. */
+bool pharos_dot11_body_is_ie_chain(uint8_t subtype);
+
 /* Fixed-header parse. buf points at the start of the MAC header, len is what
  * the radio handed us. Returns false if the frame is too short to trust.
  * Fills type/subtype/addresses/seq/flags; the caller supplies rssi/channel. */

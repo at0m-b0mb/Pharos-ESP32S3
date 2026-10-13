@@ -425,9 +425,49 @@ static void test_dot11_ie_window_cannot_underflow(void)
     CHECK(off == 0u && len == 0u, "and starts at zero");
 }
 
+static void test_dot11_ie_chain(void)
+{
+    banner("dot11: an element window is not a subtype test");
+    {
+        /* THE TRAP THIS PREDICATE EXISTS TO CLOSE.
+         *
+         * pharos_dot11_ie_window() answers a LENGTH question. For every
+         * subtype with no fixed parameters the offset is zero, so its length
+         * test cannot fail and it returns true for anything - including a
+         * deauthentication frame, whose body is a two-byte reason code and not
+         * an element chain at all.
+         *
+         * Read as "does this frame carry elements", that let a crafted deauth
+         * have its reason code parsed as the first tag/len pair, and a router
+         * make, model and exposed WPS PIN asserted against any BSSID the
+         * sender named. */
+        size_t off = 99, len = 99;
+        CHECK(pharos_dot11_ie_window(PHAROS_ST_DEAUTH, 32, &off, &len),
+              "the window call does answer true for a deauth - that is the trap");
+        CHECK(off == 0, "a deauth's window offset should be 0, got %u",
+              (unsigned)off);
+
+        /* The predicate that actually answers the question. */
+        CHECK(pharos_dot11_body_is_ie_chain(PHAROS_ST_BEACON), "beacon");
+        CHECK(pharos_dot11_body_is_ie_chain(PHAROS_ST_PROBE_RESP), "probe response");
+        CHECK(!pharos_dot11_body_is_ie_chain(PHAROS_ST_DEAUTH),
+              "a deauth body is a reason code, not elements");
+        CHECK(!pharos_dot11_body_is_ie_chain(PHAROS_ST_DISASSOC), "disassoc");
+        CHECK(!pharos_dot11_body_is_ie_chain(PHAROS_ST_AUTH), "auth");
+        CHECK(!pharos_dot11_body_is_ie_chain(PHAROS_ST_ASSOC_REQ), "assoc request");
+        CHECK(!pharos_dot11_body_is_ie_chain(PHAROS_ST_ASSOC_RESP), "assoc response");
+        /* A probe REQUEST does carry elements at offset 0, but they are the
+         * client's, not an access point's - so it is not an element chain for
+         * anything that attributes what it finds to a BSSID. */
+        CHECK(!pharos_dot11_body_is_ie_chain(PHAROS_ST_PROBE_REQ),
+              "a probe request's elements belong to the client, not an AP");
+    }
+}
+
 int main(void)
 {
     test_dot11_ie_window_cannot_underflow();
+    test_dot11_ie_chain();
     printf("Pharos host tests\n");
     test_bus();
     test_lens();

@@ -23,6 +23,11 @@
  *
  * Bounds-checked exactly as the element search is: a truncated or hostile
  * frame stops the walk and we count only what could be verified. */
+bool pharos_dot11_body_is_ie_chain(uint8_t subtype)
+{
+    return subtype == PHAROS_ST_BEACON || subtype == PHAROS_ST_PROBE_RESP;
+}
+
 bool pharos_dot11_ie_window(uint8_t subtype, size_t body_len,
                             size_t *out_off, size_t *out_len)
 {
