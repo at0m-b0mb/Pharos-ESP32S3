@@ -306,6 +306,51 @@ static void test_ring_names_the_default_set(void)
           untruncated, pd_ring_capacity(harvest_w, 16, 12));
 }
 
+static void test_ring_labels_clear_their_dots(void)
+{
+    banner("ring: a name must not be drawn through the dot it names");
+    /* A LABEL IS CENTRED ON THE SAME ANGLE AS ITS OWN DOT, so the only thing
+     * keeping them apart is the difference in radius - and at the left and
+     * right of the ring the label is 74px wide, needing 37px of clearance
+     * there against 8px at the top. The scorer checked the glass, the core and
+     * the headline, and never checked the one mark the label is guaranteed to
+     * point at. HARVEST was drawn straight through its own dot.
+     *
+     * Also asserted here: the layout and the renderer agree about where the
+     * dots are. They did not - 168 against 178 - which meant every clearance
+     * this file proves was proved about a ring ten pixels from the drawn one. */
+    for (unsigned n = 1; n <= 16u; n++) { /* the ring carries at most 16 */
+        pd_ring_t r;
+        pd_ring_layout(n, PD_RING_LABEL_W, 16, 12, &r);
+        CHECK(r.r_dot == PD_RING_DOT_R,
+              "the layout places dots at %d, the renderer at %d",
+              (int)r.r_dot, (int)PD_RING_DOT_R);
+
+        for (unsigned i = 0; i < n; i++) {
+            if (!pd_ring_label_fits(&r, i, n, PD_RING_LABEL_W, 16)) {
+                continue; /* not drawn at all, so it cannot collide */
+            }
+            const float a = (n < 2u) ? -90.0f
+                                     : (225.0f + 270.0f * (float)i / (float)(n - 1u));
+            const float t = (a - 90.0f) * 3.14159265f / 180.0f;
+            const float rad = (float)pd_ring_label_r(&r, i);
+            const float cx = rad * cosf(t), cy = rad * sinf(t);
+            const float x0 = cx - PD_RING_LABEL_W / 2.0f;
+            const float x1 = cx + PD_RING_LABEL_W / 2.0f;
+            const float y0 = cy - 8.0f, y1 = cy + 8.0f;
+
+            const float dx = (float)r.r_dot * cosf(t);
+            const float dy = (float)r.r_dot * sinf(t);
+            const float px = (dx < x0) ? x0 : ((dx > x1) ? x1 : dx);
+            const float py = (dy < y0) ? y0 : ((dy > y1) ? y1 : dy);
+            const float gap = sqrtf((dx - px) * (dx - px) + (dy - py) * (dy - py));
+            CHECK(gap >= (float)PD_RING_DOT_CLEAR,
+                  "n=%u label %u sits %.1fpx from its own dot (needs %d)",
+                  n, i, (double)gap, (int)PD_RING_DOT_CLEAR);
+        }
+    }
+}
+
 void test_ring(void)
 {
     test_ring_sweep_every_count();
@@ -317,4 +362,5 @@ void test_ring(void)
     test_ring_catches_the_shipped_bug();
     test_ring_labels_stay_on_the_glass();
     test_ring_degenerate();
+    test_ring_labels_clear_their_dots();
 }

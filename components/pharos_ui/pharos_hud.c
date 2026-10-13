@@ -120,6 +120,9 @@ static lv_obj_t *s_tell;
 #define BATT_R   440 /* outer, clear of the score ring at 412          */
 #define BATT_W_  4   /* a hair thicker than the old 3, with round ends */
 static lv_obj_t *s_batt_track, *s_batt_fill, *s_batt_txt;
+/* What the charge reading WANTS to do, decided by the battery mode, kept so a
+ * page change can overrule it. See batt_place(). */
+static bool s_batt_want;
 static int s_batt_last = -2;
 static pharos_batt_mode_t s_batt_mode = PHAROS_BATT_AUTO;   /* the permanent receive-only pip */
 static lv_obj_t *s_toast;
@@ -507,6 +510,31 @@ static void aura_set(uint32_t rgb)
 static void split_two(const char *s, unsigned cap, char *a, unsigned an,
                       char *b, unsigned bn);
 
+/* WHERE THE CHARGE READING GOES, PAGE BY PAGE - AND WHEN IT GIVES WAY.
+ *
+ * It is chrome: present on every page, owned by none. That is only tolerable
+ * while it does not fight the page it is sitting on, and the band it uses is
+ * contested. The watch ring writes a name across the top of Home. The detail
+ * page puts its column headers there. Both collided with it.
+ *
+ * So chrome yields. On Home it moves to the bottom notch, which the gauge's
+ * 270 degrees leaves open and where the clock already is - time and charge
+ * together is what a watch face does anyway. On the pages that are a dense
+ * list, it stands down entirely: the arc on the rim still shows the level, and
+ * somebody reading a table of networks is not reading their battery.
+ *
+ * The arc itself never moves. It lives outside everything and collides with
+ * nothing, which was the point of putting it there. */
+static void batt_place(hud_page_t page)
+{
+    const bool home = (page == PAGE_HOME);
+    const bool room = (page == PAGE_HOME || page == PAGE_LIVE ||
+                       page == PAGE_ADVICE);
+    lv_obj_align(s_batt_txt, LV_ALIGN_CENTER, 0,
+                 home ? PS_Y_BATT_HOME : PS_Y_BATT_TXT);
+    show(s_batt_txt, s_batt_want && room);
+}
+
 /* ---- pages ------------------------------------------------------------ */
 
 static void zones_mode(bool detail);
@@ -522,6 +550,7 @@ static void page_show(hud_page_t want)
     const bool aura_on = (want == PAGE_HOME || want == PAGE_LIVE);
     for (unsigned i = 0; i < AURA_N; i++) show(s_aura[i], aura_on);
     show(s_tell, want != PAGE_SPLASH && want != PAGE_BARS);
+    batt_place(want);
     zones_mode(want == PAGE_DETAIL);
     show(s_zone_start, want == PAGE_BROWSE);
     s_current = want;
@@ -1321,7 +1350,10 @@ void pharos_hud_home(const struct pharos_hud_home *h)
      * would be claiming sixteen receivers this device does not have. */
     for (unsigned i = 0; i < PHAROS_HUD_HOME_MAX; i++) {
         if (i >= n) { show(s_h_dot[i], false); show(s_h_name[i], false); continue; }
-        const pr_point_t pt = pr_polar(PS_RING_R - 28, home_dot_deg(i, n));
+        /* The layout's own dot radius, not a second copy of it. These were
+         * 168 and PS_RING_R - 28 = 178, so every clearance pd_ring_layout()
+         * proved was proved about a ring ten pixels from the drawn one. */
+        const pr_point_t pt = pr_polar(ring.r_dot, home_dot_deg(i, n));
         const bool active = ((int)i == h->active);
         const int size = active ? 20 : 14;
         lv_obj_set_size(s_h_dot[i], size, size);
@@ -1341,9 +1373,25 @@ void pharos_hud_home(const struct pharos_hud_home *h)
          * beside a forty-second-old reading would claim the reading is live. */
         /* Chosen by the caller AND placeable at this position. See
          * pd_ring_label_fits(): capacity answers a different question. */
+        /* MEASURED, NOT ASSUMED.
+         *
+         * This asked whether the WIDEST possible name would fit, for every
+         * name - so "WARD" was refused wherever "SENTINEL" would not go. At
+         * the sides of the ring that is the difference between a name and a
+         * bare dot: a label there needs half its own width in radial
+         * clearance from the dot, and half of forty is a great deal less than
+         * half of seventy-four. The layout still CHOOSES its radii against the
+         * widest, which stays conservative; only the question "does this
+         * particular name fit here" uses this particular name. */
+        unsigned nlen = 0;
+        if (h->label[i]) {
+            while (nlen < PD_RING_NAME_MAX && h->label[i][nlen]) {
+                nlen++;
+            }
+        }
+        const int16_t this_w = ps_text_w(PS_TYPE_LABEL, nlen);
         const bool named = h->label_on[i] && h->label[i] && h->label[i][0] &&
-                           pd_ring_label_fits(&ring, i, n,
-                                              h->label_w ? h->label_w : 74,
+                           pd_ring_label_fits(&ring, i, n, this_w,
                                               (int16_t)PS_TYPE_PX[PS_TYPE_LABEL]);
         show(s_h_name[i], named);
         if (named) {
@@ -1689,6 +1737,7 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present, bool approx)
         if (s_batt_last != -1) {
             show(s_batt_track, false);
             show(s_batt_fill, false);
+            s_batt_want = false;
             show(s_batt_txt, false);
             s_batt_last = -1;
         }
@@ -1728,8 +1777,9 @@ void pharos_hud_battery(uint8_t pct, bool charging, bool present, bool approx)
      * cell is the only thing there and sits on the axis itself. A chrome
      * element that jumps off-centre whenever it has something to say looks
      * like a layout fault rather than a design. */
+    s_batt_want = show_txt;
+    batt_place(s_current);
     const bool want = show_txt;
-    show(s_batt_txt, want);
     if (want) {
         char b[24];
         /* A tilde is the whole apology: the pack voltage disagrees with the

@@ -261,6 +261,33 @@ bool pd_ring_label_fits(const pd_ring_t *r, unsigned i, unsigned n,
         y0 < (float)PD_HERO_Y1 && y1 > (float)PD_HERO_Y0) {
         return false;
     }
+
+    /* ACROSS ITS OWN DOT.
+     *
+     * A label is centred on the SAME ANGLE as the dot it names, so the only
+     * thing keeping the two apart is the difference in radius - and at the
+     * left and right of the ring a label is 74px wide, so it needs 37px of
+     * radial clearance there against 8px at the top. This scorer checked the
+     * glass, the core and the headline, and never checked the one mark the
+     * label is guaranteed to be pointing at. HARVEST was drawn through its own
+     * dot on the home face for exactly that reason.
+     *
+     * Rejecting here means the name is simply not drawn at that position,
+     * which is the ring's existing contract: it names what it can place and
+     * leaves the rest as bare dots. */
+    const float a_deg = (n < 2u) ? -90.0f
+                                 : (225.0f + 270.0f * (float)i / (float)(n - 1u));
+    const float t = (a_deg - 90.0f) * 3.14159265f / 180.0f;
+    const float dx_c = (float)r->r_dot * cosf(t);
+    const float dy_c = (float)r->r_dot * sinf(t);
+    /* Closest point on the label box to the dot's centre. */
+    const float px = (dx_c < x0) ? x0 : ((dx_c > x1) ? x1 : dx_c);
+    const float py = (dy_c < y0) ? y0 : ((dy_c > y1) ? y1 : dy_c);
+    const float ddx = dx_c - px;
+    const float ddy = dy_c - py;
+    if (sqrtf(ddx * ddx + ddy * ddy) < (float)PD_RING_DOT_CLEAR) {
+        return false;
+    }
     return true;
 }
 
@@ -413,7 +440,7 @@ void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
     if (!out) {
         return;
     }
-    out->r_dot = 168;
+    out->r_dot = PD_RING_DOT_R;
     out->r_even = 142;
     out->r_odd = 142;
     out->staggered = false;
@@ -439,7 +466,7 @@ void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
      * belong. */
     float best = -1.0f;
     for (int16_t r = 140; r <= 156; r = (int16_t)(r + 2)) {
-        pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = 168,
+        pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = PD_RING_DOT_R,
                         .staggered = false, .gap_px = 0, .capacity = n };
         const float g = ring_score(&t, n, label_w, label_h);
         if (g > best) {
@@ -460,7 +487,7 @@ void pd_ring_layout(unsigned n, int16_t label_w, int16_t label_h, int16_t gap,
         out->capacity = 0;
         for (unsigned k = n; k >= 2u; k--) {
             for (int16_t r = 140; r <= 156; r = (int16_t)(r + 2)) {
-                pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = 168,
+                pd_ring_t t = { .r_even = r, .r_odd = r, .r_dot = PD_RING_DOT_R,
                                 .staggered = false, .gap_px = 0, .capacity = k };
                 if (ring_score(&t, k, label_w, label_h) >= (float)gap) {
                     /* TAKE THE RADIUS THAT MADE IT FIT, NOT JUST THE COUNT.

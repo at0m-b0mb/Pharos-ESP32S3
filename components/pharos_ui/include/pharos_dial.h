@@ -136,6 +136,20 @@ unsigned pd_dial_selected(const pd_dial_t *d, float rotation_deg);
  * is still unambiguous at seven. */
 #define PD_RING_NAME_MAX 7
 #define PD_RING_LABEL_W 74
+
+/* WHERE THE DOTS ACTUALLY SIT, IN ONE PLACE.
+ *
+ * The layout modelled them at 168 while the renderer drew them at
+ * PS_RING_R - 28, which is 178. Ten pixels of disagreement between the code
+ * that proves labels are clear and the code that draws them means the proof
+ * was about a ring that is not on the glass - the same class of fault as the
+ * two angle conventions this file already documents, and the reason HARVEST
+ * was drawn straight through its own dot.
+ *
+ * PD_RING_DOT_CLEAR is half the ACTIVE dot (which is the larger, at 20px)
+ * plus a margin, so a name never touches the mark it belongs to. */
+#define PD_RING_DOT_R     178
+#define PD_RING_DOT_CLEAR 14
 typedef struct {
     int16_t r_even, r_odd; /* label radius for even / odd items */
     int16_t r_dot;         /* where the dots sit                */

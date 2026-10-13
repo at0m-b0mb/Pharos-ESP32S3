@@ -198,6 +198,14 @@ uint32_t ps_alert_colour(uint8_t alert);
  * the ring: under the arc, above where the ribbon starts at -150. */
 #define PS_Y_BATT_TXT (-176)
 
+/* ...EXCEPT ON THE HOME FACE, WHERE THAT BAND BELONGS TO THE RING.
+ *
+ * The watch ring puts a name at the top of the dial, and the charge reading
+ * landed on it. Home has its own clear space: the bottom notch, which the
+ * gauge's 270 degrees deliberately leaves open and where the clock already
+ * lives. Time and charge together is what a watch face does anyway. */
+#define PS_Y_BATT_HOME (160)
+
 /* THE GUIDE'S OWN BANDS.
  *
  * The first draft put its body text at +132/+162 and its hint at +198, which
