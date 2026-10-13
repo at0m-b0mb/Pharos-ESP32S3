@@ -27,6 +27,24 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+
+# WHERE A SMALL malloc() LANDS, AND WHY THE DEFAULT STARVED THE PANEL.
+#
+# ALWAYSINTERNAL is the size below which plain malloc() is served from internal
+# RAM. The IDF default is 16 KB, and every LVGL object, style and label is well
+# under that - so the entire widget tree sat in internal RAM, which is also the
+# only memory the display flush and the Wi-Fi driver can do DMA out of. The
+# device was measured with 13 KB of DMA-capable RAM free, against 48 KB after
+# an earlier optimisation pass, and was logging esp_lv_adapter_lock failures.
+#
+# Dropping it to 4 KB sends the widget tree to PSRAM and leaves internal RAM
+# for the things that genuinely cannot live anywhere else. Anything needing DMA
+# asks for it by capability (MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL) and is
+# unaffected by this number.
+#
+# PSRAM is slower, so this is a trade and it was measured, not assumed: see the
+# frame counters in `diag`. Revert this if missed frames grow.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
 CONFIG_SPIRAM_XIP_FROM_PSRAM=y
