@@ -704,7 +704,9 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     memset(&ev, 0, sizeof(ev));
     ev.t_us = (uint64_t)esp_timer_get_time();
     ev.type = PHAROS_EV_BLE_ADV;
-    memcpy(ev.u.ble.addr, d->addr.val, 6);
+    /* Reversed on the way in: NimBLE is little-endian, the rest of this
+     * firmware is not. See pharos_ev_ble_addr_set(). */
+    pharos_ev_ble_addr_set(ev.u.ble.addr, d->addr.val);
     ev.u.ble.addr_type = d->addr.type;
     ev.u.ble.adv_type = d->event_type;
     ev.u.ble.rssi = (int8_t)d->rssi;

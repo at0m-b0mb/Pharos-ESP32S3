@@ -177,6 +177,29 @@ typedef struct {
  * The ring is fixed. This is here because a walker that trusts a length wider
  * than its own buffer is one bad event away from reading out of bounds, and
  * the walkers should not have to know how the event reached them. */
+/* NIMBLE HANDS ADDRESSES OVER LEAST-SIGNIFICANT BYTE FIRST.
+ *
+ * Everything else in this firmware carries a MAC the way 802.11 does and the
+ * way people write one down: most significant byte first. The OUI table is
+ * matched against mac[0..2], and the random-address class lives in the top two
+ * bits of mac[0].
+ *
+ * Copied straight across, a BLE address arrives backwards, so the OUI lookup
+ * reads the device-specific half, the address class reads a device-specific
+ * byte, and the "last three bytes" every list prints to identify a device are
+ * actually its vendor bytes - the least distinguishing part it has.
+ *
+ * Confirmed against live air before it was changed: of seven Apple
+ * advertisers in the room (manufacturer ID 0x004C), six had the resolvable-
+ * private-address signature 01xxxxxx in the LAST byte rather than the first,
+ * which is only possible if the most significant byte is at index 5. */
+static inline void pharos_ev_ble_addr_set(uint8_t dst[6], const uint8_t le[6])
+{
+    for (unsigned i = 0; i < 6u; i++) {
+        dst[i] = le[5u - i];
+    }
+}
+
 static inline uint8_t pharos_ev_ble_len(const pharos_ev_ble_t *b)
 {
     return (b->data_len > PHAROS_BLE_ADV_MAX) ? (uint8_t)PHAROS_BLE_ADV_MAX

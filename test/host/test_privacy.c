@@ -398,4 +398,33 @@ void test_power(void)
                   "length %u escaped the buffer", v);
         }
     }
+
+    banner("event: a BLE address arrives little-endian and must not stay that way");
+    {
+        /* NimBLE order for the human-readable address 57:85:31:24:c9:db -
+         * one of the advertisers actually in the room when this was found. */
+        const uint8_t le[6] = { 0xdb, 0xc9, 0x24, 0x31, 0x85, 0x57 };
+        uint8_t mac[6];
+        pharos_ev_ble_addr_set(mac, le);
+        CHECK(mac[0] == 0x57 && mac[1] == 0x85 && mac[2] == 0x31 &&
+              mac[3] == 0x24 && mac[4] == 0xc9 && mac[5] == 0xdb,
+              "address not reversed: %02x:%02x:%02x:%02x:%02x:%02x",
+              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+        /* THE CONSEQUENCE THAT MATTERED. The random-address class is the top
+         * two bits of the most significant byte; 01 means a resolvable private
+         * address. Read off the wrong end this device looked like a static
+         * random address instead - and the OUI table, matched against
+         * mac[0..2], was reading the device-specific half of every BLE MAC. */
+        CHECK((mac[0] & 0xC0u) == 0x40u,
+              "the RPA signature should be in mac[0], got %02x", mac[0]);
+        CHECK((le[0] & 0xC0u) != 0x40u,
+              "the test vector should not read as an RPA from the wrong end");
+
+        /* Reversing twice is the identity, so the helper cannot be applied by
+         * two layers without the test noticing. */
+        uint8_t back[6];
+        pharos_ev_ble_addr_set(back, mac);
+        CHECK(memcmp(back, le, 6) == 0, "reversing twice must be the identity");
+    }
 }
