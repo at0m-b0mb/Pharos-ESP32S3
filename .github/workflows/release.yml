@@ -33,12 +33,18 @@ jobs:
         with:
           ref: ${{ steps.vars.outputs.tag }}
 
+      # Pinned for the same reason ci.yml is: the v5.5 image's component
+      # manager drifted and now fails to resolve the tree with
+      # "MissingKconfigError: LV_USE_FREETYPE". This file was missed when ci.yml
+      # was fixed, so the first v3.5.0 release build failed on it. The source
+      # is unchanged - only the manager that reads the manifests.
       - name: Build for ESP32-S3
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.5
           target: esp32s3
           path: '.'
+          command: 'pip install -q "idf-component-manager==2.5.0" && idf.py build'
 
       - name: Audit the linked ELF (fence + lenses + display)
         run: |
