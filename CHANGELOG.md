@@ -1,5 +1,135 @@
 # Changelog
 
+## v3.5.0 - photographing the glass
+
+Twenty-nine commits since v3.4.0. Where v3.4.0 audited the engines against the
+published research, this release **audits the device against itself** - and the
+tool that made it possible was teaching Pharos to send back a picture of its
+own screen.
+
+`screen dump` already existed. It was lying. It emitted bare base64, so any log
+line that landed mid-transfer was spliced into the payload by the decoder and
+every pixel after it was invented; it also held the LVGL lock for the whole
+six-second transfer, starving the UI task, whose lock-failure log then landed
+inside the payload it was corrupting. Every line is marked now, the stream is
+checksummed, the lock is released before the wire work, and the host **refuses
+to write a file it cannot verify**. `tools/screen/sweep.py` photographs all
+twenty-one faces into a contact sheet and bounds-checks each real capture
+against the safe radius - the same check `tools/render` does on the simulation,
+but on what the panel actually drew.
+
+Nearly every user-visible fix below was found by looking at the result.
+
+**The second advice line was never built.** `s_l_action2` was declared, cleared
+on the idle path, written to on the live path - and `mk_label` was never called
+for it. Both setters begin `if (!o) return;`, so every write was a silent
+no-op, and the device had never once shown the half of the advice that says
+what to DO. That is the exact failure the two-line layout was introduced to
+fix.
+
+**The ceiling tick pointed 135 degrees wrong.** The arc carries the gauge's
+start angle as its LVGL rotation, so angles handed to it afterwards are already
+relative - and the tick added the start a second time. Because the arc opens at
+the bottom, mid-range ceilings landed in that opening and printed across the
+advice. Measured on the glass: a ceiling of 56 drew at 62 degrees when it
+belonged at 286.
+
+**The advice did not fit, and most of it was discarded before the UI saw it.**
+The display contract carried 96 characters against a median engine string of 93
+and a longest of 525 - it truncated 48 of the 101 strings in the tree. The
+contract is 256 now, and the whole text has a page of its own across the wide
+middle of the circle. The bottom strip has three stops: the verdict, then what
+to do, then the numbers.
+
+**The home face drew names through their own dots.** The layout placed dots at
+radius 168 and the renderer drew them at 178, so every clearance the host tests
+proved was about a ring that is not on the glass. The scorer also never checked
+the dot at all - a label shares its dot's angle, so at the sides of the ring it
+needs half its own width in radial clearance - and it asked whether the WIDEST
+possible name would fit, for every name.
+
+### What the air could say that it should not have
+
+**A crafted deauthentication frame could name any router.** The WPS, RSN and
+vendor-element parsing was gated on a test that answers "is this body long
+enough to hold its fixed parameters" - which, for every subtype that has no
+fixed parameters, is unconditionally true. So it ran on deauth frames, whose
+two-byte reason code became the first tag/len pair. One frame from anyone in
+range made the roster assert a make, model and an exposed WPS PIN against any
+BSSID the sender chose, and suppressed that AP's genuine model for the rest of
+the capture.
+
+**Two radios were pushing to a ring that takes one producer.** Rival, Roster
+and Vigil each handed the same ring to the Wi-Fi start and the BLE start, so
+two tasks on two cores pushed to a ring that is single-producer by
+implementation. The payload is a union, so a torn write could pair a BLE event
+type with a length byte taken from an attacker's 802.11 frame, against a
+31-byte buffer. Each has its own ring now, and the radio layer refuses a shared
+one rather than documenting that it must not be.
+
+**An unauthenticated timestamp overflowed the clock fit.** A beacon's TSF is
+sixty-four bits and nobody signs it; the skew engine stored it, subtracted two
+of them and multiplied by a million, all signed. Anyone in range could
+manufacture a "the crystal behind this name changed" finding. The suite now
+runs clean under `-fsanitize=undefined,address`, which is how it was pinned
+down - and how two more were found.
+
+**Somebody else's text reached the console raw.** SSIDs and BLE names were
+drawn and printed exactly as received. A byte the font lacks renders as an
+empty box, and an ESC byte starts an ANSI sequence on the operator's terminal -
+a receive-only device as the delivery mechanism.
+
+### Telling the truth about what it heard
+
+**A four-byte decoy hid a tracker from Vigil.** The classifier abandoned the
+whole advertisement on any Apple manufacturer element that was not Find My,
+and anything classified unknown is dropped - so a scrap of Apple-shaped data in
+front of the real element made a Flipper, or a SmartTag's own service UUID,
+invisible. The same classifier called every Samsung manufacturer advertiser a
+SmartTag: company 0x0075 is Samsung, carried by every Galaxy phone, every pair
+of Buds and every Watch, all of which were entering a stalking lens as
+trackers.
+
+**Roster threw away every advertisement it was handed.** It passed null for the
+name and zero for the appearance, so the name-leak exposure was unreachable and
+every BLE-only device fell through to "wearable" - printers and speakers
+included.
+
+**Every BLE address was stored backwards.** NimBLE hands them over
+least-significant byte first. The OUI table read the device half, the
+random-address class was read off a device byte, and the last three bytes shown
+to tell one device from another were its vendor bytes. Confirmed against live
+air before changing anything: six of seven Apple advertisers in the room
+carried the resolvable-private-address signature in the last byte, none in the
+first.
+
+**The battery cried wolf.** The AXP2101's counter restarts after a reset and
+re-learns, so a charging pack read 43%, then 0%, then climbed - and the device
+drew that in alarm red. A reading the pack voltage contradicts is marked
+approximate now, and nothing raises an alarm on a number flagged that way.
+
+**Ward discarded fifteen of the sixteen networks it had learned.** Its eviction
+set the list length to the faintest slot's index rather than replacing it, so
+everything above that slot fell outside the list, and "adopt nearest" then
+guarded the nearest of whatever survived.
+
+**`squall camp` had never done anything.** The command had advertised it since
+it was written - it parsed, reported success, and surveyed anyway.
+
+### Underneath
+
+The console was re-initialising the Wi-Fi driver on the REPL task, racing the
+UI task's own lens switch, in violation of the rule its own header states. The
+LVGL widget tree was sitting in the only memory the display flush and the Wi-Fi
+driver can do DMA out of. And CI had been red since v3.4.0 without anybody
+seeing a build fail: the build job is gated behind the audit job, and the audit
+had been failing on a missing no-panel stub, so the firmware build step had not
+actually run for weeks.
+
+8898 host checks, 0 failures - and 0 under UBSan and ASan. Fence and lens ELF
+audits intact. All twenty-one faces photographed off the glass, with nothing
+crossing the safe radius.
+
 ## v3.4.0 - the sensors, one at a time, against the field
 
 Eight commits since v3.3.0. Where v3.3.0 added new engines, this release
