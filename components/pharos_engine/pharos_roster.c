@@ -24,6 +24,29 @@ typedef struct {
     rd_class_t klass;
 } oui_entry_t;
 
+/* EVERY PREFIX HERE WAS CHECKED AGAINST THE IEEE REGISTRY.
+ *
+ * A prefix in this table is a CLAIM about who made a device, and the row
+ * beside it turns that claim into a device class. Ten of the first fifty-six
+ * were wrong, which is worth recording because none of them looked wrong:
+ *
+ *   - Hikvision and Dahua were each other. A Dahua camera was reported as a
+ *     Hikvision and the other way round.
+ *   - 00:05:5D was D-Link, not Netgear. 00:0F:7C was ACTi, not Axis.
+ *     CC:F7:35 was Amazon, not Roku. 30:05:5C was Brother, not HP.
+ *   - C8:3F:26 was registered to Microsoft and labelled Fitbit; D8:8C:79 was
+ *     Google and labelled Garmin. Both carried RD_WEARABLE, so the class was
+ *     invented from a vendor that was not there.
+ *   - 00:62:6E was in no IEEE registry at all, and DA:A1:19 could not be in
+ *     one: DA has the locally-administered bit set, so it is a RANDOMISED
+ *     address prefix. The table was naming a privacy address as a Google
+ *     media device - the same mistake the lookup itself was fixed for.
+ *
+ * Wrong prefixes are worse than missing ones. A device absent from this table
+ * is reported as unknown, which is true; a device matched to the wrong row is
+ * reported confidently as something it is not, and the class it carries then
+ * feeds the exposure reasoning. The audit is a few minutes' work against
+ * standards-oui.ieee.org - run it again before trusting a new row. */
 static const oui_entry_t k_ouis[] = {
     /* Apple - phones, tablets, laptops, watches. Dozens of blocks; the
      * commonest few. */
@@ -40,7 +63,6 @@ static const oui_entry_t k_ouis[] = {
     /* Google - Pixel, Nest, Chromecast */
     { { 0x3C, 0x5A, 0xB4 }, "Google", RD_PHONE },
     { { 0xF4, 0xF5, 0xD8 }, "Google", RD_TV_MEDIA },
-    { { 0xDA, 0xA1, 0x19 }, "Google", RD_TV_MEDIA },
     /* Amazon - Echo, Fire, Ring */
     { { 0x44, 0x65, 0x0D }, "Amazon", RD_TV_MEDIA },
     { { 0xFC, 0x65, 0xDE }, "Amazon", RD_TV_MEDIA },
@@ -66,33 +88,35 @@ static const oui_entry_t k_ouis[] = {
     { { 0x18, 0xE8, 0x29 }, "Ubiquiti", RD_ROUTER },
     { { 0x74, 0xAC, 0xB9 }, "Ubiquiti", RD_ROUTER },
     { { 0xFC, 0xEC, 0xDA }, "Ubiquiti", RD_ROUTER },
-    { { 0x00, 0x05, 0x5D }, "Netgear", RD_ROUTER },
+    { { 0x00, 0x05, 0x5D }, "D-Link", RD_ROUTER },
     { { 0x9C, 0x3D, 0xCF }, "Netgear", RD_ROUTER },
     { { 0x2C, 0x30, 0x33 }, "Netgear", RD_ROUTER },
     { { 0xC0, 0x56, 0x27 }, "Belkin", RD_ROUTER },
     { { 0x00, 0x18, 0x0A }, "Cisco Meraki", RD_ROUTER },
     /* Cameras / doorbells */
-    { { 0x00, 0x62, 0x6E }, "Wyze", RD_CAMERA },
+    { { 0xD0, 0x3F, 0x27 }, "Wyze", RD_CAMERA },
     { { 0x2C, 0xAA, 0x8E }, "Wyze", RD_CAMERA },
-    { { 0x00, 0x0F, 0x7C }, "Axis", RD_CAMERA },
-    { { 0xE0, 0x50, 0x8B }, "Hikvision", RD_CAMERA },
+    { { 0x00, 0x0F, 0x7C }, "ACTi", RD_CAMERA },
+    { { 0xB8, 0xA4, 0x4F }, "Axis", RD_CAMERA },
+    { { 0xE0, 0x50, 0x8B }, "Dahua", RD_CAMERA },
     { { 0x44, 0x19, 0xB6 }, "Hikvision", RD_CAMERA },
-    { { 0xBC, 0xAD, 0x28 }, "Dahua", RD_CAMERA },
+    { { 0xBC, 0xAD, 0x28 }, "Hikvision", RD_CAMERA },
     /* TV / media / speakers */
     { { 0xB8, 0x27, 0xEB }, "Raspberry Pi", RD_COMPUTER }, /* dup ok, first wins */
     { { 0x00, 0x0E, 0x58 }, "Sonos", RD_TV_MEDIA },
     { { 0x94, 0x9F, 0x3E }, "Sonos", RD_TV_MEDIA },
     { { 0x00, 0x24, 0xE4 }, "Withings", RD_WEARABLE },
-    { { 0xCC, 0xF7, 0x35 }, "Roku", RD_TV_MEDIA },
+    { { 0xCC, 0xF7, 0x35 }, "Amazon", RD_TV_MEDIA },
     { { 0xB0, 0xA7, 0x37 }, "Roku", RD_TV_MEDIA },
     { { 0x8C, 0x49, 0x62 }, "Roku", RD_TV_MEDIA },
     { { 0x00, 0x1E, 0x8F }, "Canon", RD_PRINTER },
     { { 0x00, 0x00, 0x48 }, "Epson", RD_PRINTER },
     { { 0x00, 0x1B, 0xA9 }, "Brother", RD_PRINTER },
-    { { 0x30, 0x05, 0x5C }, "HP", RD_PRINTER },
+    { { 0x30, 0x05, 0x5C }, "Brother", RD_PRINTER },
+    { { 0x64, 0x4E, 0xD7 }, "HP", RD_PRINTER },
     /* Fitness / wearable BLE */
-    { { 0xC8, 0x3F, 0x26 }, "Fitbit", RD_WEARABLE },
-    { { 0xD8, 0x8C, 0x79 }, "Garmin", RD_WEARABLE },
+    { { 0xF0, 0x51, 0xEA }, "Fitbit", RD_WEARABLE },
+    { { 0xB4, 0xC2, 0x6A }, "Garmin", RD_WEARABLE },
 };
 
 #define OUI_N ((unsigned)(sizeof(k_ouis) / sizeof(k_ouis[0])))
