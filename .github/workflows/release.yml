@@ -123,6 +123,82 @@ jobs:
               pharos-app.bin FLASH.md SHA256SUMS.txt )
           ls -l dist
 
+      # WHY THIS EXISTS: the step below waits for the maintainer to write the
+      # notes and only drops a one-line placeholder if they never appear. Both
+      # v3.4.0 and v3.5.0 shipped with that placeholder as their entire release
+      # page - the changelog said everything and the release said nothing.
+      #
+      # So the notes are composed here, from CHANGELOG.md, every time. A
+      # maintainer's own notes still win (see below); this only decides what a
+      # release says when nobody writes one by hand, and "Automated release" is
+      # not an acceptable answer to "what changed".
+      - name: Compose the release notes
+        run: |
+          set -eo pipefail
+          TAG="${{ steps.vars.outputs.tag }}"
+          NOTES="$PWD/dist/RELEASE_NOTES.md"
+
+          # The section for THIS tag: from its heading to the next version
+          # heading, without the heading itself.
+          awk -v tag="$TAG" '
+            $0 ~ "^## " tag "( |$)" { f = 1; next }
+            f && /^## v/ { exit }
+            f { print }
+          ' CHANGELOG.md > /tmp/section.md || true
+
+          if [ ! -s /tmp/section.md ]; then
+            echo "::warning::no CHANGELOG.md section for $TAG"
+            printf 'See [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md).\n' \
+              "${{ github.repository }}" "$TAG" > /tmp/section.md
+          fi
+
+          {
+            sed -e 's/[[:space:]]*$//' /tmp/section.md
+            cat <<EOF
+
+          ## Flash it
+
+          **From a browser** - Chrome or Edge, no tools to install:
+          <https://at0m-b0mb.github.io/Pharos-ESP32S3/>
+
+          **Or with esptool**, using the single merged image:
+
+          \`\`\`
+          pip install esptool
+          esptool.py --chip esp32s3 write_flash 0x0 pharos-${TAG}-esp32s3.bin
+          \`\`\`
+
+          Upgrading from a build older than v1.4.0? Erase first - the partition
+          layout and PSRAM settings changed:
+          \`esptool.py --chip esp32s3 erase_flash\`
+
+          ## What is attached
+
+          | file | what it is |
+          | --- | --- |
+          | \`pharos-${TAG}-esp32s3.bin\` | the whole thing, flashes at 0x0 |
+          | \`pharos-esp32s3.bin\` | same image at a version-less name, for scripts |
+          | \`pharos-${TAG}-esp32s3.zip\` | the above plus component images and FLASH.md |
+          | \`SHA256SUMS.txt\` | checksums for all of it |
+
+          ## Audited in CI against this exact ELF
+
+          - **Transmit fence** - no reachable path to a transmit primitive. This
+            firmware receives only; the fence is enforced at link time, not by
+            convention.
+          - **Lens linkage** - every lens survived the link. A lens registers from
+            a constructor, so the linker will happily discard one and still
+            produce a clean, empty-feeling firmware.
+          - **Display path** - the panel is driven via Waveshare's BSP.
+
+          A serial console runs at 115200 - type \`help\`. See
+          [docs/HARDWARE.md](https://github.com/${{ github.repository }}/blob/${TAG}/docs/HARDWARE.md).
+          EOF
+          } > "$NOTES"
+
+          echo "--- composed $(wc -l < "$NOTES") lines ---"
+          head -5 "$NOTES"
+
       - name: Attach binaries to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -145,12 +221,30 @@ jobs:
               echo "::warning::no release for $TAG after 10 minutes; creating one"
               gh release create "$TAG" --repo "${{ github.repository }}" \
                 --title "Pharos $TAG" \
-                --notes "Automated release. Firmware built and audited in CI." || true
+                --notes-file "$PWD/dist/RELEASE_NOTES.md" || true
               break
             fi
             echo "waiting for release $TAG to be created ..."
             sleep 20
           done
+
+          # IF THE RELEASE IS STILL CARRYING THE OLD PLACEHOLDER, REPLACE IT.
+          #
+          # A maintainer's own notes always win - this only fires on the exact
+          # string the placeholder used to write, so hand-written notes and
+          # notes composed by an earlier run of this job are both left alone.
+          body=$(gh release view "$TAG" --repo "${{ github.repository }}" \
+                   --json body --jq .body 2>/dev/null || true)
+          case "$body" in
+            ""|"Automated release. Firmware built and audited in CI."*)
+              echo "release body is empty or the old placeholder - writing real notes"
+              gh release edit "$TAG" --repo "${{ github.repository }}" \
+                --notes-file "$PWD/dist/RELEASE_NOTES.md" || true
+              ;;
+            *)
+              echo "release already has notes - leaving them alone"
+              ;;
+          esac
 
           # Idempotent - --clobber replaces on re-run.
           gh release upload "$TAG" \
