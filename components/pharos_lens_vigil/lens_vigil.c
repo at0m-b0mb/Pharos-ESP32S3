@@ -65,15 +65,45 @@ static pv_band_t s_last_band;
 static uint32_t s_sig_accum;
 static uint32_t s_locale_ms;
 
+/* THE EVIDENCE MUST SURVIVE BEING HANDED THE RADIO BACK AND FORTH.
+ *
+ * This wiped the whole engine on every mount, and on the watchtower - which
+ * is how the device boots, with ble.vigil armed on the ring - a mount happens
+ * at the start of every turn. A turn is 5000 ms and the locale timer needs
+ * VIGIL_LOCALE_MS, which is 20000. So pv_observe_locale() was NEVER reached
+ * while Vigil ran on the ring.
+ *
+ * With no locales, every tag scored the "seen, but you have not moved" arm,
+ * the verdict was capped at 44, and PV_BAND_PERSISTENT and PV_BAND_FOLLOWING
+ * - the only two conclusions this lens exists to reach - were unreachable.
+ * The anti-stalking watch was structurally incapable of reporting a follower
+ * in the mode it ships in. The device confirms it: "0 places" on the Vigil
+ * face after minutes of rotation.
+ *
+ * Being followed is measured over a walk between places. That evidence
+ * cannot be rebuilt in five seconds, so it is not thrown away: a mount now
+ * sets up the lock and the rings, and leaves the tags, the locales, the
+ * landscape accumulator and the step baseline where they were. The operator's
+ * "this one is mine" list lives in the engine too, and was being destroyed
+ * the same way.
+ *
+ * The one-time initialisation still happens once, on the first mount. */
+static bool s_primed;
+
 static bool vigil_mount(void)
 {
-    pv_reset(&s_engine);
+    if (!s_primed) {
+        pv_reset(&s_engine);
+        s_step_mark = pharos_sense_steps();
+        s_sig_accum = 0;
+        s_locale_ms = 0;
+        s_primed = true;
+    }
+    /* Display state only - safe to clear, and it is rebuilt on the first
+     * tick anyway. */
     memset(&s_verdict, 0, sizeof(s_verdict));
     s_last_band = PV_BAND_CLEAR;
-    s_step_mark = pharos_sense_steps();
     s_motion_gated = false;
-    s_sig_accum = 0;
-    s_locale_ms = 0;
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
     }
