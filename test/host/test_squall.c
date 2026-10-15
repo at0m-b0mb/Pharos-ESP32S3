@@ -116,8 +116,94 @@ static void test_squall_broken_frames(void)
           "no measurement is not a clean measurement");
 }
 
+/* A LOUD, WORKING BUILDING MUST NOT ACCUSE ITSELF OF BEING JAMMED.
+ *
+ * The per-channel accumulators are never capped or decayed - pq_observe() only
+ * adds - so on a camped sweep frames_total climbs without bound. classify()
+ * then computed `(c->frames_total * 1000u) / secs` in 32-bit arithmetic, which
+ * wraps once frames_total passes 4,294,967. At the 2000 frames a second of a
+ * dense office that is about half an hour of camping.
+ *
+ * The wrapped value lands in `fps`, which decides `barren`, and a loud channel
+ * reading barren is DENIAL: "the band is loud and nothing is decoding - this
+ * is what a jam looks like". The air never changed; the counter merely
+ * overflowed. Repetition cannot change a ratio, so only the wrap can do this. */
+static void test_squall_a_long_camp_is_not_a_jam(void)
+{
+    banner("squall: a long camp on a working channel is not a jam");
+
+    const pq_context_t camped = ctx_of(1000, true);
+
+    /* Dense but entirely healthy: 2000 frames a second decoded, 70% airtime,
+     * 40% retries. Exactly the dwell a crowded office produces.
+     *
+     * The counts straddle the wrap deliberately. frames_total * 1000 passes
+     * 2^32 at 4,295,000 frames, so with 1000 frames a dwell the boundary falls
+     * between the 4294th and the 4295th - ONE more identical observation. The
+     * wrap is not monotonic either: far past it the product lands back in a
+     * benign range and the bug hides again, so a test that simply camps "for a
+     * long time" misses it. It has to sit on the crossing. */
+    const pq_dwell_t healthy = dw(6, 500, 1000, 400, 700);
+
+    pq_state_table_t early, late;
+    pq_verdict_t ve, vl;
+
+    /* The last dwell before the product overflows: 2000 fps, read correctly. */
+    pq_reset(&early);
+    feed(&early, 4294u, healthy);
+    pq_evaluate(&early, &camped, &ve);
+
+    /* One more of exactly the same thing. */
+    pq_reset(&late);
+    feed(&late, 4295u, healthy);
+    pq_evaluate(&late, &camped, &vl);
+
+    CHECK(vl.worst == ve.worst,
+          "one more identical dwell changed the verdict from %s to %s",
+          pq_state_name(ve.worst), pq_state_name(vl.worst));
+    CHECK_EQ(ve.n_denial, 0);
+    CHECK(vl.n_denial == 0u,
+          "a working channel was graded a jam by one more identical dwell");
+    CHECK(vl.score == ve.score,
+          "the score moved from %u to %u on identical repeated evidence",
+          ve.score, vl.score);
+
+    /* AND THE SWEEP ACROSS EVERY CHANNEL, where the sums are larger still and
+     * so wrap sooner than any single channel does. */
+    pq_state_table_t wide;
+    pq_verdict_t vw;
+    pq_reset(&wide);
+    for (uint8_t ch = 1; ch <= 13u; ch++) {
+        feed(&wide, 4295u, dw(ch, 500, 1000, 400, 700));
+    }
+    pq_evaluate(&wide, &camped, &vw);
+    CHECK(vw.retry_permil <= 1000u,
+          "retry_permil is a per-mille and read %u", vw.retry_permil);
+    CHECK(vw.broken_permil <= 1000u,
+          "broken_permil is a per-mille and read %u", vw.broken_permil);
+    CHECK(vw.worst != PQ_STATE_DENIAL,
+          "a sweep of working channels was called a jam");
+
+    /* A REAL JAM IS STILL A REAL JAM. The widening must not make the alarm
+     * unreachable: loud airtime with almost nothing decoding is the condition
+     * the band exists to name. */
+    pq_state_table_t jammed;
+    pq_verdict_t vj;
+    pq_reset(&jammed);
+    feed(&jammed, 40u, dw(6, 700, 2, 0, 900));
+    pq_evaluate(&jammed, &camped, &vj);
+    /* n_denial, not worst: `worst` is the sweep's conclusion across every
+     * channel, and twelve unvisited ones temper it. The per-channel count is
+     * what says this channel was graded as denial. */
+    CHECK(vj.n_denial >= 1u,
+          "loud airtime with nothing decoding is still denial (n_denial=%u)",
+          vj.n_denial);
+}
+
+
 void test_squall(void)
 {
+    test_squall_a_long_camp_is_not_a_jam();
     test_squall_broken_frames();
     banner("squall: busy, broken, or denied");
     pq_state_table_t t;

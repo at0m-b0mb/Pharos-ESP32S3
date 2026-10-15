@@ -68,10 +68,26 @@ static void classify(pq_channel_t *c)
 
     const uint32_t busy = c->busy_sum / c->visits;                 /* per mille */
     const uint32_t secs = c->dwell_ms_total ? c->dwell_ms_total : 1;
-    /* Frames per second of actual listening. */
-    const uint32_t fps = (c->frames_total * 1000u) / secs;
+    /* Frames per second of actual listening.
+     *
+     * THE MULTIPLY MUST BE 64-BIT. These accumulators are never capped or
+     * decayed - pq_observe() only adds - so on a camped sweep frames_total
+     * climbs without bound. `frames_total * 1000u` is an unsigned int product
+     * and wraps once frames_total passes 4,294,967, which on a dense but
+     * perfectly healthy channel at 2000 frames a second is about half an hour
+     * of camping.
+     *
+     * The wrapped value lands in `fps`, which decides `barren` just below, and
+     * a loud channel reading barren is DENIAL - "the band is loud and nothing
+     * is decoding - this is what a jam looks like". So a busy working building
+     * accused itself of being jammed, after half an hour, with nothing in the
+     * air having changed. Ratios do not drift with repetition; only the wrap
+     * does. */
+    const uint32_t fps = (uint32_t)(((uint64_t)c->frames_total * 1000ull) / secs);
     const uint32_t retry_permil =
-        c->frames_total ? (c->retries_total * 1000u) / c->frames_total : 0;
+        c->frames_total
+            ? (uint32_t)(((uint64_t)c->retries_total * 1000ull) / c->frames_total)
+            : 0;
 
     /* "Loud" is judged from the airtime the radio reported busy, which is the
      * measure that does not depend on anything decoding. */
@@ -169,7 +185,9 @@ void pq_evaluate(const pq_state_table_t *t, const pq_context_t *ctx, pq_verdict_
     if (!any_floor) {
         out->notes |= PQ_NOTE_NOFLOOR;
     }
-    out->retry_permil = (uint16_t)(frames ? (retries * 1000u) / frames : 0);
+    /* Summed across every channel, so this wraps sooner than any single one. */
+    out->retry_permil =
+        (uint16_t)(frames ? (uint32_t)(((uint64_t)retries * 1000ull) / frames) : 0);
 
     /* If nothing was graded worse than healthy, the worst state may still be
      * QUIET/HEALTHY - report it rather than leaving it UNKNOWN. */
@@ -200,7 +218,8 @@ void pq_evaluate(const pq_state_table_t *t, const pq_context_t *ctx, pq_verdict_
             heard += t->ch[i].fcs_fail_total + t->ch[i].frames_total;
         }
         out->fcs_fail_total = bad;
-        out->broken_permil = heard ? (uint16_t)((bad * 1000u) / heard) : 0u;
+        out->broken_permil =
+            heard ? (uint16_t)(((uint64_t)bad * 1000ull) / heard) : 0u;
     }
 
     uint32_t score = worst_sev;
