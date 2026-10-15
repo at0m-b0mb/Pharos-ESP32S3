@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "pharos_event.h"
+#include "pharos_lens.h"
 #include "pharos_roster.h"
 #include "test_support.h"
 
@@ -583,8 +584,186 @@ static void test_roster_traffic_counts_as_hearing(void)
     CHECK_EQ(rd_count(&r), 0);
 }
 
+/* EVERY EXPOSURE BIT HAS BOTH FORMS, AND BOTH FIT.
+ *
+ * The row shows rd_exposure_tag() and the expansion shows
+ * rd_exposure_headline(). RD_EXP_STREAMING had a branch in the tag and none
+ * in the headline, so a device the row called "UPLOADING" fell through to
+ * NULL and its expansion printed "nothing exposed on air" with a green "ok"
+ * beside it. One device, one screen, two opposite claims - and the missing
+ * one is the finding somebody sweeps a hotel room for.
+ *
+ * The widths matter just as much. The expansion writes the headline with
+ * "%.25s" into pharos_lens_row.left[26] - a hard cut, no ellipsis - and four
+ * of the nine were longer than that. "WPS on - PIN can be forced" reached the
+ * glass as "WPS on - PIN can be."
+ *
+ * Checking the bits somebody happened to think of is the cheap half. Walking
+ * all of them is what catches the next one added. */
+static void test_roster_every_exposure_has_both_forms(void)
+{
+    banner("roster: every exposure bit has a tag and a headline, both fitting");
+
+    /* The expansion row's real capacity, taken from the type rather than
+     * written as 25, so this follows the contract if the contract changes. */
+    const size_t row_cap = sizeof(((struct pharos_lens_row *)0)->left) - 1u;
+
+    static const struct { uint16_t bit; const char *name; } bits[] = {
+        { RD_EXP_OPEN,        "OPEN" },
+        { RD_EXP_WEP,         "WEP" },
+        { RD_EXP_WPA1,        "WPA1" },
+        { RD_EXP_WPS,         "WPS" },
+        { RD_EXP_FIXED_MAC,   "FIXED_MAC" },
+        { RD_EXP_PROBES_OPEN, "PROBES_OPEN" },
+        { RD_EXP_NO_MFP,      "NO_MFP" },
+        { RD_EXP_NAME_LEAK,   "NAME_LEAK" },
+        { RD_EXP_WPS_PIN,     "WPS_PIN" },
+        { RD_EXP_STREAMING,   "STREAMING" },
+    };
+
+    for (unsigned i = 0; i < sizeof(bits) / sizeof(bits[0]); i++) {
+        rd_device_t d;
+        memset(&d, 0, sizeof(d));
+        d.in_use = true;
+        d.exposure = bits[i].bit;
+
+        const char *tag = rd_exposure_tag(&d);
+        const char *head = rd_exposure_headline(&d);
+
+        CHECK(tag != NULL, "RD_EXP_%s has no tag", bits[i].name);
+        CHECK(head != NULL, "RD_EXP_%s has no headline", bits[i].name);
+        if (!tag || !head) { continue; }
+
+        CHECK(strlen(tag) <= RD_TAG_MAX,
+              "RD_EXP_%s tag \"%s\" is %u, the column holds %u",
+              bits[i].name, tag, (unsigned)strlen(tag), (unsigned)RD_TAG_MAX);
+        CHECK(strlen(head) <= row_cap,
+              "RD_EXP_%s headline \"%s\" is %u, the row holds %u",
+              bits[i].name, head, (unsigned)strlen(head), (unsigned)row_cap);
+    }
+
+    /* AND THE TWO ORDERINGS AGREE. With several bits set at once the row and
+     * the expansion must still be talking about the same finding, which is
+     * what the comment above rd_exposure_tag() claims and what a mismatched
+     * branch order would quietly break. */
+    for (unsigned i = 0; i < sizeof(bits) / sizeof(bits[0]); i++) {
+        for (unsigned j = 0; j < sizeof(bits) / sizeof(bits[0]); j++) {
+            if (i == j) { continue; }
+            rd_device_t pair, lone_i, lone_j;
+            memset(&pair, 0, sizeof(pair));
+            memset(&lone_i, 0, sizeof(lone_i));
+            memset(&lone_j, 0, sizeof(lone_j));
+            pair.in_use = lone_i.in_use = lone_j.in_use = true;
+            pair.exposure = (uint16_t)(bits[i].bit | bits[j].bit);
+            lone_i.exposure = bits[i].bit;
+            lone_j.exposure = bits[j].bit;
+
+            const char *pt = rd_exposure_tag(&pair);
+            const char *ph = rd_exposure_headline(&pair);
+            if (!pt || !ph) { continue; }
+
+            /* Whichever bit the tag picked, the headline must have picked the
+             * same one. */
+            const bool tag_took_i = (strcmp(pt, rd_exposure_tag(&lone_i)) == 0);
+            const char *want = tag_took_i ? rd_exposure_headline(&lone_i)
+                                          : rd_exposure_headline(&lone_j);
+            CHECK(want != NULL && strcmp(ph, want) == 0,
+                  "RD_EXP_%s|RD_EXP_%s: the row says \"%s\" and the expansion "
+                  "says \"%s\"", bits[i].name, bits[j].name, pt, ph);
+        }
+    }
+}
+
+/* UPLOADING CONTINUOUSLY MEANS CONTINUOUSLY.
+ *
+ * The three streaming thresholds are cumulative, and the duty is upload
+ * seconds over seconds HEARD - so a device only ever heard in the second it
+ * transmits reads a hundred per cent duty however rarely it transmits. One
+ * large frame every ninety seconds reached eight upload seconds over twelve
+ * minutes at 100% duty and was published as uploading continuously.
+ *
+ * That is the row that points somebody at a camera in a room they are
+ * sleeping in. It has to mean what it says. */
+static void test_roster_streaming_needs_a_continuous_run(void)
+{
+    banner("roster: a trickle every ninety seconds is not a stream");
+
+    static const uint8_t dev[6] = { 0x2C, 0xAA, 0x8E, 0x11, 0x22, 0x33 };
+
+    /* A doorbell or a sensor: one full-sized frame every ninety seconds.
+     *
+     * 150 of them - just under four hours - which is what it takes to clear
+     * ALL THREE thresholds: 150 upload seconds against the eight required,
+     * 210 kB against the 200 kB required, and a duty of 100% because the
+     * device is never heard doing anything else. Forty uploads would not have
+     * done it; the first version of this test used forty and passed against
+     * the broken engine, proving nothing. */
+    {
+        rd_roster_t r;
+        rd_reset(&r);
+        uint64_t t = 1000000000ull;
+        for (unsigned i = 0; i < 150u; i++) {
+            rd_observe_traffic(&r, dev, 1400, true, t);
+            t += 90000000ull; /* ninety seconds */
+        }
+        rd_device_t d;
+        CHECK(rd_at(&r, 0, &d), "the device is on the roster");
+        CHECK((d.exposure & RD_EXP_STREAMING) == 0,
+              "one frame every ninety seconds was called continuous upload "
+              "(up_seconds=%u duty=%u)", d.up_seconds, rd_upload_duty(&d));
+    }
+
+    /* AND A CAMERA IS STILL A CAMERA. The fix must not make the finding
+     * unreachable: continuous upload, second after second, is exactly what
+     * this exposure exists to name. */
+    {
+        rd_roster_t r;
+        rd_reset(&r);
+        uint64_t t = 1000000000ull;
+        for (unsigned i = 0; i < 30u; i++) {
+            /* Several frames a second, every second, like video. */
+            for (unsigned k = 0; k < 20u; k++) {
+                rd_observe_traffic(&r, dev, 1400, true, t + k * 40000ull);
+            }
+            t += 1000000ull;
+        }
+        rd_device_t d;
+        CHECK(rd_at(&r, 0, &d), "the camera is on the roster");
+        CHECK(d.exposure & RD_EXP_STREAMING,
+              "continuous upload is still reported (up_seconds=%u duty=%u "
+              "bytes=%lu)", d.up_seconds, rd_upload_duty(&d),
+              (unsigned long)d.up_bytes);
+    }
+
+    /* AND A STREAM THAT STOPS STOPS BEING REPORTED. A run that has ended is
+     * history, not the present - the same rule Rival was fixed for. */
+    {
+        rd_roster_t r;
+        rd_reset(&r);
+        uint64_t t = 1000000000ull;
+        for (unsigned i = 0; i < 30u; i++) {
+            for (unsigned k = 0; k < 20u; k++) {
+                rd_observe_traffic(&r, dev, 1400, true, t + k * 40000ull);
+            }
+            t += 1000000ull;
+        }
+        rd_device_t d;
+        CHECK(rd_at(&r, 0, &d), "on the roster");
+        CHECK(d.exposure & RD_EXP_STREAMING, "streaming while it streams");
+
+        /* Quiet for a minute, then one lone frame. */
+        t += 60000000ull;
+        rd_observe_traffic(&r, dev, 1400, true, t);
+        CHECK(rd_at(&r, 0, &d), "still on the roster");
+        CHECK((d.exposure & RD_EXP_STREAMING) == 0,
+              "a stream that stopped a minute ago is still being reported");
+    }
+}
+
 void test_roster(void)
 {
+    test_roster_streaming_needs_a_continuous_run();
+    test_roster_every_exposure_has_both_forms();
     test_roster_traffic_counts_as_hearing();
     test_roster_random_mac_has_no_vendor();
     test_roster_ble_random_address_has_no_vendor();

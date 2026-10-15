@@ -232,6 +232,21 @@ uint8_t rd_upload_duty(const rd_device_t *d);
 #define RD_STREAM_MIN_DUTY    60  /* per cent of the seconds it was heard  */
 #define RD_STREAM_MIN_BYTES   200000ul
 
+/* HOW LONG A STREAM MAY PAUSE AND STILL BE THE SAME STREAM.
+ *
+ * The three thresholds above are all CUMULATIVE, and the duty is upload
+ * seconds over seconds HEARD - so a device that is only ever heard in the
+ * second it transmits shows a hundred per cent duty however rarely it
+ * transmits. One large frame every ninety seconds therefore accumulated eight
+ * upload seconds over twelve minutes, at a duty of 100%, and was reported as
+ * uploading continuously.
+ *
+ * The header promises "how many seconds of continuous upload", so a gap
+ * longer than this ends the run and the count starts again. Three seconds is
+ * longer than any frame interval a real stream has and far shorter than the
+ * pause that makes something not a stream. */
+#define RD_STREAM_MAX_GAP     3u /* seconds */
+
 unsigned rd_count(const rd_roster_t *r);
 
 /* The i-th device, most-exposed first then strongest signal. */

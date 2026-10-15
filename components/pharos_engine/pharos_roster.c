@@ -537,6 +537,28 @@ void rd_observe_traffic(rd_roster_t *r, const uint8_t mac[6], uint16_t frame_len
     if (frame_len < 200u) {
         return;
     }
+    /* A GAP ENDS THE RUN.
+     *
+     * All three thresholds below are cumulative, and the duty is upload
+     * seconds over seconds HEARD - so a device only ever heard in the second
+     * it transmits reads a hundred per cent duty however rarely it transmits.
+     * One large frame every ninety seconds reached eight upload seconds in
+     * twelve minutes at 100% duty and was published as uploading
+     * continuously, which is the row that points at a camera.
+     *
+     * The header promises CONTINUOUS upload, so a pause longer than
+     * RD_STREAM_MAX_GAP starts the count again. The heard count goes with it,
+     * or the duty would be measured against a window the run no longer
+     * covers - set to this second rather than zero so the ratio stays
+     * defined. */
+    if (d->last_up_sec != 0u && sec > d->last_up_sec &&
+        (sec - d->last_up_sec) > RD_STREAM_MAX_GAP) {
+        d->up_seconds = 0;
+        d->up_bytes = 0;
+        d->heard_seconds = 1;
+        d->exposure &= (uint16_t)~RD_EXP_STREAMING;
+    }
+
     d->up_bytes += frame_len;
     if (sec != d->last_up_sec) {
         d->last_up_sec = sec;
@@ -714,16 +736,31 @@ const char *rd_exposure_headline(const rd_device_t *d)
     if (!d || !d->exposure) {
         return NULL;
     }
-    /* Worst first, matching the sort weights. */
-    if (d->exposure & RD_EXP_OPEN)        return "open network - no encryption";
+    /* Worst first, matching the sort weights AND the tag above it.
+     *
+     * RD_EXP_STREAMING had no branch here at all, so a device the tag called
+     * "UPLOADING" fell through to NULL and the expansion row printed "nothing
+     * exposed on air" with a green "ok" beside it. One screen, two opposite
+     * claims about the same device - and the missing one is the finding a
+     * person sweeps a hotel room for.
+     *
+     * EVERY STRING HERE FITS TWENTY-FIVE CHARACTERS. The expansion row writes
+     * it with "%.25s" into pharos_lens_row.left[26], a hard cut with no
+     * ellipsis, so four of these were being sliced mid-word: "WPS on - PIN
+     * can be forced" reached the glass as "WPS on - PIN can be." - which
+     * reads as a broken screen rather than as a finding, and in one case
+     * ("unencrypted open network") the cut could drop the very word that
+     * carries the meaning. The house rule is in pharos_hud.c: an engine whose
+     * text needs cutting shortens its text. */
+    if (d->exposure & RD_EXP_STREAMING)   return "uploading continuously";
+    if (d->exposure & RD_EXP_OPEN)        return "unencrypted open network";
     if (d->exposure & RD_EXP_WEP)         return "WEP - broken since 2004";
     if (d->exposure & RD_EXP_WPA1)        return "WPA1/TKIP - deprecated";
-    if (d->exposure & RD_EXP_WPS_PIN)
-        return "WPS 1.0 PIN - brute-forceable";
-    if (d->exposure & RD_EXP_WPS)         return "WPS on - PIN can be forced";
+    if (d->exposure & RD_EXP_WPS_PIN)     return "WPS PIN - brute-forceable";
+    if (d->exposure & RD_EXP_WPS)         return "WPS on - PIN forceable";
     if (d->exposure & RD_EXP_PROBES_OPEN) return "will auto-join open Wi-Fi";
     if (d->exposure & RD_EXP_NO_MFP)      return "no 802.11w - deauth works";
-    if (d->exposure & RD_EXP_NAME_LEAK)   return "broadcasts a personal name";
+    if (d->exposure & RD_EXP_NAME_LEAK)   return "broadcasts a real name";
     if (d->exposure & RD_EXP_FIXED_MAC)   return "fixed MAC - trackable";
     return NULL;
 }
