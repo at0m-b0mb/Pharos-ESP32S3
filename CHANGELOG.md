@@ -1,5 +1,52 @@
 # Changelog
 
+## v3.5.1 - the last three the audit found
+
+Four commits since v3.5.0. The adversarial audit that drove v3.5.0 confirmed
+twenty-three findings; v3.5.0 closed the sharp ones and left a tail. This
+closes the rest of what was worth closing.
+
+**Rival latched a BLE-spam alarm and nothing could clear it.** The
+advertisement-rate ring counts distinct advertisers per second across eight
+slots, and it only cleared the slot it was moving INTO - and it only moved when
+an advertisement arrived in a new second. So the instant BLE went quiet, the
+remaining slots kept whatever burst had filled them and the peak was read
+straight back out of them for ever. One burst, one permanent alarm. The pairing
+counter two fields away already stamped each slot with the second it belonged
+to; this one did not, and now does.
+
+**Sentinel published an access point before it had filled it.** The table
+handed back `&s_aps[s_n_aps++]` for the caller to populate. `on_event` runs on
+the analytics core and takes no lock; `sentinel adopt` and the tick read the
+table from other tasks and do take one - so the lock protected the readers from
+each other and nothing at all from the writer. In the window between the
+increment and the fill, a reader saw a record with a BSSID and nothing else: no
+name, channel zero, no RSN.
+
+That is worse here than it sounds, because what the reader is usually doing is
+adopting a **baseline** - the thing every later sweep is compared against. A
+half-written access point in the baseline is a permanent, quiet false "changed"
+for the rest of the session. The count is the publication point, so it moves
+last now, behind a release fence.
+
+**`rotate` drove the panel from the console's task.** Its only caller is the
+`rotate` command, and it re-oriented the panel while the LVGL task was free to
+be flushing a frame out of the same bus - the same class of fault as the
+console re-initialising the Wi-Fi driver on its own task, fixed the same way.
+It takes the display lock now, for the rotation only; the NVS write that
+remembers the choice stays outside it, because holding a display lock across a
+flash write is how a frame gets dropped.
+
+**And the release page says what changed.** The release job waits for the
+maintainer to write notes and drops a one-line placeholder if they do not
+appear - which is what the entire v3.0.0 through v3.5.0 range shipped with. The
+notes are composed from this file now, every run, with how to flash it and what
+CI proved about the exact image attached. Hand-written notes still win; this
+only decides what a release says when nobody writes one.
+
+8901 host checks, 0 failures - and 0 under UBSan and ASan. Fence, lens and
+source-wiring audits intact. All twenty-one faces photographed off the glass.
+
 ## v3.5.0 - photographing the glass
 
 Twenty-nine commits since v3.4.0. Where v3.4.0 audited the engines against the
