@@ -28,5 +28,10 @@ compile_commands.json
 # and one of those was committed.
 __pycache__/
 *.py[cod]
+# Built harnesses. Listed by name once and then by pattern, because the
+# second binary was added without a rule and got committed - CI then tried
+# to execute an arm64 Mach-O on Linux and reported it as a shell syntax
+# error, which says nothing about the cause.
 /test/fuzz/fuzz
+/test/fuzz/fuzz_state
 /test/fuzz/*.dSYM/
