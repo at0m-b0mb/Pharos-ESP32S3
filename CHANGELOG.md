@@ -1,5 +1,74 @@
 # Changelog
 
+## v3.6.1 - ten more, found by asking what must be true
+
+Ten commits since v3.6.0. v3.6.0 came from fuzzing the verdicts; this release
+came from taking the 50 properties that audit produced, re-checking every one
+against the code as it now stands, and putting each survivor through three
+adversarial readers. Twenty-two of the fifty did not survive that - several
+because the property was never a rule this project made - which is the point
+of running the panel at all.
+
+**An ordinary roam was billed as a PMKID orphan.** `ph_settle()` took no clock,
+so it could not tell a message 1 that was two milliseconds old from one that
+was ten seconds old, and the lens calls it twenty times a second. A client's
+message 1 was retired before its message 2 arrived, and nothing decrements the
+counter afterwards. A PMKID in message 1 is how fast roaming works, so two
+ordinary roams on an ordinary WPA2 network reached SUSPECTED at 46/96 with "A
+PMKID was requested and never completed".
+
+**A working building accused itself of being jammed.** `frames_total * 1000u`
+is a 32-bit product and wraps at 4,295,000 frames - about half an hour of
+camping on a dense channel. The wrapped value decides `barren`, and a loud
+channel reading barren is DENIAL. 4294 identical dwells grade CONGESTED at 42;
+the 4295th, bit-identical, grades DENIAL at 74.
+
+**A block of flats reported a beacon flood.** The novelty rate divided a
+LIFETIME count of names by the caller's twelve-second window, so the number
+stopped falling as the same names spread over a longer time: forty names over
+sixty seconds and over six hundred both read 200.0 a minute.
+
+**Two strangers could be merged into one person.** Probe's link search took the
+first candidate it met and stopped, so when two tracked devices both matched,
+array order decided which person a new address joined. Fingerprints are shared
+by every phone of a chipset and the sequence test accepts a 64-wide window, so
+this is not rare. A link is now claimed only on a unique match, and the refusal
+is counted rather than silent.
+
+**One device showed two opposite claims on one screen.** The roster row said
+UPLOADING while the expansion said "nothing exposed on air" with a green ok,
+because the headline had no branch for that exposure. And "uploading
+continuously" did not mean continuously: one frame every ninety seconds
+cleared every threshold at 100% duty over four hours.
+
+**A band plan scored as suspicious behaviour.** Twin's "alone on this channel"
+is true of whoever was picked as suspect when every radio has its own channel,
+which is the ordinary 5 and 6 GHz layout.
+
+**A device was expired while it was still transmitting**, and **seven
+vocabularies were cut in the field they are drawn in** - including all eleven
+CWE references, where a reference cut in half names a weakness nobody can look
+up. Where a slot had slack it was widened rather than the words shortened.
+
+**Two notes shared a bit** in Vigil, latent only because the engine never set
+one of them yet.
+
+AND THE SUITE ITSELF HAD A FALSE GREEN. `make` compares modification times with
+one-second granularity, and the whole host suite is a single cc invocation, so
+an edit landing in the same second as the previous build ran the OLD binary and
+printed "0 failures" about code that was not on disk. That happened three times
+in one session, twice right after restoring a file to check a test really
+catches its bug. The binary now always relinks.
+
+Every fix was verified by reverting it and watching the tests name the failure.
+Three of the new assertions were wrong on the first attempt and passed against
+broken code; each was caught the same way.
+
+15,227 host checks, 515,084,483 parser post-conditions and 50,704,513 verdict
+invariants, all clean under ASan and UBSan. All 21 lenses photographed off the
+panel, a nine-minute soak with zero heap drift and zero fence trips, and all
+nine armed watches visited across eight tower rotations.
+
 ## v3.6.0 - the verdicts get fuzzed, and seven bugs fall out
 
 Ten commits since v3.5.1. v3.5.0 and v3.5.1 came out of an adversarial audit

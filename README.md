@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://at0m-b0mb.github.io/Pharos-ESP32S3/"><img alt="flash from browser" src="https://img.shields.io/badge/⚡_flash-from_your_browser-1FB6C9"></a>
   <a href="#the-transmit-fence"><img alt="posture: receive-only" src="https://img.shields.io/badge/posture-receive--only-3DDC84"></a>
-  <img alt="host checks" src="https://img.shields.io/badge/host_checks-5164_passing-1FB6C9">
+  <img alt="host checks" src="https://img.shields.io/badge/host_checks-15227_passing-1FB6C9">
   <img alt="platform" src="https://img.shields.io/badge/platform-ESP32--S3-2A6C82">
   <img alt="idf" src="https://img.shields.io/badge/ESP--IDF-5.5%20%7C%206.0-444">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -42,7 +42,7 @@ So every verdict Pharos produces carries a **confidence ceiling** derived from h
 
 But the ceiling has to punish the **right** thing, and that distinction is the heart of the Watch engine. Hopping weakens an *extrapolated rate* — you heard 7% of a second and multiplied by fourteen. It does not weaken a **contradiction**. If a network advertises that its management frames are cryptographically protected (802.11w), then an *unprotected* deauthentication frame claiming to come from it is forged, and hearing it during a 200 ms visit makes it no less forged. Evidence like that is dwell-independent, and Pharos says so: such a verdict raises its own ceiling to 88 and may alarm while hopping. Nothing ever reaches 100.
 
-This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 5,602 host checks assert, among much else, that volume and targeting shape **together** can never reach the alarm band — a busy network is not an attack — and that every forgery test has a benign twin it must refuse to fire on.
+This honesty is not a disclaimer bolted on. It is arithmetic, and it is [tested](test/host): 15,227 host checks assert, among much else, that volume and targeting shape **together** can never reach the alarm band — a busy network is not an attack — and that every forgery test has a benign twin it must refuse to fire on.
 
 ## What it looks like
 
@@ -322,7 +322,7 @@ the honest version of the guarantee, and it is the one Pharos makes.
 **The engines and UI geometry build and test with no board at all** — do this first, it is fast and catches the most:
 
 ```bash
-make -C test/host                # 5164 checks, 0 failures
+make -C test/host                # 15227 checks, 0 failures
 ```
 
 > [!TIP]
@@ -331,7 +331,7 @@ make -C test/host                # 5164 checks, 0 failures
 **Prebuilt firmware** is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases) — a single flashable image built and audited in CI:
 
 ```bash
-esptool.py --chip esp32s3 write_flash 0x0 pharos-v1.7.0-esp32s3.bin
+esptool.py --chip esp32s3 write_flash 0x0 pharos-v3.6.1-esp32s3.bin
 ```
 
 **Build it yourself**, with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or newer:
@@ -398,21 +398,26 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-**v1.7.0 — the display fixed at the source, a real CLI, and both radios finally working.**
+**v3.6.1 — every lens verified on the glass, and the verdicts fuzzed as hard as the parsers.**
 
 | Layer | State | Detail |
 |---|---|---|
-| **Detection & evidence engines** | ✅ complete, **5,164 host checks, 0 failures** | 18 detection/analysis engines + report/chain/sha256, all pure C, all tested on a laptop |
-| **Round-screen geometry & Virtual HUD** | ✅ complete & tested | layout maths host-tested; every screen rendered from the real code and bounds-checked in CI |
-| **Transmit fence** | ✅ enforced & audited | 4 mechanisms, verified against the linked ELF on every build |
+| **Detection & evidence engines** | ✅ complete, **15,227 host checks, 0 failures** | 30 engines, every one pure C11 with no ESP-IDF, no float and no allocation, so the whole analysis surface runs and is tested on a laptop |
+| **Hostile-input fuzzing** | ✅ **515,084,483 parser post-conditions**, **50,704,513 verdict invariants** | two seeded harnesses under ASan + UBSan, in CI on every push; the second drives the scoring engines with time deliberately out of order |
+| **Round-screen geometry & HUD** | ✅ complete & tested | layout maths host-tested; all 21 lenses photographed off the real panel each release, checked for anything outside the glass |
+| **Transmit fence** | ✅ enforced & audited | 4 mechanisms, verified against the linked ELF on every build — receive-only is enforced at link time, not promised in a comment |
 | **Firmware build** | ✅ green on ESP-IDF v5.5 + v6.0 | a **flashable binary is attached to each [release](https://github.com/at0m-b0mb/Pharos-ESP32S3/releases)** |
-| **Board bring-up (display + touch)** | ✅ driven via the Waveshare BSP | CO5300 AMOLED + CST9217 touch via `bsp_display_start()`; IMU/PMU telemetry still M1 |
-| **On-device LVGL rendering** | ✅ HUD live — **display fix in v1.5.0** | v1.4.0 powered the panel but never drew to it: the BSP's LVGL lock returns `esp_err_t` (`ESP_OK == 0`) and was read as a bool, so every paint saw a successful lock as failure and bailed. Fixed; the boot splash + gauge now render. |
+| **Board bring-up** | ✅ running on hardware | CO5300 AMOLED + CST9217 touch, IMU and PMU telemetry live; 9-minute soak with **zero heap drift and zero fence trips** |
+| **Watchtower rotation** | ✅ verified on hardware | all 9 armed watches visited across 8 rotations, radio handed over on schedule |
 
 > [!NOTE]
-> **Hardware bring-up in progress.** The engines and UI geometry are proven in software; the panel-paint path is now fixed against a real board. IMU/PMU telemetry and touch-driven dial navigation remain. See [CHANGELOG.md](CHANGELOG.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **The honesty rules are the product.** Nothing here reaches certainty: a
+> hopping receiver caps at 60 and a camped one at 96, every verdict names the
+> evidence it used, and no string anywhere says a network is safe. Where the
+> device cannot tell, it says so instead of guessing — and the test suite
+> asserts that in both directions.
 
-**16 lenses** · **18 engines** · a receive-only serial console · MIT.
+**21 lenses** · **30 engines** · a receive-only serial console · MIT.
 
 ## License
 
