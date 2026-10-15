@@ -360,13 +360,41 @@ bool pharos_dot11_eapol(const uint8_t *buf, size_t len, pharos_eapol_t *out)
             const uint16_t kd_len = rd16be(buf + kd_len_off);
             const size_t kd = kd_len_off + 2u;
             if (kd_len >= 22u && kd + kd_len <= len) {
-                for (size_t i = 0; i + 6u <= (size_t)kd_len; i++) {
-                    const uint8_t *p = buf + kd + i;
-                    if (p[0] == 0xDDu && p[2] == 0x00u && p[3] == 0x0Fu &&
-                        p[4] == 0xACu && p[5] == 0x04u) {
-                        out->has_pmkid = true;
-                        break;
+                /* WALK THE KDEs, DO NOT SCAN FOR THE PATTERN.
+                 *
+                 * This used to slide a six-byte comparison along the whole
+                 * key-data field at every offset, and it never read the KDE's
+                 * own length byte at all - so it was a five-of-six wildcard
+                 * match anywhere in the blob, including straight through the
+                 * middle of a nonce or an MIC, and including a KDE far too
+                 * short to carry the sixteen bytes a PMKID is.
+                 *
+                 * has_pmkid is what Harvest reports as somebody soliciting a
+                 * key to crack offline, so a coincidence in a field full of
+                 * random bytes became an accusation against an ordinary
+                 * network. The layout is right there in the comment above;
+                 * this now enforces it, the same way the element walk earlier
+                 * in this file does. */
+                for (size_t o = 0; o + 2u <= (size_t)kd_len; ) {
+                    const uint8_t id = buf[kd + o];
+                    const uint8_t dlen = buf[kd + o + 1u];
+                    if (o + 2u + (size_t)dlen > (size_t)kd_len) {
+                        break; /* claims more than the key data holds */
                     }
+                    /* Vendor-specific, and long enough to hold the OUI, the
+                     * data type and a 16-byte PMKID. */
+                    if (id == 0xDDu && dlen >= 20u) {
+                        const uint8_t *d = buf + kd + o + 2u;
+                        if (d[0] == 0x00u && d[1] == 0x0Fu && d[2] == 0xACu &&
+                            d[3] == 0x04u) {
+                            out->has_pmkid = true;
+                            break;
+                        }
+                    }
+                    if (dlen == 0u) {
+                        break; /* a zero-length KDE would not advance */
+                    }
+                    o += 2u + (size_t)dlen;
                 }
             }
         }

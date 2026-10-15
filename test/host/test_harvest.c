@@ -87,6 +87,72 @@ static size_t mk_eapol(uint8_t *buf, size_t cap, int msg, bool pmkid, bool qos,
     return o;
 }
 
+/* A PMKID IS A KDE, NOT A BYTE PATTERN.
+ *
+ * has_pmkid used to be set by sliding a six-byte comparison along the whole
+ * key-data field at every offset, never reading the KDE's own length byte -
+ * a five-of-six wildcard match anywhere in the blob, including straight
+ * through a nonce or an MIC, and including a KDE far too short to carry the
+ * sixteen bytes a PMKID is.
+ *
+ * Harvest reports has_pmkid as somebody soliciting a key to crack offline,
+ * so a coincidence in a field full of random bytes became an accusation
+ * against an ordinary network. */
+static void test_eapol_pmkid_must_be_a_real_kde(void)
+{
+    banner("dot11: a PMKID is a KDE, not a byte pattern found anywhere");
+
+    uint8_t buf[256];
+    pharos_eapol_t e;
+
+    /* A genuine one still parses. */
+    {
+        const size_t n = mk_eapol(buf, sizeof(buf), 1, true, false, true);
+        CHECK(pharos_dot11_eapol(buf, n, &e), "message 1 parses");
+        CHECK(e.has_pmkid, "a real PMKID KDE is still found");
+    }
+
+    /* THE SAME SIX BYTES, NOT AT A KDE BOUNDARY. Built by hand: one real KDE
+     * that is NOT a PMKID, whose payload happens to contain the sequence. A
+     * walker steps over it; a scanner trips on it. */
+    {
+        const size_t n = mk_eapol(buf, sizeof(buf), 1, false, false, true);
+        /* Overwrite the empty key-data with a 24-byte blob: a vendor KDE of
+         * type 0x01 (not 0x04) whose data carries the PMKID signature. */
+        const size_t kd_len_off = n - 2u;
+        buf[kd_len_off]     = 0x00;
+        buf[kd_len_off + 1] = 0x18;          /* 24 bytes of key data */
+        uint8_t *kd = buf + kd_len_off + 2u;
+        kd[0] = 0xDD; kd[1] = 0x16;          /* vendor KDE, 22 bytes */
+        kd[2] = 0x00; kd[3] = 0x0F; kd[4] = 0xAC; kd[5] = 0x01; /* NOT 04 */
+        /* and inside its payload, the pattern a scanner would match */
+        kd[6] = 0xDD; kd[7] = 0x14;
+        kd[8] = 0x00; kd[9] = 0x0F; kd[10] = 0xAC; kd[11] = 0x04;
+        memset(kd + 12, 0x5A, 12);
+        CHECK(pharos_dot11_eapol(buf, kd_len_off + 2u + 24u, &e),
+              "the frame still parses");
+        CHECK(!e.has_pmkid,
+              "the signature inside another KDE's payload was read as a PMKID");
+    }
+
+    /* A KDE THAT CLAIMS TO BE A PMKID BUT IS TOO SHORT TO HOLD ONE. */
+    {
+        const size_t n = mk_eapol(buf, sizeof(buf), 1, false, false, true);
+        const size_t kd_len_off = n - 2u;
+        buf[kd_len_off]     = 0x00;
+        buf[kd_len_off + 1] = 0x08;
+        uint8_t *kd = buf + kd_len_off + 2u;
+        kd[0] = 0xDD; kd[1] = 0x06;          /* 6 bytes: no room for 16 */
+        kd[2] = 0x00; kd[3] = 0x0F; kd[4] = 0xAC; kd[5] = 0x04;
+        kd[6] = 0x00; kd[7] = 0x00;
+        CHECK(pharos_dot11_eapol(buf, kd_len_off + 2u + 8u, &e),
+              "the short frame still parses");
+        CHECK(!e.has_pmkid,
+              "a KDE too short to carry a PMKID was read as carrying one");
+    }
+}
+
+
 static void test_eapol_parser(void)
 {
     banner("harvest: the EAPOL parser");
@@ -569,6 +635,7 @@ static void test_harvest_a_tick_between_m1_and_m2_is_not_an_orphan(void)
 
 void test_harvest(void)
 {
+    test_eapol_pmkid_must_be_a_real_kde();
     test_harvest_a_tick_between_m1_and_m2_is_not_an_orphan();
     test_harvest_one_radio_many_networks();
     test_harvest_no_pmkid_offered_is_a_finding();
