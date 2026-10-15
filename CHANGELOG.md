@@ -1,5 +1,85 @@
 # Changelog
 
+## v3.6.0 - the verdicts get fuzzed, and seven bugs fall out
+
+Seven commits since v3.5.1. v3.5.0 and v3.5.1 came out of an adversarial audit
+reading the code. This release comes from asking a different question: not "is
+this line wrong" but "what must be true of every input, and is it?"
+
+Two new harnesses answer it. The parser fuzzer from v3.5.1 proves the engines
+survive hostile bytes; a second one drives the SCORING engines with random
+event streams and checks the invariants after every step, with time
+deliberately misbehaving - out of order, repeated, jumping by an hour - because
+the Wi-Fi callback, the NimBLE host task and the dwell ring are three producers
+with their own clocks reaching one consumer. 515,084,483 parser post-conditions
+and 50,665,338 verdict invariants, all under ASan and UBSan.
+
+**Five bytes in front of a tracker made it invisible.** The worst of them, in
+the lens whose whole job is to find a tracker somebody planted on a person.
+`pv_classify()` returned the first AD structure it recognised, and an
+advertisement holds several that whoever is in radio range chooses. So a
+five-byte Eddystone frame in front of a real tag classified the frame as a
+proximity beacon - and Vigil rightly refuses to table a beacon. The tracker was
+never entered at all: score 0, band CLEAR, zero tags, for a tag heard across
+three places by someone who had moved. This file had already paid for this bug
+once with an UNRECOGNISED prefix; it came straight back through a recognised
+one, and every decoy fixture in the tests used the unrecognised kind. The walk
+now sees every structure and keeps the most alarming kind it found. A
+beacon-only advertisement is still a beacon, and still refused.
+
+**And the separated verdict came from the wrong byte.** In a Find My element
+the status sits at `p[4]`. An element too short to hold one was read at
+`p[plen - 1]` instead - the length byte - so the six bytes `05 FF 4C 00 12 04`
+classified as SEPARATED. That is remembered permanently and scores +6, which
+means six bytes anybody can transmit permanently escalated a device.
+
+**A device was expired while it was still transmitting.** Every ingest path
+stamps `last_us` so `rd_expire()` means something; `rd_observe_traffic` did
+not, and `admit()` only stamps `first_us`. So a device known only from its
+traffic was dropped on the next sweep, and one heard earlier aged out
+mid-stream. The device transmitting most was the likeliest to vanish - which
+inverts the point of watching traffic, since the upload-duty measure exists to
+find a camera that streams continuously.
+
+**The 802.11 random-address bit means nothing to Bluetooth.** `admit()` guesses
+whether an address is the manufacturer's or the privacy layer's from the
+802.11 locally-administered bit. Bluetooth marks privacy with the top two bits
+of the most significant octet, and the bit being read is one of the 46 random
+ones below them - so half of every privacy address on the air read as burned-in
+hardware and had a manufacturer looked up in three random bytes. A phone hiding
+itself could be published as a Hikvision camera while the row beside it
+correctly declined to call it trackable.
+
+**Twin's verdict depended on the order the scan filled its table.** Three
+decisions pick one member out of a group, and all three were strict
+comparisons, so a tie fell to whichever access point sat earlier in an array
+filled in whatever order the scan found things. One unchanged room could score
+78 on one sweep and 88 on the next, and across a band boundary that changes the
+headline word. Ties break on the lowest address now.
+
+**Aegis would publish certainty if a contributing engine regressed.** It takes
+each detector's score and ceiling on trust, and the overall ceiling is a
+MINIMUM - so an impossibly high contributor never lowered it and went straight
+to the glass as 100. Clamped at the door, and the aggregate ceiling is bounded
+by `PA_CEILING_MAX`, which is 99 and not 100 on purpose.
+
+**An unmeasured window was read as a ten-second one.** `window_ms` of 0 means
+the caller never timed the sweep; it was substituted with ten seconds and used
+as the denominator of a churn rate. The same twenty-four networks score 58 with
+an unmeasured window and 51 with a measured 24-second one - so failing to time
+the sweep made the detector MORE confident.
+
+**And the second advice row was budgeted at the first row's width.** On a round
+panel the lower row sits on a shorter chord: 27 characters against 20. Any
+second line between the two was budgeted as if it fitted and then silently
+ellipsized by the label underneath. The splitter also filled line one to the
+brim, stranding single words - "access point - tap for the" over "list". Each
+row now carries its own cap and the break is balanced between them.
+
+Every fix was verified by reverting it and watching the tests name the failure.
+Two of the new harness's own invariants were wrong and were caught the same way
+- by checking the engine rather than believing the test.
+
 ## v3.5.1 - the last three the audit found
 
 Four commits since v3.5.0. The adversarial audit that drove v3.5.0 confirmed

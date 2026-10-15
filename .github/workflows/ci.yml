@@ -40,15 +40,20 @@ jobs:
       # worth more than a coverage-guided run that finds something once.
       - name: Fuzz the parsers and the verdicts (ASan + UBSan)
         run: |
-          out=$(make -C test/fuzz CC=gcc ITERS=1000000 STATE_ITERS=250000 2>&1)
-          echo "$out"
+          # Piped through tee rather than captured into a variable. With
+          # `out=$(make ...)` under `bash -e`, a build failure aborts the step
+          # before the echo, so the compiler error that caused it is never
+          # printed - the log showed only "exit code 2".
+          set -o pipefail
+          make -C test/fuzz CC=gcc ITERS=1000000 STATE_ITERS=250000 2>&1 \
+            | tee fuzz.out
           # Two harnesses report, and BOTH must say zero. Grepping for the
           # presence of "0 failures" was not enough once there were two:
           # one clean line satisfied it while the other reported failures.
-          if echo "$out" | grep -qE '[1-9][0-9]* failures'; then
+          if grep -qE '[1-9][0-9]* failures' fuzz.out; then
             echo "fuzzing reported failures"; exit 1
           fi
-          n=$(echo "$out" | grep -c '0 failures')
+          n=$(grep -c '0 failures' fuzz.out)
           if [ "$n" -ne 2 ]; then
             echo "expected both harnesses to report, saw $n"; exit 1
           fi
