@@ -127,6 +127,14 @@ bool pharos_lens_system_report(char *buf, size_t cap)
 
 static uint8_t s_setting; /* which setting the centre tap will act on */
 
+/* WHEN A PACK IS LOW ENOUGH FOR THIS LENS TO SAY SO.
+ *
+ * Deliberately its own number rather than the HUD's PHAROS_BATT_LOW_PCT, which
+ * answers a different question - when the chrome should start SHOWING the
+ * reading. Borrowing it also meant depending on pharos_hud.h arriving
+ * transitively through pharos_ui.h, which is a quiet way to break a build. */
+#define SYSTEM_BATT_LOW_PCT 25u
+
 static bool k_system_display(struct pharos_lens_display *o)
 {
     /* The headline IS the fence. Not the battery, not the uptime - the claim
@@ -174,6 +182,27 @@ static bool k_system_display(struct pharos_lens_display *o)
     o->has_score = (have_batt && b.present);
     if (!o->has_score) {
         snprintf(o->big, sizeof(o->big), "%s", s.fence_ok ? "RX" : "!");
+    }
+
+    /* AND THE GAUGE IS CHARGE, SO IT MUST NOT BE READ AS THREAT.
+     *
+     * Left to derive the alarm from the score, the ring treats a high number
+     * as a bad one - so a FULL battery painted this lens in alarm red, on the
+     * one screen whose entire job is to say the transmit fence is clean. A
+     * fully charged device is the opposite of a problem.
+     *
+     * Locate had this exact bug and the comment there is worth repeating: an
+     * aura is not a thin arc, it cannot be ignored. The alarm here comes from
+     * the only thing on this screen that is genuinely alarming - the fence -
+     * and from a pack low enough to end a sweep. */
+    o->has_alert = true;
+    if (!s.fence_ok) {
+        o->alert = 3; /* act on this: the claim the product rests on is unproven */
+    } else if (have_batt && b.present && !b.charging && !b.soc_approx &&
+               b.soc_pct <= SYSTEM_BATT_LOW_PCT) {
+        o->alert = 1; /* worth knowing: it will not finish a long sweep */
+    } else {
+        o->alert = 0;
     }
     return true;
 }
