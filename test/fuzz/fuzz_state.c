@@ -427,6 +427,12 @@ static void drive_flood(void)
      * cannot count them passes 0 for every frame, and that must read as
      * missing instrumentation rather than as a finding. */
     const bool measured = rnd_below(2) != 0;
+    /* Mirror the engine's own span, so the invariant below is about the
+     * denominator actually used. The engine stamps first_us once and last_us
+     * on every observation - so with time running backwards there is no span
+     * at all, and the window is what gets divided by. */
+    uint64_t t_first = 0, t_last = 0;
+    bool have_first = false;
 
     for (unsigned i = 0; i < steps; i++) {
         uint8_t bssid[6];
@@ -438,6 +444,14 @@ static void drive_flood(void)
         }
         ssid[len] = '\0';
         t = hostile_time(t);
+        /* Only an observation the engine ACCEPTS moves its clock. It rejects
+         * an empty or over-long SSID before stamping anything, so counting
+         * those here would model a span the engine never had - which is what
+         * made the first version of this invariant fire on sound verdicts. */
+        if (len >= 1u && len <= PF_SSID_MAX) {
+            if (!have_first) { t_first = t; have_first = true; }
+            t_last = t;
+        }
         const uint8_t ies = measured ? (uint8_t)(1u + rnd_below(30)) : 0u;
         pf_observe_ies(&e, bssid, ssid, (uint8_t)len, ies, t);
     }
@@ -460,19 +474,32 @@ static void drive_flood(void)
     CHECK((unsigned)v.band <= (unsigned)PF_BAND_FLOOD_LIKELY,
           "flood band %u is not a band", (unsigned)v.band);
 
-    /* A WINDOW TOO SHORT TO JUDGE A RATE MUST SAY SO.
+    /* A PERIOD TOO SHORT TO JUDGE A RATE MUST SAY SO.
      *
      * "No rate from under three seconds" - extrapolating churn from a
      * fraction of a second is arithmetic, not evidence, and the number it
-     * produces is the one somebody acts on. */
-    if (ctx.window_ms < PF_MIN_WINDOW_MS) {
-        g_hit.flood_short_window++;
-        CHECK((v.notes & PF_NOTE_SHORT) != 0 || v.score == 0u,
-              "flood judged a %u ms window at %u without marking it short",
-              ctx.window_ms, v.score);
-        CHECK(v.band != PF_BAND_FLOOD_LIKELY,
-              "flood called a flood likely from a %u ms window",
-              ctx.window_ms);
+     * produces is the one somebody acts on.
+     *
+     * The period is the SPAN the names appeared over, falling back to the
+     * caller's window when no span exists. Asserting on ctx.window_ms alone
+     * stopped being meaningful once the span was allowed to govern the
+     * denominator in both directions: a caller reporting a 142 ms window
+     * while the engine watched names arrive over a minute is judging that
+     * minute, and is right not to call it short. */
+    {
+        const uint64_t span_ms =
+            (t_last > t_first) ? ((t_last - t_first) / 1000ull) : 0ull;
+        const uint64_t eff = span_ms ? span_ms
+                                     : (ctx.window_ms ? ctx.window_ms : 10000u);
+        if (eff < PF_MIN_WINDOW_MS) {
+            g_hit.flood_short_window++;
+            CHECK((v.notes & PF_NOTE_SHORT) != 0 || v.score == 0u,
+                  "flood judged a %llu ms period at %u without marking it short",
+                  (unsigned long long)eff, v.score);
+            CHECK(v.band != PF_BAND_FLOOD_LIKELY,
+                  "flood called a flood likely from a %llu ms period",
+                  (unsigned long long)eff);
+        }
     }
 
     /* A THIN DWELL MUST WEAKEN THE CLAIM, NOT STRENGTHEN IT. While the
