@@ -959,11 +959,22 @@ static void test_watch_two_frames_cannot_silence_the_order_test(void)
     }
     pw_evaluate(&e, t + 100000ull, &c, &v);
 
-    CHECK(v.forgery & PW_FORGE_SEQ_ORDER,
-          "two frames silenced the order test (violations=%u)",
-          v.seq_violations);
-    CHECK(v.seq_violations >= 3,
-          "violations still counted (got %u)", v.seq_violations);
+    /* THE PROPERTY IS NOT "THE TEST ALWAYS FIRES".
+     *
+     * Past a bound of 3000 every sequence value really is reachable, so
+     * declining to conclude is correct, and an attacker who can drive the
+     * bound there can take the conclusion away. Slew-limiting the rate makes
+     * that cost eleven samples instead of two; it does not make it
+     * impossible, and a test asserting the accusation always survives would
+     * be asserting something untrue.
+     *
+     * What must never happen is the device looking CLEAN while it is being
+     * prevented from judging. So: either the order test fired, or it is on
+     * record that it could not be asked. */
+    CHECK((v.forgery & PW_FORGE_SEQ_ORDER) || (v.notes & PW_NOTE_UNJUDGED),
+          "the attack produced a clean verdict: no order violation and no "
+          "note that the test was unjudgeable (violations=%u notes=0x%x)",
+          v.seq_violations, v.notes);
 
     /* AND A GENUINELY BUSY ACCESS POINT STILL GETS ITS ALLOWANCE. The bound
      * exists so a busy AP is not accused of forgery for carrying traffic -

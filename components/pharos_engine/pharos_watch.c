@@ -201,6 +201,31 @@ static void ap_note_seq_rate(pw_ap_t *ap, uint16_t new_seq, uint64_t t_us)
     }
 }
 
+/* A VIOLATION OLDER THAN THE RING CANNOT STILL BE THE PRESENT.
+ *
+ * Called before either counter is incremented. If the last violation fell
+ * outside the window the ring can represent, the run is finished and a new
+ * one starts - the same rule the disconnect slots already follow, and the one
+ * Rival was fixed for. Without it an AP that was forged against once kept its
+ * forgery flag for as long as it stayed in the table. */
+static void ap_age_violations(pw_ap_t *ap, uint64_t t_us)
+{
+    const uint32_t sec = (uint32_t)(t_us / 1000000ull);
+    if (ap->viol_sec != 0u &&
+        (sec < ap->viol_sec || (sec - ap->viol_sec) >= PW_WINDOW_SLOTS)) {
+        ap->seq_back = 0;
+        ap->seq_fwd = 0;
+    }
+    ap->viol_sec = sec;
+}
+
+/* Did the bound put the question out of reach? Shared by both halves of the
+ * order test so the refusal is recorded wherever it happens. */
+static bool seq_unjudgeable(uint32_t bound)
+{
+    return bound >= 3000u;
+}
+
 static uint32_t ap_seq_bound(const pw_ap_t *ap, uint32_t elapsed_ms)
 {
     /* Four times the observed peak, plus a fixed allowance so that an idle AP
@@ -241,8 +266,12 @@ void pw_observe(pw_engine_t *e, const pharos_ev_dot11_t *f, uint64_t t_us)
             const uint32_t elapsed_ms =
                 (uint32_t)((t_us - ap->last_beacon_us) / 1000ull);
             const uint32_t bound = ap_seq_bound(ap, elapsed_ms);
+            if (seq_unjudgeable(bound)) {
+                ap->unjudged_sec = (uint32_t)(t_us / 1000000ull);
+            }
             if (!seq_plausible(ap->pending_seq, f->seq, bound) &&
                 seq_ahead(ap->pending_seq, f->seq) > 2048u) {
+                ap_age_violations(ap, t_us);
                 if (ap->seq_fwd < 0xFFFFu) {
                     ap->seq_fwd++;
                 }
@@ -310,7 +339,11 @@ void pw_observe(pw_engine_t *e, const pharos_ev_dot11_t *f, uint64_t t_us)
         const uint32_t elapsed_ms =
             (uint32_t)((t_us - claimed->last_beacon_us) / 1000ull);
         const uint32_t bound = ap_seq_bound(claimed, elapsed_ms);
+        if (seq_unjudgeable(bound)) {
+            claimed->unjudged_sec = (uint32_t)(t_us / 1000000ull);
+        }
         if (!seq_plausible(claimed->last_beacon_seq, f->seq, bound)) {
+            ap_age_violations(claimed, t_us);
             if (claimed->seq_back < 0xFFFFu) {
                 claimed->seq_back++;
             }
@@ -763,9 +796,33 @@ void pw_evaluate(const pw_engine_t *e, uint64_t now_us, const pw_context_t *ctx,
         }
 
         /* Sequence order. Needs beacons either side to mean anything, which is
-         * why it wants two of them before it will speak. */
-        const uint32_t viol = (uint32_t)claimed->seq_back + claimed->seq_fwd;
+         * why it wants two of them before it will speak.
+         *
+         * AND THE FRESHNESS RULE IS APPLIED HERE, ON THE READ PATH. Ageing
+         * the counters only where they are written would clear them only when
+         * a NEW violation arrives - and what follows an attack being switched
+         * off is silence, so the flag would stand for as long as the access
+         * point kept its slot. That is the fault Rival was fixed for in
+         * v3.5.1, in a table one file over.
+         *
+         * They still survive HOPPING, which is what the note below means: a
+         * violation is a contradiction, not a rate, so it is never divided by
+         * a dwell. It just stops being the present once it is older than the
+         * window the rest of this verdict is computed over. */
+        const uint32_t viol_sec = (uint32_t)(now_us / 1000000ull);
+        const bool viol_fresh =
+            claimed->viol_sec != 0u && viol_sec >= claimed->viol_sec &&
+            (viol_sec - claimed->viol_sec) < PW_WINDOW_SLOTS;
+        const uint32_t viol =
+            viol_fresh ? ((uint32_t)claimed->seq_back + claimed->seq_fwd) : 0u;
         out->seq_violations = (uint16_t)clamp_u32(viol, 0, 0xFFFF);
+        /* And say so when the question could not be asked. An attacker who
+         * drives the bound out of range can take the conclusion away; they
+         * cannot take away the fact that it was taken away. */
+        if (claimed->unjudged_sec != 0u && viol_sec >= claimed->unjudged_sec &&
+            (viol_sec - claimed->unjudged_sec) < PW_WINDOW_SLOTS) {
+            out->notes |= PW_NOTE_UNJUDGED;
+        }
         if (claimed->beacons >= 3 && viol >= 3) {
             out->forgery |= PW_FORGE_SEQ_ORDER;
             forge += 12 + clamp_u32(viol - 3u, 0, 8);

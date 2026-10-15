@@ -181,6 +181,21 @@ typedef enum {
 #define PW_NOTE_MFP_TARGET   (1u << 5) /* the victim network runs 802.11w    */
 #define PW_NOTE_PROTECTED    (1u << 6) /* some disconnects were MFP-protected */
 #define PW_NOTE_NO_RATE      (1u << 7) /* too little channel time to quote a rate */
+/* THE ORDER TEST WAS ASKED AND DECLINED TO ANSWER.
+ *
+ * seq_plausible() refuses to conclude once the plausibility bound reaches
+ * 3000, which is correct - past that every sequence value is reachable and
+ * the question is meaningless. But the bound is built from a rate the SENDER
+ * controls, so somebody wearing the victim's BSSID can drive it there and
+ * take the strongest test this lens has off the table.
+ *
+ * Slew-limiting the rate makes that cost eleven samples instead of two. It
+ * does not make it impossible, and a detector that can be switched off
+ * quietly is worse than one that is merely wrong. So when the test is asked
+ * and cannot answer, that is published: refusing to answer is a different
+ * statement from finding nothing, which is the rule this project already
+ * applies to a crowded room in Rival. */
+#define PW_NOTE_UNJUDGED     (1u << 8) /* the order test could not be asked  */
 
 /* The least channel time, in milliseconds, that makes a duty-corrected rate
  * worth quoting.
@@ -215,7 +230,7 @@ typedef struct {
     uint8_t ceiling;   /* the most this observation could earn */
     uint8_t families;  /* PW_FAM_* bitmask                     */
     uint8_t forgery;   /* PW_FORGE_* bitmask                   */
-    uint8_t notes;     /* PW_NOTE_* bitmask                    */
+    uint16_t notes;    /* PW_NOTE_* bitmask                    */
     pw_band_t band;
 
     /* Component contributions, drawn as stacked arcs in the UI. */
@@ -269,8 +284,24 @@ typedef struct {
     uint16_t pending_seq;
     bool pending_valid;
     uint8_t rsn_flags;     /* PHAROS_RSN_F_* from the beacon             */
+    /* ORDER VIOLATIONS, AND THE SECOND THE LAST ONE LANDED IN.
+     *
+     * These were lifetime counters: only ever incremented, never aged. The
+     * forgery flag they raise is the strongest accusation this lens makes,
+     * and every OTHER forgery test reads the windowed hit ring - so this was
+     * the one piece of event evidence that escaped the window, and the lens
+     * went on accusing long after the air had gone quiet.
+     *
+     * The comment where they are read says order violations "survive
+     * hopping: they are not rates", and that is right - a violation is a
+     * contradiction, not a frequency, so it must not be divided by a dwell.
+     * Surviving a gap in listening is not the same as surviving for ever,
+     * which is what Rival was fixed for in v3.5.1. The stamp is what tells
+     * the two apart. */
     uint16_t seq_back;     /* disconnects behind this AP's own counter   */
     uint16_t seq_fwd;      /* disconnects ahead of its next beacon       */
+    uint32_t viol_sec;     /* second the most recent violation landed in */
+    uint32_t unjudged_sec; /* second the order test last declined to answer */
     uint8_t ssid_len;
     char ssid[PHAROS_EV_SSID_MAX];
     bool in_use;
