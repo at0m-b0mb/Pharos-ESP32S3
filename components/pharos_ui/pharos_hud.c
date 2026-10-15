@@ -537,8 +537,8 @@ static void aura_set(uint32_t rgb)
     }
 }
 
-static void split_two(const char *s, unsigned cap, char *a, unsigned an,
-                      char *b, unsigned bn);
+static void split_two(const char *s, unsigned cap_a, unsigned cap_b,
+                      char *a, unsigned an, char *b, unsigned bn);
 
 /* WHERE THE CHARGE READING GOES, PAGE BY PAGE - AND WHEN IT GIVES WAY.
  *
@@ -1478,40 +1478,49 @@ int pharos_hud_home_hit(int16_t x, int16_t y)
 /* Split a summary onto two fixed lines at a word boundary. Fixed lines rather
  * than wrapping is lesson 3; splitting on a space rather than mid-word is
  * because "detec / tor" reads as a rendering fault. */
-static void split_two(const char *s, unsigned cap, char *a, unsigned an,
-                      char *b, unsigned bn)
+/* TWO LINES, EACH BUDGETED FOR WHERE IT IS ACTUALLY DRAWN.
+ *
+ * This took ONE cap and used it for both lines, and the caller measured it at
+ * the first line's height. On a round panel the second line sits lower, where
+ * the chord is shorter: 27 characters at PS_Y_ACTION against 20 at
+ * PS_Y_ACTION2. So any second line between 21 and 27 characters was budgeted
+ * as if it fitted and then silently ellipsized by the renderer underneath.
+ *
+ * Photographed on the Vigil face: "Trackers nearby, which is ordinary in a
+ * public place" came out as "Trackers nearby, which is" over "ordinary in
+ * a." - cut once by the splitter and again by the label, landing on a
+ * sentence that reads as a broken screen rather than as advice.
+ *
+ * Each line now carries its own cap, and the break is chosen in proportion
+ * to them rather than at the middle, so the wider line takes the larger
+ * share. */
+static void split_two(const char *s, unsigned cap_a, unsigned cap_b,
+                      char *a, unsigned an, char *b, unsigned bn)
 {
     a[0] = b[0] = '\0';
     if (!s || !*s) return;
+    if (cap_a == 0u || cap_b == 0u) return;
     const unsigned len = (unsigned)strlen(s);
-    if (len <= cap) { snprintf(a, an, "%s", s); return; }
+    if (len <= cap_a) { snprintf(a, an, "%s", s); return; }
 
-    unsigned cut = cap;
+    unsigned cut = cap_a;
     while (cut > 0 && s[cut] != ' ') cut--;
-    if (cut == 0) cut = cap; /* one very long word: hard-cut it */
+    if (cut == 0) cut = cap_a; /* one very long word: hard-cut it */
 
-    /* BALANCE THE TWO LINES RATHER THAN FILLING THE FIRST.
-     *
-     * Starting at the cap and walking back to a space fills line one to the
-     * brim and leaves whatever remains on line two. A string one word past
-     * the cap therefore renders as a full line with a single orphaned word
-     * under it - Roster's "access point - tap for the" over "list". It fits,
-     * and it reads like the screen is broken.
-     *
-     * Breaking at the space nearest the middle gives both lines their share:
-     * "access point -" over "tap for the list". The greedy cut above stays as
-     * the fallback, because a string long enough that no balanced pair of
-     * halves fits still has to go somewhere, and so does one with no spaces
-     * at all. */
+    /* Break at the space nearest the point that fills both lines equally,
+     * among those where each side fits the line it will be drawn on.
+     * Filling the first line to the brim instead stranded a single word
+     * underneath it - "access point - tap for the" over "list". */
     {
-        const unsigned mid = len / 2u;
+        const unsigned mid =
+            (unsigned)(((uint32_t)len * cap_a) / (cap_a + cap_b));
         unsigned best = 0;
         unsigned best_d = (unsigned)-1;
         for (unsigned i = 1; i < len; i++) {
             if (s[i] != ' ') continue;
             const unsigned first = i;             /* characters before it */
             const unsigned second = len - i - 1u; /* characters after it  */
-            if (first > cap || second > cap) continue;
+            if (first > cap_a || second > cap_b) continue;
             const unsigned d = (i > mid) ? (i - mid) : (mid - i);
             if (d < best_d) { best_d = d; best = i; }
         }
@@ -1523,8 +1532,12 @@ static void split_two(const char *s, unsigned cap, char *a, unsigned an,
 
     const char *rest = s + cut + (s[cut] == ' ' ? 1 : 0);
     snprintf(b, bn, "%.*s", (int)(bn - 1), rest);
-    /* If the tail still will not fit, ellipsize rather than clip mid-glyph. */
-    if (strlen(b) > cap) { b[cap - 1] = '.'; b[cap] = '.'; b[cap + 1] = '\0'; }
+    /* If the tail still will not fit, ellipsize rather than clip mid-glyph.
+     * It is measured against the line it is DRAWN on, so the ellipsis lands
+     * where the reader can see it was cut. */
+    if (strlen(b) > cap_b && cap_b + 1u < bn) {
+        b[cap_b - 1] = '.'; b[cap_b] = '.'; b[cap_b + 1] = '\0';
+    }
 }
 
 void pharos_hud_browse(const char *name, const char *summary, const char *team,
@@ -1542,8 +1555,9 @@ void pharos_hud_browse(const char *name, const char *summary, const char *team,
     set_fg(s_b_kind_txt, rgb ? rgb : C_ACCENT);
 
     char l1[40], l2[40];
-    const unsigned cap = ps_capacity(PS_TYPE_BODY, -22, PS_INNER_R);
-    split_two(summary, cap < 39u ? cap : 39u, l1, sizeof l1, l2, sizeof l2);
+    unsigned cap = ps_capacity(PS_TYPE_BODY, -22, PS_INNER_R);
+    if (cap > 39u) cap = 39u;
+    split_two(summary, cap, cap, l1, sizeof l1, l2, sizeof l2);
     set_text(s_b_l1, l1);
     set_text(s_b_l2, l2);
 
@@ -1678,8 +1692,13 @@ void pharos_hud_live(const char *lens, const struct pharos_lens_display *d,
          * "Broad, spoofed deauth. Preserve the log." down to its first
          * sentence throws away the only part that says what to DO. */
         char a1[48], a2[48];
-        const unsigned cap = ps_capacity(PS_TYPE_LABEL, PS_Y_ACTION, PR_SAFE_R);
-        split_two(d->advice, cap < 47u ? cap : 47u, a1, sizeof a1, a2, sizeof a2);
+        /* Each row measured where it is drawn: the second sits lower on a
+         * round panel and is the narrower of the two. */
+        unsigned cap_a = ps_capacity(PS_TYPE_LABEL, PS_Y_ACTION, PR_SAFE_R);
+        unsigned cap_b = ps_capacity(PS_TYPE_LABEL, PS_Y_ACTION2, PR_SAFE_R);
+        if (cap_a > 47u) cap_a = 47u;
+        if (cap_b > 47u) cap_b = 47u;
+        split_two(d->advice, cap_a, cap_b, a1, sizeof a1, a2, sizeof a2);
         set_text(s_l_action, a1);
         set_text_fit(s_l_action2, PS_TYPE_LABEL, PS_Y_ACTION2, a2);
     }

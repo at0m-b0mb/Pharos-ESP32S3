@@ -608,13 +608,13 @@ void pv_evaluate(const pv_state_t *s, uint64_t now_us, pv_verdict_t *out)
 
     switch (out->band) {
     case PV_BAND_FOLLOWING:
-        out->headline = "A tracker has been with you across several places";
+        out->headline = "A tag followed you across several places";
         break;
     case PV_BAND_PERSISTENT:
-        out->headline = "A tracker has stayed with you - keep watching as you move";
+        out->headline = "A tracker stayed with you - keep watching";
         break;
     case PV_BAND_SEEN:
-        out->headline = "Trackers nearby, which is ordinary in a public place";
+        out->headline = "Trackers nearby - ordinary in a public place";
         break;
     case PV_BAND_CLEAR:
     default:

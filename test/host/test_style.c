@@ -21,6 +21,11 @@
 #include "pharos_lens.h"
 #include "pharos_probe.h"
 #include "pharos_watch.h"
+#include "pharos_twin.h"
+#include "pharos_karma.h"
+#include "pharos_flood.h"
+#include "pharos_acoustic.h"
+#include "pharos_census.h"
 #include "pharos_style.h"
 #include "test_support.h"
 
@@ -51,8 +56,102 @@ static void test_tone_limit_is_not_a_verdict(void)
           "and chrome tones borrow nothing either");
 }
 
+
+/* EVERY LINE OF ADVICE MUST FIT THE PAGE THAT SHOWS ALL OF IT.
+ *
+ * The live face carries a GLIMPSE of the advice on two labels - 27 characters
+ * at PS_Y_ACTION and 20 at PS_Y_ACTION2, because on a round panel the lower
+ * row sits on a shorter chord - and ellipsizes what will not fit. That is the
+ * design: the whole of it is one tap away on the advice page, which wraps to
+ * HUD_ADVICE_LINES rows of HUD_ADVICE_CAP.
+ *
+ * So the contract worth asserting is not that advice fits the face. It is
+ * that the page which promises the WHOLE text can hold it, because an engine
+ * whose advice overflows there has written something nobody can ever read in
+ * full.
+ *
+ * (An earlier version of this test asserted the two-row fit and flagged
+ * twenty-seven strings. It was measuring the glimpse against a contract that
+ * belongs to the page, and would have forced every engine to write worse
+ * advice to satisfy a rule that does not exist.) */
+#define ADVICE_LINES 7
+#define ADVICE_CAP   40
+
+static void check_advice(const char *who, int band, const char *s)
+{
+    CHECK(s != NULL, "%s band %d has no advice", who, band);
+    if (!s) return;
+
+    /* The page wraps with the same routine the firmware uses, so this is the
+     * real layout rather than a restatement of it. */
+    char lines[ADVICE_LINES][ADVICE_CAP + 4];
+    const unsigned n = ps_wrap(s, ADVICE_CAP, &lines[0][0], ADVICE_LINES,
+                               (unsigned)sizeof lines[0]);
+    CHECK(n > 0, "%s band %d: advice wrapped to nothing", who, band);
+    if (n == 0) return;
+
+    unsigned kept = 0;
+    for (unsigned i = 0; i < n; i++) {
+        kept += (unsigned)strlen(lines[i]);
+        CHECK(strlen(lines[i]) <= ADVICE_CAP,
+              "%s band %d: wrapped line %u is %u characters, the page holds %u",
+              who, band, i, (unsigned)strlen(lines[i]), (unsigned)ADVICE_CAP);
+    }
+    /* Every character must survive the wrap. The spaces at the breaks are
+     * not kept, so one per boundary is allowed for. Counting them back out
+     * is what catches a string whose tail the page silently drops. */
+    const unsigned len = (unsigned)strlen(s);
+    CHECK(kept + (n - 1u) >= len,
+          "%s band %d: the page shows %u of %u characters - \"%s\"",
+          who, band, kept + (n - 1u), len, s);
+}
+
+static void test_style_advice_fits_the_advice_page(void)
+{
+    banner("style: every line of advice fits the page that shows all of it");
+
+    /* Measured from the layout rather than written as 27 and 20, so the test
+     * follows the contract if the panel or the type ever changes. */
+    /* The face's glimpse is the narrower of two rows, which is why the whole
+     * text needs somewhere else to live. Asserted so the relationship is
+     * recorded rather than assumed. */
+    const unsigned cap_a = ps_capacity(PS_TYPE_LABEL, PS_Y_ACTION, PR_SAFE_R);
+    const unsigned cap_b = ps_capacity(PS_TYPE_LABEL, PS_Y_ACTION2, PR_SAFE_R);
+    CHECK(cap_a > 0 && cap_b > 0, "the action rows have no capacity");
+    CHECK(cap_b <= cap_a, "the lower row should be the narrower one");
+
+    for (int b = 0; b <= (int)PW_BAND_LIKELY; b++) {
+        check_advice("watch/advice", b, pw_band_advice((pw_band_t)b));
+        check_advice("watch/hint", b, pw_band_hint((pw_band_t)b));
+    }
+    for (int b = 0; b <= (int)PT_BAND_TWIN_LIKELY; b++) {
+        check_advice("twin", b, pt_band_advice((pt_band_t)b));
+    }
+    for (int b = 0; b <= (int)PK_BAND_KARMA_LIKELY; b++) {
+        check_advice("karma", b, pk_band_advice((pk_band_t)b));
+    }
+    for (int b = 0; b <= (int)PF_BAND_FLOOD_LIKELY; b++) {
+        check_advice("flood", b, pf_band_advice((pf_band_t)b));
+    }
+    for (int b = 0; b < (int)PAC_BAND_COUNT; b++) {
+        check_advice("acoustic", b, pac_band_hint((pac_verdict_band_t)b));
+    }
+    /* Census advises from the whole verdict, so every grade and every cap
+     * combination it can reach has to be walked. */
+    for (int g = 0; g <= (int)PC_GRADE_A_PLUS; g++) {
+        for (unsigned caps = 0; caps < 128u; caps++) {
+            pc_verdict_t v;
+            memset(&v, 0, sizeof(v));
+            v.grade = (pc_grade_t)g;
+            v.caps_applied = (uint8_t)caps;
+            check_advice("census", g, pc_grade_advice(&v));
+        }
+    }
+}
+
 void test_style(void)
 {
+    test_style_advice_fits_the_advice_page();
     test_tone_limit_is_not_a_verdict();
     banner("style: the verdict palette is frozen");
     {
