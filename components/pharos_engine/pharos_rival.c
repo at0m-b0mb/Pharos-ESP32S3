@@ -435,7 +435,8 @@ static void cohere_expire(prv_state_t *s, uint64_t now_us)
     s->coh_n_names = (uint8_t)w;
 }
 
-static unsigned cohere_peak(const prv_state_t *s, int8_t *at_rssi);
+static unsigned cohere_peak(const prv_state_t *s, uint64_t now_us,
+                            int8_t *at_rssi);
 
 static void cohere_note(prv_state_t *s, const uint8_t addr[6], const char *name,
                         int8_t rssi, uint64_t t_us)
@@ -491,7 +492,7 @@ static void cohere_note(prv_state_t *s, const uint8_t addr[6], const char *name,
      * verdict had already stopped calling it one - the screen would disagree
      * with itself, and the stale half would be the alarming one. */
     {
-        const unsigned peak = cohere_peak(s, 0);
+        const unsigned peak = cohere_peak(s, t_us, 0);
         if (peak >= PRV_COHERE_ADDRS && s->coh_n &&
             peak * 100u >= (unsigned)s->coh_n * PRV_COHERE_SHARE) {
             s->coh_flood_us = t_us;
@@ -502,14 +503,61 @@ static void cohere_note(prv_state_t *s, const uint8_t addr[6], const char *name,
 /* The densest PRV_COHERE_DB-wide band of levels, and how many addresses sit
  * in it. A sliding window over a small array - forty entries, so the obvious
  * quadratic scan is cheaper than sorting and easier to be sure of. */
-static unsigned cohere_peak(const prv_state_t *s, int8_t *at_rssi)
+/* COUNTED AT A MOMENT IN TIME, because the table is only COMPACTED on the
+ * write path.
+ *
+ * cohere_expire() runs from cohere_note(), which runs when an advertisement
+ * arrives. Read without an age check, a flood that has finished keeps being
+ * counted for as long as BLE stays quiet - and quiet is exactly what follows a
+ * flood being switched off. The rate ring beside this had the same fault and
+ * the same fix. */
+static bool coh_fresh(const prv_state_t *s, unsigned i, uint64_t now_us)
+{
+    return now_us >= s->coh_us[i] &&
+           (now_us - s->coh_us[i]) < PRV_COHERE_WINDOW_US;
+}
+
+/* How many slots are still inside the window - the denominator that goes with
+ * the peak above. Counting the whole table against a freshly-counted peak
+ * would understate the share and read a real flood as a crowd. */
+static unsigned cohere_live(const prv_state_t *s, uint64_t now_us)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < s->coh_n; i++) {
+        if (coh_fresh(s, i, now_us)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static unsigned cohere_live_names(const prv_state_t *s, uint64_t now_us)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < s->coh_n_names; i++) {
+        if (now_us >= s->coh_name_us[i] &&
+            (now_us - s->coh_name_us[i]) < PRV_COHERE_WINDOW_US) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static unsigned cohere_peak(const prv_state_t *s, uint64_t now_us,
+                            int8_t *at_rssi)
 {
     unsigned best = 0;
     int8_t best_r = 0;
     for (unsigned i = 0; i < s->coh_n; i++) {
+        if (!coh_fresh(s, i, now_us)) {
+            continue;
+        }
         const int lo = s->coh_rssi[i];
         unsigned n = 0;
         for (unsigned j = 0; j < s->coh_n; j++) {
+            if (!coh_fresh(s, j, now_us)) {
+                continue;
+            }
             const int d = (int)s->coh_rssi[j] - lo;
             if (d >= 0 && d < PRV_COHERE_DB) {
                 n++;
@@ -963,7 +1011,7 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
     unsigned coh_tight = 0;
     bool flood_in_view = false;
     if (s) {
-        coh_tight = cohere_peak(s, &coh_at);
+        coh_tight = cohere_peak(s, now_us, &coh_at);
         flood_in_view = s->coh_flood_us &&
                         (now_us >= s->coh_flood_us) &&
                         (now_us - s->coh_flood_us) < PRV_FLOOD_HOLD_US;
@@ -1204,12 +1252,12 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
     {
         const unsigned tight = coh_tight;
         out->cohere_addrs = (uint8_t)(tight > 255u ? 255u : tight);
-        out->cohere_names = s->coh_n_names;
+        out->cohere_names = (uint8_t)cohere_live_names(s, now_us);
         out->cohere_rssi = coh_at;
 
         /* Large enough AND a large enough share of the room. See
          * PRV_COHERE_SHARE: the count alone fires on a crowd. */
-        const unsigned tracked = s ? s->coh_n : 0u;
+        const unsigned tracked = s ? cohere_live(s, now_us) : 0u;
         const bool concentrated =
             tracked && (tight * 100u >= tracked * PRV_COHERE_SHARE);
 
