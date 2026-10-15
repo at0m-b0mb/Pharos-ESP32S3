@@ -146,6 +146,34 @@ make -C tools/render        # writes assets/screens/*.png
 make -C tools/render check  # asserts nothing escapes the glass
 ```
 
+### And the panel will send back what it actually drew
+
+The renderer proves the *simulation* fits the circle. It cannot know that a real
+font is wider than the 0.6em the layout was solved with, or that an engine
+produced a string only live air can produce. So the device renders its own
+widget tree with `lv_snapshot` and streams it back over the console:
+
+```bash
+python3 tools/screen/grab.py shot.png            # one face
+python3 tools/screen/grab.py shot.png --lens wifi.watch
+python3 tools/screen/sweep.py                    # every lens + a contact sheet
+python3 tools/screen/sweep.py --detail           # ...and each advice page and row list
+```
+
+The sweep runs the **same safe-radius check against the real capture** that
+`tools/render check` runs against the simulation, and fails if any lit pixel
+escapes the glass.
+
+Every payload line is marked and the stream is checksummed, because the first
+version of this was not: the logger shares that console, and a log line landing
+mid-transfer was spliced into the payload and every pixel after it invented. The
+host now **refuses to write a file it cannot verify** rather than showing you a
+picture that is not what the panel drew.
+
+> Needs `pyserial` and `pillow`. Run it from a shell where ESP-IDF's
+> `export.sh` has **not** been sourced — that swaps the interpreter for one
+> without them.
+
 ## The lenses
 
 A **lens** is one tool. The dial is built from whatever lenses are compiled in; adding one is adding a single `.c` file. Every lens declares its hardware powers at compile time, and the radio refuses any power a lens did not declare.
