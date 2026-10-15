@@ -52,11 +52,59 @@ static bool is_known(const pv_state_t *s, const uint8_t addr[6])
 
 /* ---- payload classification ------------------------------------------ */
 
+/* HOW ALARMING EACH KIND IS.
+ *
+ * The classifier used to return the FIRST structure it recognised, which
+ * reopened - through a recognised prefix - exactly the hole the comment below
+ * says this file already paid for. An advertisement holds several AD
+ * structures and anyone in radio range chooses them, so five bytes of
+ * Eddystone in front of a real tracker classified the whole frame as a
+ * proximity beacon. pv_observe_adv() then returns early for a beacon, because
+ * a beacon is rightly not scored as a tracker - so the tracker never entered
+ * the tag table at all. Not scored, not listed, invisible: score 0, band
+ * CLEAR, for a tag present across three places.
+ *
+ * So the walk sees every structure and keeps the most alarming thing it
+ * found. A tracker signature anywhere in the frame outranks any benign
+ * structure wrapped around it, and the separated state - the one that matters,
+ * because a tracker planted on somebody is by definition away from its owner -
+ * outranks the ordinary one.
+ *
+ * This does not reopen the false positive the early return exists for: an
+ * advertisement carrying ONLY beacon structures still classifies as
+ * EDDYSTONE, so shop and museum beacons are still refused a place in the
+ * table. */
+static uint8_t kind_rank(pv_kind_t k)
+{
+    switch (k) {
+    case PV_KIND_FINDMY_LOST:   return 90; /* separated from its owner */
+    case PV_KIND_FINDMY:        return 80;
+    case PV_KIND_FINDMY_GOOGLE: return 80;
+    case PV_KIND_TILE:          return 80;
+    case PV_KIND_SMARTTAG:      return 80;
+    case PV_KIND_CHIPOLO:       return 80;
+    case PV_KIND_PEBBLEBEE:     return 80;
+    case PV_KIND_FLIPPER:       return 40; /* worth knowing, not a tracker */
+    case PV_KIND_SERIAL:        return 30;
+    case PV_KIND_EDDYSTONE:     return 20; /* explicitly not a tracker */
+    case PV_KIND_GENERIC:       return 10;
+    default:                    return 0;  /* UNKNOWN */
+    }
+}
+
+static void note_kind(pv_kind_t *best, pv_kind_t found)
+{
+    if (kind_rank(found) > kind_rank(*best)) {
+        *best = found;
+    }
+}
+
 pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
 {
     if (!data || len < 3) {
         return PV_KIND_UNKNOWN;
     }
+    pv_kind_t best = PV_KIND_UNKNOWN;
     /* Walk the AD structures: [len][type][payload...] */
     uint8_t i = 0;
     while (i + 1u < len) {
@@ -78,8 +126,23 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
                  * separated case is the one that matters, because a tracker
                  * planted on somebody is by definition away from its owner. */
                 if (plen >= 4 && p[2] == 0x12) {
-                    const uint8_t status = p[4 < plen ? 4 : plen - 1];
-                    return (status & 0x04) ? PV_KIND_FINDMY_LOST : PV_KIND_FINDMY;
+                    /* THE STATUS BYTE IS AT p[4], OR IT IS NOWHERE.
+                     *
+                     * company (2), type 0x12 (1), payload length (1), then
+                     * status. Reading p[plen - 1] when the element was too
+                     * short took the verdict from the LENGTH byte instead, so
+                     * the six bytes 05 FF 4C 00 12 04 - which anyone can
+                     * transmit - classified as SEPARATED. That is not a
+                     * transient mislabel: a tag that ever advertises as
+                     * separated is remembered that way, and it adds to the
+                     * stalking score.
+                     *
+                     * An element too short to contain the status does not
+                     * contain it, and the honest reading of a Find My element
+                     * with no status is Find My. */
+                    const bool separated = plen >= 5 && (p[4] & 0x04) != 0;
+                    note_kind(&best, separated ? PV_KIND_FINDMY_LOST
+                                               : PV_KIND_FINDMY);
                 }
                 /* Other Apple traffic - phones, buds. KEEP WALKING.
                  *
@@ -126,7 +189,7 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
             nm[n] = '\0';
             if (n >= 7 && nm[0] == 'F' && nm[1] == 'l' && nm[2] == 'i' &&
                 nm[3] == 'p' && nm[4] == 'p' && nm[5] == 'e' && nm[6] == 'r') {
-                return PV_KIND_FLIPPER;
+                note_kind(&best, PV_KIND_FLIPPER);
             }
             /* Tags that put their maker in the advertisement. Cheaper and
              * more certain than any UUID when they do it. */
@@ -140,7 +203,8 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
                     m++;
                 }
                 if (!needle[m]) {
-                    return PV_KIND_PEBBLEBEE;
+                    note_kind(&best, PV_KIND_PEBBLEBEE);
+                    break;
                 }
             }
             static const char *k_bridges[] = {
@@ -154,23 +218,24 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
                     m++;
                 }
                 if (!needle[m]) {
-                    return PV_KIND_SERIAL;
+                    note_kind(&best, PV_KIND_SERIAL);
+                    break;
                 }
             }
         } else if ((type == 0x16 || type == 0x14) && plen >= 2) {
             /* Service data / 16-bit service UUID, little-endian. */
             const uint16_t uuid = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
             if (uuid == 0xFEED || uuid == 0xFEEC) {
-                return PV_KIND_TILE;
+                note_kind(&best, PV_KIND_TILE);
             }
             if (uuid == 0xFD5A) {
-                return PV_KIND_SMARTTAG;
+                note_kind(&best, PV_KIND_SMARTTAG);
             }
             if (uuid == 0xFD44 || uuid == 0xFD43) {
-                return PV_KIND_FINDMY; /* Apple service data */
+                note_kind(&best, PV_KIND_FINDMY); /* Apple service data */
             }
             if (uuid == 0xFE33) {
-                return PV_KIND_CHIPOLO;
+                note_kind(&best, PV_KIND_CHIPOLO);
             }
             /* GOOGLE FIND MY DEVICE, AND THE BEACON IT IS EASILY MISTAKEN FOR.
              *
@@ -187,19 +252,21 @@ pv_kind_t pv_classify(const uint8_t *data, uint8_t len)
              * tracker that is missed costs everything. */
             if (uuid == 0xFEAA) {
                 if (plen < 3) {
-                    return PV_KIND_EDDYSTONE;
+                    note_kind(&best, PV_KIND_EDDYSTONE);
+                } else {
+                    const uint8_t frame = p[2];
+                    if (frame == 0x00u || frame == 0x10u ||
+                        frame == 0x20u || frame == 0x30u) {
+                        note_kind(&best, PV_KIND_EDDYSTONE);
+                    } else {
+                        note_kind(&best, PV_KIND_FINDMY_GOOGLE);
+                    }
                 }
-                const uint8_t frame = p[2];
-                if (frame == 0x00u || frame == 0x10u ||
-                    frame == 0x20u || frame == 0x30u) {
-                    return PV_KIND_EDDYSTONE;
-                }
-                return PV_KIND_FINDMY_GOOGLE;
             }
         }
         i = (uint8_t)(i + 1u + l);
     }
-    return PV_KIND_UNKNOWN;
+    return best;
 }
 
 /* ---- locales ---------------------------------------------------------- */

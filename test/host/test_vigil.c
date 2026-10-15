@@ -392,8 +392,131 @@ static void test_vigil_evidence_outranks_arrival(void)
     CHECK(kept, "the tag with locale evidence survives a crowd of strangers");
 }
 
+/* A BENIGN STRUCTURE IN FRONT OF A TRACKER MUST NOT HIDE IT.
+ *
+ * The file already paid for this once with an UNRECOGNISED prefix - "the
+ * cheapest possible way to hide a tracker from it was to put a scrap of
+ * Apple-shaped data in front". The same attack came back through a
+ * RECOGNISED one: the classifier returned on the first structure it knew, so
+ * five bytes of Eddystone in front of a real tag classified the frame as a
+ * proximity beacon, and pv_observe_adv() rightly refuses to table a beacon.
+ * The tracker was then not scored, not listed, invisible.
+ *
+ * Every fixture in the existing decoy block uses the unrecognised prefix, so
+ * nothing asserted order-independence against a recognised one. */
+static void test_vigil_a_recognised_decoy_cannot_hide_a_tracker(void)
+{
+    banner("vigil: a recognised benign element must not hide a tracker");
+
+    /* Benign, and recognised: an Eddystone UID frame. */
+    static const uint8_t eddystone[] = { 0x04, 0x16, 0xAA, 0xFE, 0x00 };
+
+    struct { const char *name; const uint8_t *adv; uint8_t len;
+             pv_kind_t kind; } tags[] = {
+        { "SmartTag",  (const uint8_t[]){ 0x03, 0x16, 0x5A, 0xFD }, 4,
+          PV_KIND_SMARTTAG },
+        { "Tile",      (const uint8_t[]){ 0x03, 0x16, 0xED, 0xFE }, 4,
+          PV_KIND_TILE },
+        { "Chipolo",   (const uint8_t[]){ 0x03, 0x16, 0x33, 0xFE }, 4,
+          PV_KIND_CHIPOLO },
+        { "Find My",   (const uint8_t[]){ 0x03, 0x16, 0x44, 0xFD }, 4,
+          PV_KIND_FINDMY },
+    };
+
+    for (unsigned t = 0; t < sizeof(tags) / sizeof(tags[0]); t++) {
+        uint8_t first[32], second[32];
+        uint8_t n1 = 0, n2 = 0;
+
+        /* decoy first, then the tracker */
+        memcpy(first, eddystone, sizeof(eddystone)); n1 = sizeof(eddystone);
+        memcpy(first + n1, tags[t].adv, tags[t].len); n1 += tags[t].len;
+        /* the tracker first, then the decoy */
+        memcpy(second, tags[t].adv, tags[t].len); n2 = tags[t].len;
+        memcpy(second + n2, eddystone, sizeof(eddystone));
+        n2 += sizeof(eddystone);
+
+        const pv_kind_t ka = pv_classify(first, n1);
+        const pv_kind_t kb = pv_classify(second, n2);
+
+        CHECK(ka == kb, "%s: order changed the verdict (%s then %s)",
+              tags[t].name, pv_kind_name(ka), pv_kind_name(kb));
+        CHECK(ka == tags[t].kind,
+              "%s behind a beacon classified as %s", tags[t].name,
+              pv_kind_name(ka));
+
+        /* AND THE PROPERTY THAT ACTUALLY PROTECTS SOMEBODY: the tag reaches
+         * the table either way round, because a tag that is never tabled is
+         * never counted, never listed and never reported. */
+        for (unsigned order = 0; order < 2u; order++) {
+            const uint8_t *adv = order ? second : first;
+            const uint8_t n = order ? n2 : n1;
+            pv_state_t st;
+            pv_reset(&st);
+            pv_set_moved(&st, true);
+            static const uint8_t addr[6] = { 0x44, 0, 0, 0, 0, 0x01 };
+            pv_observe_locale(&st, 0x0F0F0F0Fu, 1000000ull);
+            pv_observe_adv(&st, addr, 1, -50, adv, n, 1000000ull);
+            pv_verdict_t v;
+            pv_evaluate(&st, 2000000ull, &v);
+            CHECK(v.n_tags == 1,
+                  "%s was not tabled with the beacon %s it (%u tags)",
+                  tags[t].name, order ? "after" : "before", v.n_tags);
+        }
+    }
+
+    /* AND THE FALSE POSITIVE THE EARLY RETURN EXISTED FOR IS STILL REFUSED.
+     * A frame carrying only beacon structures is still a beacon. */
+    CHECK(pv_classify(eddystone, sizeof(eddystone)) == PV_KIND_EDDYSTONE,
+          "a beacon-only advertisement is still a beacon");
+    {
+        pv_state_t st;
+        pv_reset(&st);
+        pv_set_moved(&st, true);
+        static const uint8_t addr[6] = { 0x55, 0, 0, 0, 0, 0x01 };
+        pv_observe_locale(&st, 0x0F0F0F0Fu, 1000000ull);
+        pv_observe_adv(&st, addr, 1, -50, eddystone, sizeof(eddystone),
+                       1000000ull);
+        pv_verdict_t v;
+        pv_evaluate(&st, 2000000ull, &v);
+        CHECK(v.n_tags == 0, "a shop beacon must still not be tabled");
+    }
+}
+
+/* THE SEPARATED VERDICT MAY ONLY COME FROM THE STATUS BYTE.
+ *
+ * In a Find My element the status is at p[4]: company (2), type 0x12 (1),
+ * payload length (1), status. An element too short to hold it was read at
+ * p[plen - 1] instead - the LENGTH byte - so six bytes anyone can transmit
+ * classified as SEPARATED. That is remembered permanently and adds to the
+ * stalking score. */
+static void test_vigil_short_findmy_is_not_separated(void)
+{
+    banner("vigil: a Find My element too short for a status is not separated");
+
+    /* plen == 4: company, 0x12, and a length byte whose value looks like a
+     * set separated bit. There is no status field in this element. */
+    const uint8_t no_status[] = { 0x05, 0xFF, 0x4C, 0x00, 0x12, 0x04 };
+    CHECK(pv_classify(no_status, sizeof(no_status)) != PV_KIND_FINDMY_LOST,
+          "a status byte that does not exist was read as separated");
+    CHECK(pv_classify(no_status, sizeof(no_status)) == PV_KIND_FINDMY,
+          "and the honest reading is Find My, got %s",
+          pv_kind_name(pv_classify(no_status, sizeof(no_status))));
+
+    /* With a real status byte it must still work, both ways. */
+    const uint8_t sep[]  = { 0x06, 0xFF, 0x4C, 0x00, 0x12, 0x02, 0x04 };
+    const uint8_t near[] = { 0x06, 0xFF, 0x4C, 0x00, 0x12, 0x02, 0x00 };
+    CHECK(pv_classify(sep, sizeof(sep)) == PV_KIND_FINDMY_LOST,
+          "a genuine separated status is still read, got %s",
+          pv_kind_name(pv_classify(sep, sizeof(sep))));
+    CHECK(pv_classify(near, sizeof(near)) == PV_KIND_FINDMY,
+          "and an owner-nearby status is still read, got %s",
+          pv_kind_name(pv_classify(near, sizeof(near))));
+}
+
 void test_vigil(void)
 {
+    test_vigil_a_recognised_decoy_cannot_hide_a_tracker();
+    test_vigil_short_findmy_is_not_separated();
     test_vigil_table_keeps_the_evidence();
     test_vigil_evidence_outranks_arrival();
     test_vigil_google_find_my();
