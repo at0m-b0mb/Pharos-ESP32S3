@@ -16,7 +16,7 @@ retries, and if it still fails you get an error and no file - because the
 version that quietly painted whatever arrived cost an afternoon hunting a
 rendering fault that was never on the glass.
 """
-import argparse, base64, glob, re, sys, time
+import argparse, base64, binascii, glob, re, sys, time
 import serial
 
 MARK = b'FB:'
@@ -84,7 +84,17 @@ def decode(buf):
     w, h, n, want = (int(m.group(1)), int(m.group(2)), int(m.group(3)),
                      int(m.group(4), 16))
 
-    end = buf.index(b"PHAROSFB END")
+    # A CAPTURE CAN END AFTER THE HEADER AND BEFORE THE TERMINATOR.
+    #
+    # buf.index() raises ValueError for that, which the retry loop does not
+    # catch - so a capture cut short by a slow board crashed with a traceback
+    # instead of simply being tried again. Everything that can go wrong on the
+    # wire has to arrive as FrameError, because that is the only thing the
+    # caller knows how to retry.
+    end = buf.find(b"PHAROSFB END")
+    if end < 0:
+        raise FrameError("the stream stopped before its end marker - the board "
+                         "may still have been booting, or the capture timed out")
     # ONLY MARKED LINES. The logger shares this console and does not wait;
     # an unmarked line is its business, not ours.
     body, skipped = [], 0
@@ -97,7 +107,11 @@ def decode(buf):
         else:
             skipped += 1
     b64 = b''.join(body)
-    raw = base64.b64decode(b64 + b'=' * (-len(b64) % 4))[:n]
+    try:
+        raw = base64.b64decode(b64 + b'=' * (-len(b64) % 4))[:n]
+    except (binascii.Error, ValueError) as e:
+        # Also a wire problem, so also retryable.
+        raise FrameError(f"the payload would not decode: {e}")
 
     if len(raw) != n:
         raise FrameError(f"stream truncated: {len(raw)} of {n} bytes arrived")
@@ -142,8 +156,10 @@ def grab(out, cmds=(), settle=1.0, timeout=40.0, port=None, tries=3,
             rgb = to_rgb(w, h, raw)
         except StaleFirmware:
             raise
-        except FrameError as e:
-            last = e
+        except (FrameError, serial.SerialException, OSError) as e:
+            # A board that unplugs mid-sweep raises from pyserial rather than
+            # from us; it is still just a capture that did not work.
+            last = e if isinstance(e, FrameError) else FrameError(str(e))
             if not quiet:
                 print(f"  attempt {attempt}/{tries}: {e}", file=sys.stderr)
             # Only the dump itself is worth repeating; the setup commands have

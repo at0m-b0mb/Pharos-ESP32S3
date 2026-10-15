@@ -618,13 +618,34 @@ static void paint_home(void)
         /* Handed to the HUD so it sizes the ring against the same width this
          * capacity was computed from - see pharos_hud_home::label_w. */
         h.label_w = lw;
-        const unsigned cap = pd_ring_capacity(lw, 14, 12);
+        /* WHICH POSITIONS, NOT JUST HOW MANY.
+         *
+         * This counted a budget and then spent it by priority, with no idea
+         * which positions on the ring can actually carry a name. A
+         * seven-letter label clears its dot at the top of the ring and cannot
+         * at the sides, so a budget of seven was routinely spent on four
+         * usable positions and three unusable ones - the renderer refused the
+         * three, and those names simply did not appear. Asking the same
+         * question the renderer asks, here, means the budget is only ever
+         * spent where a name will really be drawn. */
+        pd_ring_t ring;
+        pd_ring_layout(s_home_map_n, lw, 14, 12, &ring);
+        bool placeable[PHAROS_HUD_HOME_MAX];
+        unsigned cap = 0;
+        for (unsigned d = 0; d < s_home_map_n && d < PHAROS_HUD_HOME_MAX; d++) {
+            placeable[d] = pd_ring_label_fits(&ring, d, s_home_map_n, lw, 14);
+            if (placeable[d]) {
+                cap++;
+            }
+        }
         unsigned used = 0;
-        if (h.active >= 0 && used < cap) {
+        if (h.active >= 0 && (unsigned)h.active < s_home_map_n &&
+            placeable[h.active] && used < cap) {
             h.label_on[h.active] = true;
             used++;
         }
-        if (s_home_sel < s_home_map_n && !h.label_on[s_home_sel] && used < cap) {
+        if (s_home_sel < s_home_map_n && !h.label_on[s_home_sel] &&
+            placeable[s_home_sel] && used < cap) {
             h.label_on[s_home_sel] = true;
             used++;
         }
@@ -632,10 +653,19 @@ static void paint_home(void)
          * ones keep their names. */
         for (unsigned pass = PTW_ALARM; pass >= PTW_NOTED && used < cap; pass--) {
             for (unsigned d = 0; d < s_home_map_n && used < cap; d++) {
-                if (!h.label_on[d] && h.state[d] == pass) {
+                if (!h.label_on[d] && placeable[d] && h.state[d] == pass) {
                     h.label_on[d] = true;
                     used++;
                 }
+            }
+        }
+        /* Anything still placeable gets a name too - the budget IS the set of
+         * usable positions now, so leaving one empty wastes a place rather
+         * than protecting anything. */
+        for (unsigned d = 0; d < s_home_map_n && used < cap; d++) {
+            if (!h.label_on[d] && placeable[d]) {
+                h.label_on[d] = true;
+                used++;
             }
         }
         /* If everything is quiet there is room to spare, so name as many as

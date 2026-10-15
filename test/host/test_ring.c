@@ -65,9 +65,27 @@ static void test_ring_never_staggers(void)
      * capacity - and it must still be a useful number, not zero. */
     pd_ring_layout(13, LBL_W, LBL_H, 12, &r);
     CHECK(r.r_even == r.r_odd, "thirteen is still a circle");
-    CHECK(r.capacity >= 8u, "and still carries a useful number of names (%u)",
-          r.capacity);
     CHECK(r.capacity <= 13u, "without claiming more than it was asked for");
+
+    /* CAPACITY IS THE WORST CASE, AND THE WORST CASE IS THE SIDES.
+     *
+     * Once pd_ring_fits() applies the dot rule, "the largest count at which
+     * EVERY position works" is small - a seven-letter name clears its dot at
+     * the top of the ring and cannot at the left or right. That is the honest
+     * answer to the question capacity asks, and it is the wrong question for
+     * the home face, which draws at a fixed count and picks which positions
+     * to name.
+     *
+     * pd_ring_places() asks the right one, and it is where the useful number
+     * has to show up. */
+    CHECK(pd_ring_places(13, LBL_W, LBL_H, 12) >= r.capacity,
+          "places must never be worse than the worst case");
+    CHECK(pd_ring_places(13, 46, LBL_H, 12) >= 8u,
+          "a four-letter name should have plenty of room at thirteen (%u)",
+          pd_ring_places(13, 46, LBL_H, 12));
+    CHECK(pd_ring_places(1, LBL_W, LBL_H, 12) == 1u,
+          "a single watch must be nameable - it sits at the top, clear of "
+          "everything");
 }
 
 /* THE BUG, STATED AS A TEST. The old layout put every label on one radius at
@@ -75,13 +93,22 @@ static void test_ring_never_staggers(void)
 static void test_ring_catches_the_shipped_bug(void)
 {
     banner("ring: the layout that shipped is provably an overlap");
-    pd_ring_t broken = { .r_even = 140, .r_odd = 140, .r_dot = 168,
+    /* r_dot is the real one. This fixture carried 168, the figure the layout
+     * used before it was reconciled with the 178 the renderer draws at - so
+     * the test was asserting spacing about a ring that is not on the glass.
+     *
+     * The width is narrow on purpose: pd_ring_fits() now also applies the
+     * dot-clearance rule, and at the shipped label width that rule fails
+     * FIRST, which would make this pass for the wrong reason. At 44 px the
+     * dots are not the binding constraint, so what is left is the thing this
+     * test is about - whether labels are too close to each other. */
+    pd_ring_t broken = { .r_even = 140, .r_odd = 140, .r_dot = PD_RING_DOT_R,
                          .staggered = false };
-    CHECK(!pd_ring_fits(&broken, 13, LBL_W, LBL_H, LBL_GAP),
+    CHECK(!pd_ring_fits(&broken, 13, 44, LBL_H, LBL_GAP),
           "thirteen labels on one 140 px radius are too close to read");
     /* Eight on the same radius were fine, which is why it was not noticed
      * until more watches were added. */
-    CHECK(pd_ring_fits(&broken, 8, LBL_W, LBL_H, LBL_GAP),
+    CHECK(pd_ring_fits(&broken, 8, 44, LBL_H, LBL_GAP),
           "eight on the same radius did not, which is how it got through");
 }
 
@@ -288,9 +315,25 @@ static void test_ring_names_the_default_set(void)
     /* PD_RING_NAME_MAX is the contract: the ring truncates to seven, so seven
      * is the width the layout is entitled to assume. */
     const int16_t harvest_w = (int16_t)(PD_RING_NAME_MAX * 10 + 6);
-    CHECK(pd_ring_capacity(harvest_w, 16, 12) >= 8u,
-          "eight seven-character names fit (capacity %u)",
-          pd_ring_capacity(harvest_w, 16, 12));
+
+    /* NOT ALL ELEVEN, AND THE OLD NUMBER HID THAT.
+     *
+     * This asserted pd_ring_capacity >= 8 and passed, because capacity was
+     * computed without the dot-clearance rule the renderer gates on. With
+     * that rule applied the honest figures are: capacity 4 - the worst
+     * position, which is the side of the ring, where a seven-character name
+     * cannot clear its dot - and seven of the eleven positions usable.
+     *
+     * So "the watches armed by default ALL get a name" was never true. Seven
+     * of eleven is what the geometry allows at this name length; the rest stay
+     * as bare dots, which is the ring's stated contract. Shortening
+     * PD_RING_NAME_MAX would buy more of them at the cost of reading each. */
+    const unsigned armed = 11u;
+    const unsigned places = pd_ring_places(armed, harvest_w, 16, 12);
+    CHECK(places >= 7u,
+          "seven-character names should reach at least seven of the eleven "
+          "armed positions (got %u)", places);
+    CHECK(places <= armed, "places cannot exceed the positions on the ring");
 
     /* AND THE REASON THE CONTRACT EXISTS.
      *
@@ -299,11 +342,16 @@ static void test_ring_names_the_default_set(void)
      * why the ring truncates rather than pretending otherwise. This asserts
      * the gap between the two, so nobody quietly raises PD_RING_NAME_MAX
      * without discovering what it costs. */
+    /* Measured in PLACES, not capacity. Capacity is the worst position on the
+     * ring and both widths floor at the same number there, so it has no
+     * resolution left to show the cost - which would have made this assertion
+     * silently untestable. Places counts the positions that actually work. */
     const int16_t longest_w = (int16_t)(9 * 10 + 6);
-    const unsigned untruncated = pd_ring_capacity(longest_w, 16, 12);
-    CHECK(untruncated < pd_ring_capacity(harvest_w, 16, 12),
-          "nine characters would cost capacity (%u vs %u)",
-          untruncated, pd_ring_capacity(harvest_w, 16, 12));
+    const unsigned untruncated = pd_ring_places(11, longest_w, 16, 12);
+    const unsigned truncated = pd_ring_places(11, harvest_w, 16, 12);
+    CHECK(untruncated < truncated,
+          "nine characters would cost places (%u vs %u)",
+          untruncated, truncated);
 }
 
 static void test_ring_labels_clear_their_dots(void)
@@ -330,7 +378,9 @@ static void test_ring_labels_clear_their_dots(void)
             if (!pd_ring_label_fits(&r, i, n, PD_RING_LABEL_W, 16)) {
                 continue; /* not drawn at all, so it cannot collide */
             }
-            const float a = (n < 2u) ? -90.0f
+            /* Matches home_dot_deg() and the dial: one watch sits at the
+             * TOP. This said -90, a quarter-turn away. */
+            const float a = (n < 2u) ? 0.0f
                                      : (225.0f + 270.0f * (float)i / (float)(n - 1u));
             const float t = (a - 90.0f) * 3.14159265f / 180.0f;
             const float rad = (float)pd_ring_label_r(&r, i);

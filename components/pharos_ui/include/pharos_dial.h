@@ -200,6 +200,19 @@ bool pd_ring_fits(const pd_ring_t *r, unsigned n, int16_t label_w,
  * MATTER - whichever watch holds the radio, and anything with something to
  * report - and leaves the rest as bare dots. That is how an instrument is
  * normally drawn: not every tick is numbered. */
+/* HOW MANY OF n POSITIONS CAN CARRY A LABEL OF THIS WIDTH.
+ *
+ * pd_ring_capacity() answers a different question - the largest count at which
+ * EVERY position works - and collapses to the worst one. A wide name clears
+ * its dot at the top of the ring and cannot at the sides, so that worst case
+ * is 4 while eleven of thirteen positions are perfectly usable. Used as the
+ * budget for "how many names may I switch on", it threw away most of them.
+ *
+ * This counts the positions that actually fit at the count being drawn, which
+ * is the question the home face is really asking. */
+unsigned pd_ring_places(unsigned n, int16_t label_w, int16_t label_h,
+                        int16_t gap);
+
 unsigned pd_ring_capacity(int16_t label_w, int16_t label_h, int16_t gap);
 
 /* ---- the evidence gauge --------------------------------------------- */

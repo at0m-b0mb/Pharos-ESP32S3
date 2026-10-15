@@ -210,7 +210,8 @@ static void ring_label_box(const pd_ring_t *r, unsigned i, unsigned n,
      * prevent. The check was correct; it was being asked about the wrong
      * points. A layout that models a different geometry from the renderer is
      * not a weaker guarantee, it is no guarantee at all. */
-    const float a = (n < 2u) ? -90.0f
+    /* Matches home_dot_deg(): one watch sits at the top, not at the left. */
+    const float a = (n < 2u) ? 0.0f
                              : (225.0f + 270.0f * (float)i / (float)(n - 1u));
     /* pr_polar's convention, because pr_polar is what draws these.
      *
@@ -233,6 +234,41 @@ static void ring_label_box(const pd_ring_t *r, unsigned i, unsigned n,
     *x1 = cx + (float)w / 2.0f;
     *y0 = cy - (float)h / 2.0f;
     *y1 = cy + (float)h / 2.0f;
+}
+
+/* DOES THIS LABEL BOX CLEAR THE DOT IT NAMES?
+ *
+ * A label is centred on the SAME ANGLE as its dot, so the only thing keeping
+ * them apart is the difference in radius - and at the sides of the ring a
+ * label is as wide as its text, so it needs half that width in radial
+ * clearance there against half its height at the top.
+ *
+ * Shared, because the SCORER has to apply the same rule the RENDERER gates on.
+ * It did not: ring_score() disqualified on the glass, the core and the
+ * headline and then maximised the space BETWEEN labels, with no opinion about
+ * the dots at all. More radius means more circumference means bigger gaps, so
+ * whenever spacing was not the binding constraint the search ran straight to
+ * the top of its range - to a radius at which pd_ring_label_fits() then
+ * rejected every label it had just been asked to place. The layout was
+ * optimising for an arrangement the renderer would refuse. */
+static bool box_clears_dot(const pd_ring_t *r, unsigned i, unsigned n,
+                           float x0, float y0, float x1, float y1)
+{
+    /* home_dot_deg() answers 0 for a single watch - pr_polar's 0 is NORTH, so
+     * the one dot sits at the top. This said -90, which is a quarter-turn away
+     * at the LEFT, so the clearance was measured against a dot that is not
+     * there and the label was placed where the real one is. */
+    const float a_deg = (n < 2u) ? 0.0f
+                                 : (225.0f + 270.0f * (float)i / (float)(n - 1u));
+    const float t = (a_deg - 90.0f) * 3.14159265f / 180.0f;
+    const float dx_c = (float)r->r_dot * cosf(t);
+    const float dy_c = (float)r->r_dot * sinf(t);
+    /* Closest point on the label box to the dot's centre. */
+    const float px = (dx_c < x0) ? x0 : ((dx_c > x1) ? x1 : dx_c);
+    const float py = (dy_c < y0) ? y0 : ((dy_c > y1) ? y1 : dy_c);
+    const float ddx = dx_c - px;
+    const float ddy = dy_c - py;
+    return sqrtf(ddx * ddx + ddy * ddy) >= (float)PD_RING_DOT_CLEAR;
 }
 
 bool pd_ring_label_fits(const pd_ring_t *r, unsigned i, unsigned n,
@@ -275,20 +311,7 @@ bool pd_ring_label_fits(const pd_ring_t *r, unsigned i, unsigned n,
      * Rejecting here means the name is simply not drawn at that position,
      * which is the ring's existing contract: it names what it can place and
      * leaves the rest as bare dots. */
-    const float a_deg = (n < 2u) ? -90.0f
-                                 : (225.0f + 270.0f * (float)i / (float)(n - 1u));
-    const float t = (a_deg - 90.0f) * 3.14159265f / 180.0f;
-    const float dx_c = (float)r->r_dot * cosf(t);
-    const float dy_c = (float)r->r_dot * sinf(t);
-    /* Closest point on the label box to the dot's centre. */
-    const float px = (dx_c < x0) ? x0 : ((dx_c > x1) ? x1 : dx_c);
-    const float py = (dy_c < y0) ? y0 : ((dy_c > y1) ? y1 : dy_c);
-    const float ddx = dx_c - px;
-    const float ddy = dy_c - py;
-    if (sqrtf(ddx * ddx + ddy * ddy) < (float)PD_RING_DOT_CLEAR) {
-        return false;
-    }
-    return true;
+    return box_clears_dot(r, i, n, x0, y0, x1, y1);
 }
 
 int16_t pd_ring_label_r(const pd_ring_t *r, unsigned i)
@@ -308,6 +331,15 @@ bool pd_ring_fits(const pd_ring_t *r, unsigned n, int16_t label_w,
     for (unsigned i = 0; i < n; i++) {
         float ax0, ay0, ax1, ay1;
         ring_label_box(r, i, n, label_w, label_h, &ax0, &ay0, &ax1, &ay1);
+
+        /* The dot rule belongs here too. pd_ring_capacity() is defined in
+         * terms of this function and is what decides how many names the home
+         * face switches ON - so without it, capacity promised more labels than
+         * the renderer would agree to draw, and the difference came out as
+         * bare dots rather than as a smaller, honest number. */
+        if (!box_clears_dot(r, i, n, ax0, ay0, ax1, ay1)) {
+            return false;
+        }
 
         /* Inside the safe radius, corners included - a box whose centre is in
          * bounds can still have a corner off the glass. */
@@ -392,6 +424,14 @@ static float ring_score(const pd_ring_t *r, unsigned n, int16_t w, int16_t h)
             }
         }
 
+        /* AND IT MUST CLEAR ITS OWN DOT - the same rule the renderer gates on.
+         * Disqualifying for the same reason the core is: a radius whose labels
+         * the renderer will refuse is not a better arrangement however much
+         * room it leaves between them. */
+        if (!box_clears_dot(r, i, n, ax0, ay0, ax1, ay1)) {
+            return -1.0f;
+        }
+
         for (unsigned k = i + 1u; k < n; k++) {
             float bx0, by0, bx1, by1;
             ring_label_box(r, k, n, w, h, &bx0, &by0, &bx1, &by1);
@@ -418,6 +458,23 @@ static float ring_score(const pd_ring_t *r, unsigned n, int16_t w, int16_t h)
  * The measured numbers on this 466 px dial, seven-character names: eight
  * watches clear each other by 64 px, ten by 30, twelve by 24, and thirteen by
  * 10 - which is the point at which it starts reading as one long word. */
+unsigned pd_ring_places(unsigned n, int16_t label_w, int16_t label_h,
+                        int16_t gap)
+{
+    if (n == 0u) {
+        return 0;
+    }
+    pd_ring_t r;
+    pd_ring_layout(n, label_w, label_h, gap, &r);
+    unsigned k = 0;
+    for (unsigned i = 0; i < n; i++) {
+        if (pd_ring_label_fits(&r, i, n, label_w, label_h)) {
+            k++;
+        }
+    }
+    return k;
+}
+
 unsigned pd_ring_capacity(int16_t label_w, int16_t label_h, int16_t gap)
 {
     /* Defined in terms of pd_ring_fits, so the capacity and the checker can
