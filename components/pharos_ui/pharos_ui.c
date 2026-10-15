@@ -1312,11 +1312,15 @@ unsigned pharos_ui_pump(void)
     if (lens && lens->ingest && lens->on_event) {
         /* Both rings, on this core, under ONE budget - so a lens that listens
          * to two radios cannot starve the loop twice over. See ingest_aux. */
-        struct pharos_bus *buses[2] = {
+        /* The lens' own ring, its optional second one, and the radio's dwell
+         * ring - which has its own producer (the hop task) and therefore its
+         * own ring. See pharos_radio_dwell_bus(). */
+        struct pharos_bus *buses[3] = {
             lens->ingest(),
             lens->ingest_aux ? lens->ingest_aux() : NULL,
+            (struct pharos_bus *)pharos_radio_dwell_bus(),
         };
-        for (unsigned b = 0; b < 2; b++) {
+        for (unsigned b = 0; b < 3; b++) {
             if (!buses[b]) {
                 continue;
             }

@@ -88,6 +88,18 @@ void pharos_radio_rx_stop(void);
 
 /* BLE observer (scan-only). Refuses without CAP_BLE_SCAN. NimBLE is built
  * observer-only, so this cannot advertise or connect. */
+/* THE RING THE HOP TASK PUBLISHES CHANNEL DWELLS INTO.
+ *
+ * Separate from the lens' own ring because it has a different producer: frames
+ * arrive on the Wi-Fi driver's task, dwells on the hopper. pharos_bus is
+ * single-producer by implementation, so they cannot share one - they did, and
+ * because the payload is a union a torn write could hand the consumer an event
+ * whose type said one thing and whose body was partly the other.
+ *
+ * NULL when no capture is running. The analytics loop drains it alongside the
+ * active lens' own ring and delivers to the same on_event. */
+pharos_bus_t *pharos_radio_dwell_bus(void);
+
 bool pharos_radio_ble_scan_start(pharos_bus_t *bus);
 void pharos_radio_ble_scan_stop(void);
 

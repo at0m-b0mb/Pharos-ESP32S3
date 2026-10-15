@@ -133,6 +133,34 @@ pharos_scan_plan_t pharos_scan_plan_camp(uint8_t channel)
  * Emitted on the same bus as frames so a lens sees it in order, and pushed
  * best-effort: if the ring is full the drop is already counted and feeds the
  * confidence ceiling, exactly like a dropped frame. */
+/* THE HOP TASK IS A SECOND PRODUCER, SO IT GETS A SECOND RING.
+ *
+ * promisc_cb() pushes frames from the Wi-Fi driver's task at priority 23.
+ * emit_dwell() is called from apply_channel(), which runs on hop_task at
+ * priority 5 - a different task, which the Wi-Fi task preempts at any
+ * instruction boundary. Both were pushing into s.bus, which is
+ * single-producer by implementation: two producers that read the same head
+ * write the same slot and advance it once between them, and because the
+ * payload is a union the consumer can get an event whose type says one thing
+ * and whose body is partly the other.
+ *
+ * v3.5.0 split the BLE ring out for exactly this reason and missed this one,
+ * which affects EVERY Wi-Fi lens rather than the three dual-radio ones. One
+ * producer per ring, and the analytics loop drains this alongside the lens'
+ * own - see pharos_radio_dwell_bus().
+ *
+ * Sixteen slots is generous: a dwell is emitted once per channel visit, which
+ * is a handful a second against a ring the loop drains at 20 Hz. */
+#define PHAROS_DWELL_SLOTS 16u
+EXT_RAM_BSS_ATTR static pharos_event_t s_dwell_slots[PHAROS_DWELL_SLOTS];
+static pharos_bus_t s_dwell_bus;
+static bool s_dwell_ready;
+
+pharos_bus_t *pharos_radio_dwell_bus(void)
+{
+    return s_dwell_ready ? &s_dwell_bus : NULL;
+}
+
 static void emit_dwell(uint8_t channel, uint32_t us)
 {
 #if !defined(PHAROS_HOST)
@@ -164,7 +192,10 @@ static void emit_dwell(uint8_t channel, uint32_t us)
     }
     ev.u.dwell.retries =
         (uint16_t)(s.dwell_retries > 0xFFFFu ? 0xFFFFu : s.dwell_retries);
-    pharos_bus_push(s.bus, &ev);
+    /* Its own ring, not s.bus - see the note above. */
+    if (s_dwell_ready) {
+        pharos_bus_push(&s_dwell_bus, &ev);
+    }
 #else
     (void)channel; (void)us;
 #endif
@@ -580,6 +611,11 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
     /* A new capture, so every access point gets to introduce itself again -
      * see the note on s_wps_seen. */
     s_wps_n = 0;
+    /* The dwell ring belongs to this capture. Re-initialised rather than left
+     * running, so a dwell measured for the PREVIOUS lens' channel plan cannot
+     * be delivered to the next one. */
+    s_dwell_ready = false;
+    (void)pharos_bus_init(&s_dwell_bus, s_dwell_slots, PHAROS_DWELL_SLOTS);
     /* Capability gate: no lens may receive without declaring CAP_WIFI_RX,
      * and no lens may hop without CAP_WIFI_CHAN. There is no TX bit to hold. */
     const pharos_caps_t caps = pharos_lens_active_caps();
@@ -631,6 +667,7 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
      * before rx_start returns, and a stop in that window would tear the driver
      * down just as the hopper woke up. */
     s_hop_alive = true;
+    s_dwell_ready = true; /* the hop task may now publish dwells */
     if (xTaskCreatePinnedToCore(hop_task, "pharos_hop", 3072, NULL, 5, NULL, 0) != pdPASS) {
         s_hop_alive = false;
         s.running = false;
@@ -655,6 +692,7 @@ void pharos_radio_rx_stop(void)
      * after free with extra steps. The hopper checks s.running once per dwell,
      * so the wait is bounded by the longest dwell we use plus slack. */
     s.running = false;
+    s_dwell_ready = false; /* the hopper must not publish while we tear down */
     for (int i = 0; i < 200 && s_hop_alive; i++) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
