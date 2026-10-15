@@ -541,8 +541,51 @@ static void test_roster_ble_random_address_has_no_vendor(void)
     CHECK(dd.vendor != NULL, "a vendor proven over Wi-Fi is not discarded");
 }
 
+/* HEARING A DEVICE IS HEARING IT, WHICHEVER PATH HEARD IT.
+ *
+ * rd_expire() drops what has not been heard in RD_STALE_US. Every ingest
+ * path stamps last_us for that to mean anything, and rd_observe_traffic did
+ * not - admit() only stamps first_us. So a device known only from its traffic
+ * was dropped on the next sweep, and one heard earlier aged out while it was
+ * still transmitting. The device that transmits most was the one most likely
+ * to vanish, which inverts the purpose of watching traffic at all: the
+ * upload-duty measure exists to find a camera that streams continuously. */
+static void test_roster_traffic_counts_as_hearing(void)
+{
+    banner("roster: a device heard only by its traffic is not expired");
+
+    rd_roster_t r;
+    rd_reset(&r);
+
+    const uint64_t t = 10000000ull;
+    static const uint8_t cam[6] = { 0x2C, 0xAA, 0x8E, 0x07, 0x08, 0x09 };
+    rd_observe_traffic(&r, cam, 1400, true, t);
+    CHECK_EQ(rd_count(&r), 1);
+
+    /* One second later nothing has gone stale. */
+    rd_expire(&r, t + 1000000ull);
+    CHECK_EQ(rd_count(&r), 1);
+
+    /* AND ITS OWN TRAFFIC KEEPS IT ALIVE. A camera streaming continuously
+     * must not age out halfway through being watched. */
+    uint64_t now = t;
+    for (unsigned i = 0; i < 20u; i++) {
+        now += RD_STALE_US / 2u;
+        rd_observe_traffic(&r, cam, 1400, true, now);
+        rd_expire(&r, now);
+        CHECK(rd_count(&r) == 1,
+              "the camera was expired while still transmitting (step %u)", i);
+    }
+
+    /* And it still expires once it genuinely goes quiet. The fix must not
+     * turn the roster into a list that only grows. */
+    rd_expire(&r, now + RD_STALE_US + 1000000ull);
+    CHECK_EQ(rd_count(&r), 0);
+}
+
 void test_roster(void)
 {
+    test_roster_traffic_counts_as_hearing();
     test_roster_random_mac_has_no_vendor();
     test_roster_ble_random_address_has_no_vendor();
     test_roster_streaming_shape();

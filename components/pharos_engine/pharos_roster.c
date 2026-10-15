@@ -471,6 +471,20 @@ void rd_observe_traffic(rd_roster_t *r, const uint8_t mac[6], uint16_t frame_len
     if (!d) {
         return;
     }
+    /* THIS IS HEARING THE DEVICE, SO IT COUNTS AS HAVING HEARD IT.
+     *
+     * Every other ingest path stamps last_us; this one did not, and admit()
+     * only stamps first_us. So a device known only from its traffic carried
+     * last_us == 0 and rd_expire() dropped it on the next sweep, and one that
+     * had been heard before was never refreshed by its own frames - it aged
+     * out while it was actively transmitting.
+     *
+     * The device that transmits most was therefore the one most likely to
+     * vanish from the roster, which inverts the whole point of watching
+     * traffic: the upload-duty measure below exists to find a camera that
+     * streams continuously, and continuous streaming was what expired it. */
+    d->last_us = now_us;
+
     const uint32_t sec = (uint32_t)(now_us / 1000000ull);
 
     /* Seconds, counted once each. A camera at thirty frames a second would
