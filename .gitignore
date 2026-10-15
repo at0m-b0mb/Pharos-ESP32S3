@@ -28,3 +28,5 @@ compile_commands.json
 # and one of those was committed.
 __pycache__/
 *.py[cod]
+/test/fuzz/fuzz
+/test/fuzz/*.dSYM/

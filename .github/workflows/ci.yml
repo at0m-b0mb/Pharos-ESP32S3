@@ -27,6 +27,35 @@ jobs:
           echo "$out"
           echo "$out" | grep -qE '0 failures' || { echo "host tests reported failures"; exit 1; }
 
+      # THE HOSTILE-INPUT SURFACE, UNDER SANITIZERS.
+      #
+      # Every 802.11 frame and BLE advertisement this firmware parses is a
+      # buffer a stranger chose. The engines are pure C11, so the whole of
+      # that surface is reachable from the host - and the sanitizers are what
+      # actually detect the fault, which is why the harness builds with them
+      # on by default rather than as an option.
+      #
+      # The sequence is seeded, so this is reproducible: a failure here is
+      # replayable anywhere with `make -C test/fuzz replay SEED=<n>`, which is
+      # worth more than a coverage-guided run that finds something once.
+      - name: Fuzz the parsers (ASan + UBSan)
+        run: |
+          out=$(make -C test/fuzz CC=gcc ITERS=1000000 2>&1)
+          echo "$out"
+          echo "$out" | grep -qE '0 failures' || { echo "fuzzing reported failures"; exit 1; }
+
+      - name: Host suite under ASan and UBSan
+        run: |
+          make -C test/host clean
+          make -C test/host CC=gcc \
+            CFLAGS="-std=c11 -O1 -g -Wall -Wextra -Wno-unused-parameter \
+                    -fno-strict-aliasing -fsanitize=undefined,address \
+                    -fno-sanitize-recover=all \
+                    -I../../components/pharos_core/include \
+                    -I../../components/pharos_engine/include \
+                    -I../../components/pharos_radio/include \
+                    -I../../components/pharos_ui/include"
+
   fence:
     name: transmit fence audit
     runs-on: ubuntu-latest

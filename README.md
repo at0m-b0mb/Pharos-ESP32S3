@@ -174,6 +174,32 @@ picture that is not what the panel drew.
 > `export.sh` has **not** been sourced — that swaps the interpreter for one
 > without them.
 
+### And the parsers are fuzzed under sanitizers
+
+Every 802.11 frame and BLE advertisement this firmware reads is a buffer
+somebody else chose. The engines are pure C11 with no allocation, so that
+entire surface is reachable from the host:
+
+```bash
+make -C test/fuzz                    # ~200k inputs, a few seconds
+make -C test/fuzz long               # a million
+make -C test/fuzz replay SEED=12345  # one input, to reproduce a failure
+```
+
+It builds with **ASan and UBSan on by default** — without them it would only
+prove the parsers return — and each input is handed to the targets in a
+heap block of exactly its own length, so a walker that steps one byte past
+its limit is caught rather than landing harmlessly in a larger buffer.
+
+The sequence is seeded rather than coverage-guided. That trades some reach for
+something worth more in CI: the same seed gives the same bytes on every machine
+forever, so a failure is replayable with one number instead of a corpus.
+
+Beyond crashes it asserts post-conditions the sanitizers cannot see — that a
+walker terminates, that an output never exceeds the buffer it was given, that
+cleaning already-clean text changes nothing, and that a parser's answer about a
+*truncated* frame is never richer than its answer about the whole one.
+
 ## The lenses
 
 A **lens** is one tool. The dial is built from whatever lenses are compiled in; adding one is adding a single `.c` file. Every lens declares its hardware powers at compile time, and the radio refuses any power a lens did not declare.
