@@ -20,6 +20,23 @@ void pa_observe(pa_state_t *s, pa_stage_t stage, uint8_t score, uint8_t ceiling,
     if (!s || stage < 0 || stage >= PA_STAGE_COUNT) {
         return;
     }
+    /* THESE TWO NUMBERS COME FROM SOMEBODY ELSE.
+     *
+     * pa_observe exists so Aegis never has to know how any particular
+     * detector reasons: it takes each engine's own score and ceiling on
+     * trust. The trust has to stop at the door, because this is the
+     * component that publishes the final number. A stage that reported 129
+     * put 129 on the glass as a confidence and as a stage peak - a number
+     * that is not a percentage of anything - and it did it without tripping
+     * the ceiling machinery, because the overall ceiling is a MINIMUM and an
+     * impossibly high contributor never lowers it.
+     *
+     * An engine that regresses should produce a wrong verdict, not an
+     * impossible one. Clamping here is also the only place that can do it
+     * once for every caller. */
+    if (score > 100u) { score = 100u; }
+    if (ceiling > 100u) { ceiling = 100u; }
+
     pa_stage_state_t *st = &s->stages[stage];
     st->current = score;
     st->last_us = t_us;
@@ -139,11 +156,19 @@ void pa_evaluate(const pa_state_t *s, uint64_t now_us, pa_verdict_t *out)
     }
 
     if (!any_contrib) {
-        out->ceiling = 100;
+        out->ceiling = PA_CEILING_MAX;
         out->band = PA_BAND_CLEAR;
         out->headline = "Nothing raised. No lens has reported a finding.";
         return;
     }
+    /* NEVER CERTAINTY. Every engine in this firmware declares a ceiling
+     * below 100 - 60 while hopping, 96 while camped - because radio evidence
+     * cannot support more than that, and the ceiling is drawn on the gauge
+     * as the tick the needle may not pass. A ceiling of 100 draws that tick
+     * at the end of the arc and says certainty is reachable here, which is
+     * the one claim this device is built never to make. The score clamp just
+     * below inherits this, so the published number cannot reach 100 either. */
+    if (ceiling > PA_CEILING_MAX) { ceiling = PA_CEILING_MAX; }
     out->ceiling = (uint8_t)ceiling;
 
     uint32_t score;

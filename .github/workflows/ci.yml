@@ -38,11 +38,20 @@ jobs:
       # The sequence is seeded, so this is reproducible: a failure here is
       # replayable anywhere with `make -C test/fuzz replay SEED=<n>`, which is
       # worth more than a coverage-guided run that finds something once.
-      - name: Fuzz the parsers (ASan + UBSan)
+      - name: Fuzz the parsers and the verdicts (ASan + UBSan)
         run: |
-          out=$(make -C test/fuzz CC=gcc ITERS=1000000 2>&1)
+          out=$(make -C test/fuzz CC=gcc ITERS=1000000 STATE_ITERS=250000 2>&1)
           echo "$out"
-          echo "$out" | grep -qE '0 failures' || { echo "fuzzing reported failures"; exit 1; }
+          # Two harnesses report, and BOTH must say zero. Grepping for the
+          # presence of "0 failures" was not enough once there were two:
+          # one clean line satisfied it while the other reported failures.
+          if echo "$out" | grep -qE '[1-9][0-9]* failures'; then
+            echo "fuzzing reported failures"; exit 1
+          fi
+          n=$(echo "$out" | grep -c '0 failures')
+          if [ "$n" -ne 2 ]; then
+            echo "expected both harnesses to report, saw $n"; exit 1
+          fi
 
       - name: Host suite under ASan and UBSan
         run: |

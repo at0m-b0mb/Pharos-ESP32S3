@@ -67,6 +67,30 @@ static bool is_locally_administered(const uint8_t bssid[6])
     return (bssid[0] & 0x02) != 0;
 }
 
+/* WHICH ONE, WHEN TWO ARE EQUALLY BAD.
+ *
+ * Three decisions below pick a single member out of the group: the majority
+ * OUI, the most suspicious address, and the weakest member. Each was a strict
+ * comparison, so a tie was resolved by whichever happened to sit earlier in
+ * the array - and that array is filled in whatever order the scan found
+ * things, which is arbitrary and changes between sweeps.
+ *
+ * The consequence was a verdict that moved while the room did not. The same
+ * unchanged environment could score 78 on one sweep and 88 on the next,
+ * because a two-way tie for the majority vendor fell the other way and a
+ * different member was therefore wearing "a different vendor's address".
+ * Crossing a band boundary, that changes the headline word itself - and a
+ * detector that changes its mind about a static room teaches an operator to
+ * stop believing it.
+ *
+ * So ties are broken on the data instead: the lowest address wins. It is
+ * arbitrary too, but it is arbitrary in the same direction every time, which
+ * makes the verdict a function of the group rather than of the scan order. */
+static bool addr_lower(const uint8_t *a, const uint8_t *b, unsigned len)
+{
+    return memcmp(a, b, len) < 0;
+}
+
 static int8_t median_rssi(const pc_ap_t *aps, unsigned n)
 {
     int8_t v[PT_MAX_GROUP];
@@ -169,7 +193,9 @@ void pt_evaluate(const pc_ap_t *aps, unsigned n, const pt_profile_t *profile,
         for (unsigned j = 0; j < n; j++) {
             if (memcmp(aps[i].bssid, aps[j].bssid, 3) == 0) c++;
         }
-        if (c > best_oui_count) {
+        if (c > best_oui_count ||
+            (c == best_oui_count && best_oui_count > 0 &&
+             addr_lower(aps[i].bssid, majority_oui, 3))) {
             best_oui_count = c;
             memcpy(majority_oui, aps[i].bssid, 3);
         }
@@ -190,7 +216,9 @@ void pt_evaluate(const pc_ap_t *aps, unsigned n, const pt_profile_t *profile,
         if (profile && profile->loaded && !pt_profile_contains(profile, aps[i].bssid)) {
             w += 14; /* the baseline says this radio should not be here */
         }
-        if (w > suspect_weight) {
+        if (w > suspect_weight ||
+            (w == suspect_weight && w > 0 &&
+             addr_lower(aps[i].bssid, aps[suspect].bssid, 6))) {
             suspect_weight = w;
             suspect = i;
         }
@@ -204,7 +232,9 @@ void pt_evaluate(const pc_ap_t *aps, unsigned n, const pt_profile_t *profile,
         uint8_t weakest = 255;
         for (unsigned i = 0; i < n; i++) {
             if (grades[i].grade == PC_GRADE_UNGRADED) continue;
-            if (grades[i].score < weakest) {
+            if (grades[i].score < weakest ||
+                (grades[i].score == weakest &&
+                 addr_lower(aps[i].bssid, aps[suspect].bssid, 6))) {
                 weakest = grades[i].score;
                 suspect = i;
             }

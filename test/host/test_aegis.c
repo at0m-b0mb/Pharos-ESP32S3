@@ -9,8 +9,51 @@
 
 #define SEC 1000000ull
 
+
+/* A CONTRIBUTING ENGINE THAT REPORTS NONSENSE MUST NOT MAKE AEGIS LIE.
+ *
+ * pa_observe takes another engine's own score and ceiling on trust, which is
+ * the point of it - Aegis does not have to know how any detector reasons. But
+ * Aegis is also what publishes the final number, and the overall ceiling is a
+ * MINIMUM, so an impossibly high contributor never lowers it and sailed
+ * straight through to the glass. */
+static void test_aegis_never_publishes_certainty(void)
+{
+    banner("aegis: a stage reporting nonsense cannot publish certainty");
+
+    pa_state_t s;
+    pa_reset(&s);
+
+    /* 129 is not a percentage of anything. No engine here emits it - but the
+     * question is what Aegis does if one ever regresses and does. */
+    pa_observe(&s, (pa_stage_t)0, 129, 129, 1000000ull);
+    pa_observe(&s, (pa_stage_t)1, 200, 0, 2000000ull);
+
+    pa_verdict_t v;
+    pa_evaluate(&s, 3000000ull, &v);
+
+    CHECK(v.score < 100, "the published score reached certainty (%u)", v.score);
+    CHECK(v.ceiling <= PA_CEILING_MAX, "the ceiling drew the tick at %u",
+          v.ceiling);
+    CHECK(v.worst_peak <= 100, "a stage peak of %u is not a percentage",
+          v.worst_peak);
+    CHECK(v.raw_score <= 100, "the raw score was %u", v.raw_score);
+
+    /* And the ordinary case is unchanged: an honest pair of numbers is
+     * published as given, bounded by its own ceiling. */
+    pa_state_t h;
+    pa_reset(&h);
+    pa_observe(&h, (pa_stage_t)0, 70, 96, 1000000ull);
+    pa_verdict_t hv;
+    pa_evaluate(&h, 1500000ull, &hv);
+    CHECK(hv.score == 70 || hv.score <= 96,
+          "an honest 70 under a ceiling of 96 became %u", hv.score);
+    CHECK(hv.ceiling <= 96, "the honest ceiling was raised to %u", hv.ceiling);
+}
+
 void test_aegis(void)
 {
+    test_aegis_never_publishes_certainty();
     banner("aegis: correlation without invention");
     pa_state_t s;
     pa_verdict_t v;

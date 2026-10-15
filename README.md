@@ -181,15 +181,50 @@ somebody else chose. The engines are pure C11 with no allocation, so that
 entire surface is reachable from the host:
 
 ```bash
-make -C test/fuzz                    # ~200k inputs, a few seconds
-make -C test/fuzz long               # a million
-make -C test/fuzz replay SEED=12345  # one input, to reproduce a failure
+make -C test/fuzz                          # ~200k inputs + 50k streams
+make -C test/fuzz long                     # a million
+make -C test/fuzz replay SEED=12345        # one input, to reproduce a failure
+make -C test/fuzz replay-state SEED=12345  # one verdict stream, likewise
 ```
 
 It builds with **ASan and UBSan on by default** — without them it would only
 prove the parsers return — and each input is handed to the targets in a
 heap block of exactly its own length, so a walker that steps one byte past
 its limit is caught rather than landing harmlessly in a larger buffer.
+
+### And the verdicts are fuzzed too
+
+Surviving hostile bytes is the smaller half of the promise. What this device
+actually claims is about what it *says*: that a number on the glass never
+exceeds the ceiling its evidence earned, that it never reaches certainty, and
+that a headline is never richer than what was observed. Those live in
+sequences of observations over time, so a buffer fuzzer cannot reach them.
+
+The second harness drives the scoring engines with random event **streams**
+and checks the invariants after every step — with time deliberately
+misbehaving, because the Wi-Fi driver callback, the NimBLE host task and the
+dwell ring are three producers with their own clocks reaching one consumer.
+Timestamps arrive out of order, repeat, and jump by an hour.
+
+It has already paid for itself three times:
+
+- **Twin's verdict depended on the order the scan filled its table.** Three
+  tie-breaks resolved to whichever access point sat earlier in the array, so
+  one unchanged room could score 78 on one sweep and 88 on the next. Ties are
+  broken on the lowest address now, which makes the verdict a function of the
+  group rather than of the scan order.
+- **Aegis would publish certainty if a contributing engine regressed.** It
+  takes each detector's own score and ceiling on trust, and the overall
+  ceiling is a *minimum* — so an impossibly high contributor never lowered it
+  and went straight to the glass. The numbers are clamped at the door now, and
+  the aggregate ceiling is bounded by `PA_CEILING_MAX`, which is 99 and not
+  100 on purpose.
+- **Two of its own first invariants were wrong**, which is worth recording:
+  one assumed Census's four component scores were ceilings, and one assumed a
+  uniformly badly configured roaming group must score zero. Both were my
+  misreading rather than the firmware's error, and both were caught by
+  checking the engine instead of believing the test. A new failing assertion
+  is a hypothesis.
 
 The sequence is seeded rather than coverage-guided. That trades some reach for
 something worth more in CI: the same seed gives the same bytes on every machine

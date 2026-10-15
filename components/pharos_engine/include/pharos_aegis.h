@@ -81,6 +81,16 @@ typedef enum {
 /* Anything older than this is reported as history rather than the present. */
 #define PA_FRESH_US 60000000ull /* 60 s */
 
+/* THE HIGHEST CONFIDENCE THIS DEVICE WILL EVER PUBLISH.
+ *
+ * Not 100, and deliberately. Radio evidence gathered by one receiver that
+ * cannot transmit, cannot associate and cannot ask a question does not
+ * support certainty about anything - so the needle has somewhere it may not
+ * reach, whatever the stages report. The contributing engines declare their
+ * own, lower ceilings (60 while hopping, 96 while camped); this is the bound
+ * on the aggregate, applied last. */
+#define PA_CEILING_MAX 99u
+
 typedef struct {
     uint8_t peak;      /* high-water score for this stage        */
     uint8_t ceiling;   /* the ceiling that came with that peak   */

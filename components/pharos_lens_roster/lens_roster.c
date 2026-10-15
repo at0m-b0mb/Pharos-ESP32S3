@@ -327,12 +327,33 @@ static bool k_roster_expand(unsigned row, unsigned sub,
             return true;
         }
         snprintf(out->left, sizeof(out->left), "made by");
-        snprintf(out->right, sizeof(out->right), "%.11s",
-                 d.vendor ? d.vendor : "unknown");
-        out->tone = d.vendor ? PHAROS_TONE_NEUTRAL : PHAROS_TONE_DIM;
+        if (d.vendor) {
+            snprintf(out->right, sizeof(out->right), "%.11s", d.vendor);
+            out->tone = PHAROS_TONE_NEUTRAL;
+        } else if (d.randomised_mac) {
+            /* NOT "unknown". There is no manufacturer to look up because the
+             * address is randomised, and that is a fact about the device, not
+             * a hole in our table: it is running a modern OS with its privacy
+             * defaults on. "unknown" sends somebody looking for an answer
+             * that does not exist, and reads as a failure of the tool rather
+             * than as the device doing the right thing. */
+            snprintf(out->right, sizeof(out->right), "%.11s", "private");
+            out->tone = PHAROS_TONE_GOOD;
+        } else {
+            /* A burned-in address whose prefix is not in our table. Here
+             * "unknown" is the truth: there IS an answer and we do not have
+             * it. */
+            snprintf(out->right, sizeof(out->right), "%.11s", "unknown");
+            out->tone = PHAROS_TONE_DIM;
+        }
         return true;
     case 2:
-        snprintf(out->left, sizeof(out->left), "address");
+        /* Say which kind of address it is. The same six bytes mean opposite
+         * things: a burned-in one identifies this device for the rest of its
+         * life, a randomised one is discarded within the hour. Printing the
+         * octets without saying which invites somebody to write them down. */
+        snprintf(out->left, sizeof(out->left), "%s",
+                 d.randomised_mac ? "address (rotates)" : "address");
         snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x", d.mac[3],
                  d.mac[4], d.mac[5]);
         out->tone = PHAROS_TONE_DIM;
