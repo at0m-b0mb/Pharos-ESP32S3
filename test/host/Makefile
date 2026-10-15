@@ -99,7 +99,23 @@ HEADERS := $(wildcard \
   $(ROOT)/components/*/include/*.h \
   $(ROOT)/test/host/*.h)
 
-$(BIN): $(SRCS) $(HEADERS)
+# ALWAYS RELINK, AND THE REASON IS NOT PARANOIA.
+#
+# make compares modification times with one-second granularity. An edit that
+# lands in the same second as the previous build looks no newer than the
+# binary, so make skips the compile and runs the OLD executable - which then
+# prints "0 failures" about code that is not what is on disk. That happened
+# three times in one session, twice right after restoring a file to check that
+# a test actually catches the bug it claims to: the suite reported green for a
+# reverted fix.
+#
+# A false green on the project's main correctness gate is far more expensive
+# than the few seconds a full relink costs here, and the whole suite is one cc
+# invocation anyway.
+.PHONY: FORCE
+FORCE:
+
+$(BIN): $(SRCS) $(HEADERS) FORCE
 	$(CC) $(CFLAGS) $(INCLUDES) $(SRCS) -lm -o $@
 
 run: $(BIN)
