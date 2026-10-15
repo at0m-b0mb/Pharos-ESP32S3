@@ -1384,8 +1384,46 @@ static void test_rival_a_crowd_is_not_an_attack(void)
           "and is not excused as a crowd");
 }
 
+static void test_rival_spam_peak_expires(void)
+{
+    banner("rival: a burst of BLE spam must not latch the alarm for ever");
+    /* THE RING ONLY CLEARED THE SLOT IT WAS MOVING INTO, and it only moved
+     * when an advertisement arrived in a new second. So the instant BLE went
+     * quiet, the remaining slots kept whatever burst had filled them and the
+     * peak was read straight back out of them - a single burst latched a spam
+     * reading that nothing could clear. The pairing counter beside it already
+     * stamped its slots with their second; this one did not. */
+    prv_state_t s;
+    prv_reset(&s);
+
+    /* A noisy burst: twenty distinct advertisers inside one second. */
+    uint64_t t = 10ull * 1000000ull;
+    for (unsigned i = 0; i < 20u; i++) {
+        const uint8_t addr[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, (uint8_t)i };
+        prv_observe_ble_adv(&s, addr, NULL, NULL, 0, -40, t + i * 1000ull);
+    }
+
+    prv_verdict_t v;
+    prv_evaluate(&s, t + 500000ull, &v);
+    const uint32_t during = v.peak_adv_per_s;
+    CHECK(during >= 10u, "the burst itself should register, got %u", during);
+
+    /* Now the room goes quiet. Nothing else arrives, so nothing advances the
+     * ring - which is exactly the case that used to latch. */
+    prv_evaluate(&s, t + 30ull * 1000000ull, &v);
+    CHECK(v.peak_adv_per_s == 0u,
+          "a burst 30s stale still read as %u advertisers a second",
+          v.peak_adv_per_s);
+
+    /* And a reading from inside the window is still reported. */
+    prv_evaluate(&s, t + 3ull * 1000000ull, &v);
+    CHECK(v.peak_adv_per_s >= 10u,
+          "a burst 3s old should still count, got %u", v.peak_adv_per_s);
+}
+
 void test_rival(void)
 {
+    test_rival_spam_peak_expires();
     test_rival_a_crowd_is_not_an_attack();
     test_rival_devboard_access_points();
     test_rival_implant();

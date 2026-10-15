@@ -767,7 +767,25 @@ bool pharos_bsp_rotate(int degrees)
     case 270: r = BSP_DISPLAY_ROTATE_270; break;
     default:  return false;
     }
-    if (bsp_display_rotation_set(r) != ESP_OK) {
+    /* UNDER THE DISPLAY LOCK, BECAUSE THIS IS THE PANEL'S OWN IO.
+     *
+     * The only caller is the `rotate` console command, which runs on the REPL
+     * task - while the LVGL task may be in the middle of flushing a frame out
+     * of the same bus. Re-orienting the panel from underneath an in-flight
+     * transfer is the same class of fault as the console re-initialising the
+     * Wi-Fi driver on its own task, and it is fixed the same way: take the
+     * lock the display task takes.
+     *
+     * The lock is held for the rotation ONLY. The NVS write below is slow and
+     * does not touch the panel, so it stays outside - holding a display lock
+     * across flash is how a frame gets dropped. */
+    if (!pharos_bsp_display_lock(1000)) {
+        ESP_LOGW(TAG, "rotate: display busy, not touching the panel");
+        return false;
+    }
+    const esp_err_t rot_err = bsp_display_rotation_set(r);
+    pharos_bsp_display_unlock();
+    if (rot_err != ESP_OK) {
         return false;
     }
     s_rotation = degrees;

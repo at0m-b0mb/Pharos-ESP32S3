@@ -58,8 +58,25 @@ static pc_ap_t *table_find(const uint8_t bssid[6])
     return NULL;
 }
 
-static pc_ap_t *table_admit(const uint8_t bssid[6])
+/* THE COUNT IS THE PUBLICATION POINT, SO IT MOVES LAST.
+ *
+ * This used to do `&s_aps[s_n_aps++]` and hand the slot back for the caller to
+ * fill. on_event runs on the analytics core and takes no lock; `sentinel
+ * adopt` and the tick read s_aps[0..s_n_aps) on other tasks and DO take one -
+ * so the lock protected the readers from each other and nothing from the
+ * writer. Between the increment and the fill, a reader saw a record with a
+ * BSSID and nothing else: no name, channel zero, no RSN.
+ *
+ * That matters more here than almost anywhere, because what the reader is
+ * usually doing is adopting a BASELINE - the thing every later sweep is
+ * compared against. A half-written access point in it is a permanent, quiet
+ * false "changed" for the rest of the session.
+ *
+ * So a new slot is prepared but NOT counted; table_publish() makes it visible
+ * once it is filled. */
+static pc_ap_t *table_slot(const uint8_t bssid[6], bool *is_new)
 {
+    *is_new = false;
     pc_ap_t *ap = table_find(bssid);
     if (ap) {
         return ap;
@@ -67,10 +84,20 @@ static pc_ap_t *table_admit(const uint8_t bssid[6])
     if (s_n_aps >= SENTINEL_MAX_AP) {
         return NULL; /* full: the UI shows the count so this is never silent */
     }
-    ap = &s_aps[s_n_aps++];
+    ap = &s_aps[s_n_aps]; /* deliberately NOT s_n_aps++ */
     memset(ap, 0, sizeof(*ap));
     memcpy(ap->bssid, bssid, 6);
+    *is_new = true;
     return ap;
+}
+
+static void table_publish(void)
+{
+    /* The fill must land before the count that exposes it. */
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    if (s_n_aps < SENTINEL_MAX_AP) {
+        s_n_aps++;
+    }
 }
 
 static bool sentinel_mount(void)
@@ -121,7 +148,8 @@ static void sentinel_event(const pharos_event_t *ev)
         return;
     }
 
-    pc_ap_t *ap = table_admit(f->a2);
+    bool is_new = false;
+    pc_ap_t *ap = table_slot(f->a2, &is_new);
     if (!ap) {
         return;
     }
@@ -157,6 +185,11 @@ static void sentinel_event(const pharos_event_t *ev)
     ap->wps_present = (f->rsn_flags & PHAROS_RSN_F_WPS) != 0;
     if (f->flags & PHAROS_DOT11_F_MFP_SEEN) {
         ap->rsn.mfp_capable = true;
+    }
+
+    /* Filled - now it may be seen. See table_slot(). */
+    if (is_new) {
+        table_publish();
     }
 }
 

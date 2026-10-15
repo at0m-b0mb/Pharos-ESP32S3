@@ -545,6 +545,7 @@ void prv_observe_ble_adv(prv_state_t *s, const uint8_t addr[6], const char *name
         s->adv_distinct[s->adv_slot] = 0;
     }
     s->adv_distinct[s->adv_slot]++;
+    s->adv_slot_sec[s->adv_slot] = sec; /* so a stale slot can be told apart */
 
     /* Every advertisement feeds the coherence test, whatever it carries. */
     cohere_note(s, addr, name, rssi, t_us);
@@ -1058,9 +1059,22 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
     /* The advertisement flood. A Flipper running BLE spam produces a burst of
      * distinct advertisers no ordinary room does; a busy cafe sits far below
      * this. Taken as the peak second so a short burst is not averaged away. */
-    for (unsigned i = 0; i < 8; i++) {
-        if (s->adv_distinct[i] > out->peak_adv_per_s) {
-            out->peak_adv_per_s = s->adv_distinct[i];
+    {
+        /* ONLY SLOTS STILL INSIDE THE WINDOW. The ring clears the slot it moves
+         * into, and it only moves when an advertisement arrives - so when BLE
+         * goes quiet the rest of the ring keeps whatever filled it. Read
+         * without this check, one burst latched a spam alarm permanently. */
+        const uint32_t now_sec = (uint32_t)(now_us / 1000000ull);
+        for (unsigned i = 0; i < 8; i++) {
+            if (s->adv_distinct[i] == 0u || s->adv_slot_sec[i] > now_sec) {
+                continue; /* never used, or a clock that went backwards */
+            }
+            if (now_sec - s->adv_slot_sec[i] >= 8u) {
+                continue; /* older than the ring is wide */
+            }
+            if (s->adv_distinct[i] > out->peak_adv_per_s) {
+                out->peak_adv_per_s = s->adv_distinct[i];
+            }
         }
     }
     /* Count only what is still INSIDE the window. Expiring per model rather

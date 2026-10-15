@@ -378,6 +378,15 @@ typedef struct {
      * second so a busy room and a spam burst can be told apart. */
     uint32_t adv_sec;
     uint32_t adv_distinct[8]; /* rolling per-second distinct-address counts */
+    /* WHICH SECOND EACH SLOT BELONGS TO.
+     *
+     * Without this the ring only ever cleared the slot it was moving INTO, and
+     * it only moved when a new advertisement arrived in a new second. So the
+     * moment BLE went quiet the remaining slots kept the burst that filled
+     * them, and the peak was read straight out of them for ever - one burst
+     * latched a spam alarm that nothing could clear. The pairing counter two
+     * fields down already stamped its slots; this one did not. */
+    uint32_t adv_slot_sec[8];
     uint8_t adv_slot;
 
     /* Pairing-popup spam, over a window that ACTUALLY slides.
