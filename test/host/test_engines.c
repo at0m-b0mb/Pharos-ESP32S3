@@ -214,8 +214,66 @@ static pc_ap_t twin_member(uint8_t b3, uint8_t chan, int8_t rssi)
     return ap;
 }
 
+/* A SIGNAL TRUE OF EVERYBODY IS EVIDENCE ABOUT NOBODY.
+ *
+ * The channel-isolation signal counts how many members share the suspect's
+ * channel and scores on == 1, with no check that anyone in the group shares a
+ * channel with anyone at all. On the ordinary 5 and 6 GHz plan - one radio
+ * per channel - that is true of whoever was picked as suspect, by
+ * construction, so twelve points were awarded for a fact about the band plan
+ * rather than about the device.
+ *
+ * This file already warned about exactly this case, in the note above the
+ * suspect choice, and then scored it anyway. */
+static void test_twin_a_signal_true_of_everyone_scores_nothing(void)
+{
+    banner("twin: alone on a channel is nothing when everyone is");
+
+    pt_context_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.dwell_permil = 1000;
+
+    pt_verdict_t spread, shared;
+
+    /* Six identically configured radios, one per channel, all the same
+     * distance away. The ordinary multi-channel deployment. */
+    pc_ap_t a[6];
+    static const uint8_t chans[6] = { 36, 40, 44, 48, 149, 153 };
+    for (unsigned i = 0; i < 6u; i++) {
+        a[i] = twin_member((uint8_t)(0x20 + i), chans[i], -60);
+    }
+    pt_evaluate(a, 6u, NULL, &ctx, &spread);
+
+    CHECK(spread.c_behaviour == 0,
+          "every radio on its own channel earned %u behaviour points",
+          spread.c_behaviour);
+    CHECK(spread.score == 0,
+          "an ordinary multi-channel deployment scored %u", spread.score);
+    CHECK((spread.families & PT_FAM_BEHAVIOUR) == 0,
+          "the behaviour family fired on a band plan");
+
+    /* AND IT STILL FIRES WHEN IT MEANS SOMETHING. Put the siblings together
+     * and leave one radio off on its own: now "alone on this channel"
+     * distinguishes that radio from the rest, which is the whole point. */
+    pc_ap_t b[6];
+    for (unsigned i = 0; i < 5u; i++) {
+        b[i] = twin_member((uint8_t)(0x30 + i), 36, -60);
+    }
+    b[5] = twin_member(0x35, 149, -60);
+    /* The suspect is chosen BEFORE its behaviour is measured, deliberately -
+     * so the isolated radio has to be the one picked, or the signal is being
+     * asked about somebody else. A software address is what picks it, and it
+     * leaves every posture identical so only the channel differs. */
+    b[5].bssid[0] = 0x02;
+    pt_evaluate(b, 6u, NULL, &ctx, &shared);
+
+    CHECK(shared.c_behaviour > 0,
+          "a radio alone among siblings that share a channel is still noticed");
+}
+
 void test_twin(void)
 {
+    test_twin_a_signal_true_of_everyone_scores_nothing();
     banner("twin: rogue access point detection");
     pt_context_t ctx = { .dwell_permil = 1000 };
     pt_verdict_t v;
@@ -319,8 +377,12 @@ void test_twin(void)
     /* Odd, but not asking for less: identity and behaviour alone must not
      * raise an alarm however strong they get. */
     pc_ap_t odd[4];
+    /* Two siblings share channel 1. That matters: "alone on this channel" is
+     * only evidence when somebody in the group is NOT alone on theirs - on a
+     * group where every member has its own channel it is true of whoever was
+     * picked as suspect, by construction, and says nothing about them. */
     odd[0] = twin_member(0x10, 1, -60);
-    odd[1] = twin_member(0x11, 6, -65);
+    odd[1] = twin_member(0x11, 1, -65);
     odd[2] = twin_member(0x12, 11, -70);
     odd[3] = ap_wpa3();                 /* identical posture to the others */
     odd[3].bssid[0] = 0x02;             /* but a software address ...      */

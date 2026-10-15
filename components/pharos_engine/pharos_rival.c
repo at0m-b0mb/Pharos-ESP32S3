@@ -1279,8 +1279,26 @@ void prv_evaluate(const prv_state_t *s, uint64_t now_us, prv_verdict_t *out)
             }
             /* Several names from one radio is the second half of the same
              * observation, and it is what separates a rotation flood from a
-             * single device that merely re-randomises often. */
-            if (s->coh_n_names >= PRV_COHERE_NAMES) {
+             * single device that merely re-randomises often.
+             *
+             * THE WINDOWED COUNT, NOT THE RAW TABLE - and this one is
+             * defensive rather than a bug that was reaching anybody.
+             *
+             * The name table is a six-second window compacted only on the
+             * write path, which is what the note twenty lines above warns
+             * about. But cohere_expire() runs at the TOP of cohere_note(),
+             * for every advertisement, so the raw count only goes stale when
+             * BLE falls completely silent - and then the enclosing COHERENT
+             * branch does not run either, because its address count is
+             * windowed on read. I could not construct an input where the two
+             * counts differ here.
+             *
+             * It is still worth using the windowed one. out->cohere_names is
+             * cohere_live_names(s, now_us) from a few statements earlier, so
+             * this makes the note and the number printed beside it
+             * structurally incapable of disagreeing, and it removes a trap
+             * for whoever next changes when cohere_note() is called. */
+            if (out->cohere_names >= PRV_COHERE_NAMES) {
                 out->notes |= PRV_NOTE_MANY_NAMES;
                 if (score < 74u) {
                     score = 74u;

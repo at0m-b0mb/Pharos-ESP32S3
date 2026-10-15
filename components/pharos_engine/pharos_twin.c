@@ -246,13 +246,32 @@ void pt_evaluate(const pc_ap_t *aps, unsigned n, const pt_profile_t *profile,
     const int8_t med = median_rssi(aps, n);
     uint32_t behaviour = 0;
 
-    /* Alone on a channel none of its siblings use. */
+    /* Alone on a channel none of its siblings use.
+     *
+     * A SIGNAL TRUE OF EVERYBODY IS EVIDENCE ABOUT NOBODY. On a group where
+     * every member sits on its own channel - which is the ordinary 5 and 6
+     * GHz plan, and exactly the case the note above the suspect choice
+     * warns about - "alone on this channel" is true of whoever was picked,
+     * by construction. It scored twelve points for a fact about the band
+     * plan rather than about the device, so a normal multi-channel
+     * deployment carried a standing twin suspicion.
+     *
+     * So somebody in the group has to actually share a channel with somebody
+     * before being alone on one means anything. That is the same guard shape
+     * the identity and clock signals already use: best_oui_count > 1 above,
+     * and a minimum of two measured members below. */
     if (n > 2) {
         unsigned same_channel = 0;
-        for (unsigned j = 0; j < n; j++) {
-            if (aps[j].channel == aps[suspect].channel) same_channel++;
+        unsigned most_shared = 0;
+        for (unsigned i = 0; i < n; i++) {
+            unsigned c = 0;
+            for (unsigned j = 0; j < n; j++) {
+                if (aps[j].channel == aps[i].channel) c++;
+            }
+            if (c > most_shared) { most_shared = c; }
+            if (i == suspect) { same_channel = c; }
         }
-        if (same_channel == 1) {
+        if (same_channel == 1 && most_shared > 1) {
             behaviour += 12;
         }
     }
