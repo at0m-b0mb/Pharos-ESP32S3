@@ -22,3 +22,9 @@ compile_commands.json
 # Renderer binary (the PNGs it writes are committed)
 /tools/render/pharos_render
 /tools/render/*.dSYM/
+
+# Python bytecode from the host-side tools. tools/screen/grab.py is imported
+# as a module by sweep.py, so running the sweep leaves a __pycache__ behind -
+# and one of those was committed.
+__pycache__/
+*.py[cod]
