@@ -87,6 +87,9 @@ jobs:
       - name: Audit source wiring (firmware and host builds agree)
         run: ./tools/check_sources.sh
 
+      - name: Bitmask constants own their bits
+        run: python3 ./tools/check_bits.py
+
   firmware:
     name: esp-idf build (${{ matrix.idf }})
     runs-on: ubuntu-latest

@@ -110,6 +110,19 @@ typedef enum {
 #define PV_NOTE_KNOWN     (1u << 3) /* something matched your own list  */
 #define PV_NOTE_FLIPPER   (1u << 4) /* a Flipper Zero is in the room    */
 #define PV_NOTE_SERIAL    (1u << 5) /* a bare serial bridge is present  */
+/* ONE BIT PER NOTE, AND THEY LIVE TOGETHER.
+ *
+ * This was appended twenty lines below, after the PV_BREDR_BLIND discussion,
+ * and reused bit 4 - the one PV_NOTE_FLIPPER already holds. Nothing misreported
+ * on the glass only because the engine never sets PV_NOTE_FLIPPER yet, though
+ * pv_classify() already recognises a Flipper: the moment that note is wired up,
+ * "too little time to judge" would also have announced a Flipper in the room.
+ * The console already exports `notes` as a raw word, where bit 4 cannot be
+ * decoded either way.
+ *
+ * Keep every note in this block so the next one added is placed against a
+ * visible list. test_style asserts the bits stay distinct, for every engine. */
+#define PV_NOTE_SHORT     (1u << 6) /* too little time to judge         */
 
 /* WHAT THIS RADIO CANNOT SEE, STATED IN THE HEADER SO NOBODY HAS TO GUESS.
  *
@@ -129,7 +142,6 @@ typedef enum {
  * speaker as a card skimmer would be the single most damaging false positive
  * this project could produce. */
 #define PV_BREDR_BLIND 1
-#define PV_NOTE_SHORT     (1u << 4) /* too little time to judge         */
 
 typedef struct {
     uint8_t addr[6];
