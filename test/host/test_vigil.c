@@ -513,8 +513,65 @@ static void test_vigil_short_findmy_is_not_separated(void)
           pv_kind_name(pv_classify(near, sizeof(near))));
 }
 
+/* A TAG THAT ARRIVES IN A CROWDED ROOM MUST STILL COUNT ITS PLACES.
+ *
+ * When the tag table is full, a new arrival may evict the least evidential
+ * entry. That branch duplicated the tail's work and returned - and the one
+ * thing it did not duplicate was recording the locale. So a tag admitted by
+ * eviction started with no locale bit at all.
+ *
+ * n_locales is the evidence that separates being FOLLOWED from being near,
+ * so a tracker that first appeared in a busy room needed one more place than
+ * one that appeared in an empty room before it could be reported. The room
+ * being crowded is not a fact about the tracker. */
+static void test_vigil_an_evicted_entry_still_counts_its_locale(void)
+{
+    banner("vigil: a tag admitted by eviction records the place it arrived");
+
+    pv_state_t s;
+    pv_reset(&s);
+    pv_set_moved(&s, true);
+    pv_observe_locale(&s, 0x0F0F0F0Fu, 1000ull);
+
+    /* Fill the table with single-sighting tags, which are the least
+     * evidential and therefore the ones eviction takes. */
+    const uint8_t len = mk_findmy(false);
+    for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+        see(&s, (uint8_t)(0x40 + i), len, 2000ull + i);
+    }
+
+    /* One more arrival, in this same place. It must be admitted AND must
+     * record that it was heard here. */
+    see(&s, 0xC1, len, 9000ull);
+
+    bool found = false;
+    for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+        if (!s.tags[i].in_use) { continue; }
+        if (s.tags[i].addr[5] != 0xC1) { continue; }
+        found = true;
+        CHECK(s.tags[i].n_locales >= 1u,
+              "a tag admitted by eviction recorded %u locales",
+              s.tags[i].n_locales);
+    }
+    CHECK(found, "the evicting arrival was admitted");
+
+    /* AND IT ACCRUES FROM THERE like any other tag: a second place is a
+     * second place, which is what the following verdict is built on. */
+    pv_observe_locale(&s, 0xF0F0F0F0u, 20000000ull);
+    see(&s, 0xC1, len, 21000000ull);
+    for (unsigned i = 0; i < PV_MAX_TAGS; i++) {
+        if (s.tags[i].in_use && s.tags[i].addr[5] == 0xC1) {
+            CHECK(s.tags[i].n_locales >= 2u,
+                  "it should have two places now, has %u",
+                  s.tags[i].n_locales);
+        }
+    }
+}
+
+
 void test_vigil(void)
 {
+    test_vigil_an_evicted_entry_still_counts_its_locale();
     test_vigil_a_recognised_decoy_cannot_hide_a_tracker();
     test_vigil_short_findmy_is_not_separated();
     test_vigil_table_keeps_the_evidence();

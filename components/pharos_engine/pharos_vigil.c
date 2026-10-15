@@ -431,6 +431,15 @@ void pv_observe_adv(pv_state_t *s, const uint8_t addr[6], uint8_t addr_type,
                  * has followed you across two places is not. */
                 return;
             }
+            /* FALL THROUGH TO THE SHARED TAIL RATHER THAN DUPLICATING IT.
+             *
+             * This branch used to repeat the tail's work and return, and the
+             * one thing it did not repeat was recording the locale. So a tag
+             * that entered the table by eviction started life with no locale
+             * bit at all - and n_locales is the evidence that distinguishes
+             * being FOLLOWED from merely being near. A tracker that arrived
+             * in a crowded room therefore needed one more place than one that
+             * arrived in an empty one before it could be reported. */
             tag = &s->tags[worst];
             memset(tag, 0, sizeof(*tag));
             memcpy(tag->addr, addr, 6);
@@ -438,18 +447,15 @@ void pv_observe_adv(pv_state_t *s, const uint8_t addr[6], uint8_t addr_type,
             tag->in_use = true;
             tag->first_us = t_us;
             tag->best_rssi = rssi;
-            tag->kind = kind;
-            tag->sightings++;
-            tag->last_us = t_us;
-            return;
+        } else {
+            tag = &s->tags[s->n++];
+            memset(tag, 0, sizeof(*tag));
+            memcpy(tag->addr, addr, 6);
+            tag->addr_type = addr_type;
+            tag->in_use = true;
+            tag->first_us = t_us;
+            tag->best_rssi = rssi;
         }
-        tag = &s->tags[s->n++];
-        memset(tag, 0, sizeof(*tag));
-        memcpy(tag->addr, addr, 6);
-        tag->addr_type = addr_type;
-        tag->in_use = true;
-        tag->first_us = t_us;
-        tag->best_rssi = rssi;
     }
     /* A tag that ever advertises as separated is remembered that way: that is
      * the state we care about, and it should not be masked by a later frame. */
