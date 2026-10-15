@@ -655,11 +655,38 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
     s.camped = (plan->n_channels == 1);
     s.running = true;
 
+    /* EVERY ONE OF THESE IS CHECKED, AND THE REASON IS THE WORST FAILURE THIS
+     * FIRMWARE CAN HAVE.
+     *
+     * None of them used to be. If the driver would not initialise, every
+     * later call failed too, the promiscuous callback was never registered -
+     * and rx_start still returned true. The lens' on_start returned true,
+     * pharos_lens_activate() succeeded, and the device sat there publishing
+     * QUIET, NO TARGET, nothing-seen, for ever, on a radio that was not
+     * listening.
+     *
+     * A detector that reports "nothing" while deaf is worse than one that
+     * crashes: the operator reads a clean screen and believes the air is
+     * clear. Refusing to start is a statement; silently not listening is
+     * not. */
+    esp_err_t err;
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&cfg);
+    err = esp_wifi_init(&cfg);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
     /* STA + NULL only. The fence traps AP modes; we never ask for one. */
-    esp_wifi_set_mode(WIFI_MODE_NULL);
-    esp_wifi_start();
+    err = esp_wifi_set_mode(WIFI_MODE_NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
+    err = esp_wifi_start();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
 
     wifi_promiscuous_filter_t filter = { 0 };
     filter.filter_mask = 0;
@@ -668,9 +695,23 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
     if (plan->want_ctrl) filter.filter_mask |= WIFI_PROMIS_FILTER_MASK_CTRL;
     if (plan->want_fcsfail) filter.filter_mask |= WIFI_PROMIS_FILTER_MASK_FCSFAIL;
     if (filter.filter_mask == 0) filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
-    esp_wifi_set_promiscuous_filter(&filter);
-    esp_wifi_set_promiscuous_rx_cb(&promisc_cb);
-    esp_wifi_set_promiscuous(true);
+    err = esp_wifi_set_promiscuous_filter(&filter);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "promiscuous filter refused: %s", esp_err_to_name(err));
+        goto fail;
+    }
+    /* The one that matters most: without the callback nothing is ever
+     * delivered, and every verdict afterwards is computed from no frames. */
+    err = esp_wifi_set_promiscuous_rx_cb(&promisc_cb);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "promiscuous callback refused: %s", esp_err_to_name(err));
+        goto fail;
+    }
+    err = esp_wifi_set_promiscuous(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "promiscuous mode refused: %s", esp_err_to_name(err));
+        goto fail;
+    }
 
     /* Marked alive HERE, not inside the task: the task may not be scheduled
      * before rx_start returns, and a stop in that window would tear the driver
@@ -689,6 +730,16 @@ bool pharos_radio_rx_start(const pharos_scan_plan_t *plan, pharos_bus_t *bus)
     ESP_LOGI(TAG, "rx started: %u channels, %u ms dwell, %s",
              plan->n_channels, plan->dwell_ms, s.camped ? "camped" : "hopping");
     return true;
+
+fail:
+    /* Leave nothing half-started: a later rx_start must find a clean driver,
+     * and the lens must see the failure rather than a running flag. */
+    s.running = false;
+    s_dwell_ready = false;
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    return false;
 }
 
 void pharos_radio_rx_stop(void)

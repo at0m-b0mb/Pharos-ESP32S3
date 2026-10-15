@@ -163,20 +163,45 @@ static void watch_event(const pharos_event_t *ev)
     }
 }
 
+/* RETUNING TEARS THE RECEIVER DOWN. IF IT DOES NOT COME BACK, SAY SO.
+ *
+ * Both of these stop the Wi-Fi driver and start it again with a different
+ * plan, and both used to throw away the result. When the restart failed the
+ * lens stayed live on a radio that was no longer listening: within one window
+ * the last frames rolled out and the face read QUIET - on the very channel
+ * the operator had just asked it to watch most closely.
+ *
+ * A lens that cannot hear must not report quiet. Falling back to the survey
+ * plan is the honest recovery, because it is the one that was working a
+ * moment ago; if even that will not start, the failure is logged and the
+ * caller is told, rather than the screen implying an empty channel. */
+static bool watch_retune(void)
+{
+    pharos_radio_rx_stop();
+    if (watch_start()) {
+        return true;
+    }
+    ESP_LOGE(TAG, "the receiver would not restart - falling back to survey");
+    s_camp_requested = false;
+    if (watch_start()) {
+        return true;
+    }
+    ESP_LOGE(TAG, "the receiver is down; this lens is not hearing anything");
+    return false;
+}
+
 /* Stop hopping and hold `channel`. Called only from the UI task. */
 static void watch_camp_on(uint8_t channel)
 {
     s_camp_requested = true;
     s_camp_channel = channel;
-    pharos_radio_rx_stop();
-    watch_start();
+    (void)watch_retune();
 }
 
 static void watch_survey_now(void)
 {
     s_camp_requested = false;
-    pharos_radio_rx_stop();
-    watch_start();
+    (void)watch_retune();
 }
 
 static void watch_tick(uint32_t dt_ms)

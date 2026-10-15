@@ -222,6 +222,23 @@ static bool ward_start(void)
     return pharos_radio_rx_start(&plan, &s_bus);
 }
 
+/* RETUNING TEARS THE RECEIVER DOWN. IF IT DOES NOT COME BACK, SAY SO.
+ *
+ * Ward retunes when it adopts a target and again when it releases one, and
+ * both sites threw the restart's result away. A lens guarding one network on
+ * a radio that stopped listening reads CLEAR for ever - which is the single
+ * most dangerous thing this screen can say, because the operator asked it to
+ * watch that network specifically. */
+static bool ward_retune(void)
+{
+    pharos_radio_rx_stop();
+    if (ward_start()) {
+        return true;
+    }
+    ESP_LOGE(TAG, "the receiver would not restart; Ward is not hearing anything");
+    return false;
+}
+
 static void ward_stop(void) { pharos_radio_rx_stop(); }
 
 /* Does this frame belong to the network under guard?
@@ -397,8 +414,7 @@ void pharos_lens_ward_guard(const uint8_t bssid[6], const char *ssid,
              s_target_ssid, (unsigned)channel);
 
     if (pharos_lens_active() && strcmp(pharos_lens_active()->id, "wifi.ward") == 0) {
-        pharos_radio_rx_stop();
-        ward_start();
+        (void)ward_retune();
     }
 }
 
@@ -529,8 +545,7 @@ static void ward_select(void)
         s_have_target = false;
         pw_reset(&s_engine);
         ESP_LOGI(TAG, "released; nothing under guard");
-        pharos_radio_rx_stop();
-        ward_start();
+        (void)ward_retune();
     } else {
         ward_adopt_strongest();
     }
