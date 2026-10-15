@@ -236,8 +236,90 @@ static void test_flood_unmeasured_window_is_not_a_rate(void)
           t.score, v.score);
 }
 
+/* THE SAME NAMES OVER A LONGER TIME ARE A LOWER RATE.
+ *
+ * distinct_created is a LIFETIME count - a new name increments it, nothing
+ * decays it, and eviction reclaims slots without touching it. The denominator
+ * used to be min(window_ms, span), so once the span grew past the caller's
+ * window the rate stopped falling: forty names appearing steadily over ten
+ * minutes were divided by twelve seconds.
+ *
+ * new_per_min_x10 is the number an operator reads when deciding whether a
+ * beacon flood is happening, so an ordinary street reported one. */
+static void test_flood_a_rate_falls_as_the_span_grows(void)
+{
+    banner("flood: the same names over a longer span are a lower rate");
+
+    const unsigned NAMES = 40u;
+    /* Three sessions, identical except for how far apart the names arrive. */
+    const uint64_t spacings[3] = { 250000ull, 1500000ull, 15000000ull };
+    uint16_t rate[3];
+    pf_band_t band[3];
+
+    for (unsigned s_i = 0; s_i < 3u; s_i++) {
+        pf_engine_t e;
+        pf_verdict_t v;
+        pf_reset(&e);
+        for (unsigned i = 0; i < NAMES; i++) {
+            uint8_t b[6];
+            real_bssid(b, i, 1);
+            char nm[24];
+            snprintf(nm, sizeof(nm), "Apartment_%02u", i);
+            const uint64_t t0 = spacings[s_i] * i;
+            pf_observe_ies(&e, b, nm, (uint8_t)strlen(nm), 14, t0);
+            /* It persists, the way a real access point does. */
+            for (unsigned k = 1; k <= 5u; k++) {
+                pf_observe_ies(&e, b, nm, (uint8_t)strlen(nm), 14,
+                               t0 + (uint64_t)k * 300000ull);
+            }
+        }
+        pf_context_t ctx = fctx(1000);
+        pf_evaluate(&e, &ctx, &v);
+        rate[s_i] = v.new_per_min_x10;
+        band[s_i] = v.band;
+    }
+
+    CHECK(rate[1] < rate[0],
+          "spreading the same %u names six times wider did not lower the rate "
+          "(%u.%u then %u.%u a minute)", NAMES,
+          rate[0] / 10u, rate[0] % 10u, rate[1] / 10u, rate[1] % 10u);
+    CHECK(rate[2] < rate[1],
+          "spreading them wider again did not lower it (%u.%u then %u.%u)",
+          rate[1] / 10u, rate[1] % 10u, rate[2] / 10u, rate[2] % 10u);
+
+    /* Forty persistent, real-vendor names over ten minutes is a block of
+     * flats, not somebody inventing networks. */
+    CHECK(band[2] <= PF_BAND_BUSY,
+          "%u names over ten minutes was called %s at %u.%u a minute",
+          NAMES, pf_band_name(band[2]), rate[2] / 10u, rate[2] % 10u);
+
+    /* AND A REAL FLOOD IS STILL A REAL FLOOD. The same count arriving inside
+     * a few seconds must still read as one - the fix must not simply make the
+     * engine quieter. */
+    {
+        pf_engine_t e;
+        pf_verdict_t v;
+        pf_reset(&e);
+        for (unsigned i = 0; i < NAMES; i++) {
+            uint8_t b[6];
+            real_bssid(b, i, 1);
+            char nm[24];
+            snprintf(nm, sizeof(nm), "FreeWiFi_%02u", i);
+            pf_observe_ies(&e, b, nm, (uint8_t)strlen(nm), 4, 100000ull * i);
+        }
+        pf_context_t ctx = fctx(1000);
+        pf_evaluate(&e, &ctx, &v);
+        CHECK(v.new_per_min_x10 > rate[2],
+          "a burst must read faster than the same names over ten minutes");
+        CHECK(v.band >= PF_BAND_SUSPICIOUS,
+              "%u names in four seconds is still a flood (got %s)", NAMES,
+              pf_band_name(v.band));
+    }
+}
+
 void test_flood(void)
 {
+    test_flood_a_rate_falls_as_the_span_grows();
     test_flood_unmeasured_window_is_not_a_rate();
     test_flood_beacon_poverty();
     test_flood_rate_needs_a_real_denominator();

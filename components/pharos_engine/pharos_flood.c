@@ -187,10 +187,27 @@ void pf_evaluate(const pf_engine_t *e, const pf_context_t *ctx, pf_verdict_t *ou
      * is what holds the score to 49 below. */
     const bool window_measured = ctx->window_ms != 0u;
     uint32_t elapsed_ms = window_measured ? ctx->window_ms : 10000u;
+    /* THE DENOMINATOR HAS TO COVER THE SAME PERIOD AS THE NUMERATOR.
+     *
+     * distinct_created is a LIFETIME count: a new name increments it and
+     * nothing ever decays it, and eviction reclaims table slots without
+     * touching it. So the time it must be divided by is the time over which
+     * those names appeared - the span from the first to the last - and not the
+     * caller's analysis window.
+     *
+     * This used to take the smaller of the two, which is right while the span
+     * is short and badly wrong once it is long: forty names appearing steadily
+     * over ten minutes were divided by a twelve-second window and reported as
+     * a flood on an ordinary street. The span may now govern whenever one
+     * exists, in both directions; window_ms is the fallback for when no span
+     * has been observed yet.
+     *
+     * The thin-sample floor immediately below is what still stops a short span
+     * inventing a rate, so nothing is lost at the other end. */
     if (e->last_us > e->first_us) {
         const uint64_t span = (e->last_us - e->first_us) / 1000ull;
-        if (span > 0 && span < elapsed_ms) {
-            elapsed_ms = (uint32_t)span;
+        if (span > 0) {
+            elapsed_ms = (span > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)span;
         }
     }
     /* A RATE NEEDS A REAL DENOMINATOR.
