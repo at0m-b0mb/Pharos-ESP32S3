@@ -35,3 +35,8 @@ __pycache__/
 /test/fuzz/fuzz
 /test/fuzz/fuzz_state
 /test/fuzz/*.dSYM/
+
+# Session scratch from the agent harness - worktrees, transcripts, scripts.
+# `git add -A` swept twelve of these into a commit once; they are embedded git
+# repositories, so they land as bare gitlinks that clone to nothing.
+/.claude/
