@@ -126,7 +126,7 @@ static void harvest_tick(uint32_t dt_ms)
         .yield_permil = pharos_bus_yield_permil(&s_bus),
         .mfp_required = false, /* the engine also learns this from the air */
     };
-    ph_settle(&s_engine);
+    ph_settle(&s_engine, (uint64_t)esp_timer_get_time());
     ph_evaluate(&s_engine, &ctx, &s_verdict);
 
     if (s_verdict.band != s_last_band) {

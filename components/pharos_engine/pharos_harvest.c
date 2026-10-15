@@ -183,7 +183,7 @@ static bool heard_has(const ph_state_t *s, const uint8_t mac[6])
     return false;
 }
 
-void ph_settle(ph_state_t *s)
+void ph_settle(ph_state_t *s, uint64_t now_us)
 {
     if (!s) {
         return;
@@ -191,6 +191,22 @@ void ph_settle(ph_state_t *s)
     for (unsigned i = 0; i < s->n; i++) {
         ph_pair_t *q = &s->pairs[i];
         if (!q->in_use || !q->m1_pending_pmkid) {
+            continue;
+        }
+        /* TOO SOON TO CALL IT UNANSWERED.
+         *
+         * The lens settles on every tick - twenty times a second - and this
+         * retired the latch on the first one, so a message 2 arriving twenty
+         * milliseconds later found nothing left to complete. An ordinary roam
+         * on an ordinary WPA2 network was therefore billed as a PMKID orphan,
+         * which is the evidence this lens offers that somebody is collecting
+         * credentials to crack offline. Nothing decrements it afterwards.
+         *
+         * A solicitation is only unanswered once a client has had time to
+         * answer. The pair has always recorded when the message 1 arrived;
+         * nothing read it until now. */
+        if (now_us < q->last_m1_us ||
+            (now_us - q->last_m1_us) < PH_PMKID_GRACE_US) {
             continue;
         }
         q->m1_pending_pmkid = false;

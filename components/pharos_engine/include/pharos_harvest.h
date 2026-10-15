@@ -58,6 +58,21 @@ extern "C" {
  * cover a normal client's reconnect and little else. */
 #define PH_FORCE_WINDOW_US 3000000ull /* 3 s */
 
+/* HOW LONG A PMKID SOLICITATION MAY GO UNANSWERED BEFORE IT IS ORPHANED.
+ *
+ * ph_settle() used to take no clock at all, so it could not tell a message 1
+ * that was two milliseconds old from one that was ten seconds old - and the
+ * lens calls it on every tick, twenty times a second. An ordinary client
+ * answers in tens of milliseconds, so every normal roam on a WPA2 network had
+ * its message 1 retired and billed as an orphan before its message 2 arrived.
+ * The orphan is the evidence of offline credential collection, so the lens was
+ * accusing ordinary clients of being attacked, at twenty opportunities a
+ * second.
+ *
+ * Two seconds is generous against a slow supplicant and still far shorter than
+ * any real collection attempt leaves a request outstanding. */
+#define PH_PMKID_GRACE_US 2000000ull /* 2 s */
+
 typedef enum {
     PH_BAND_QUIET = 0,      /*  0-19  nothing that looks like collection   */
     PH_BAND_HANDSHAKES,     /* 20-44  handshakes seen, all explainable     */
@@ -240,8 +255,13 @@ void ph_reset(ph_state_t *s);
 void ph_observe(ph_state_t *s, const pharos_ev_dot11_t *f, uint64_t t_us);
 
 /* A sweep ended without the outstanding PMKID request ever being answered.
- * Call before evaluating so an unfinished solicitation is counted as one. */
-void ph_settle(ph_state_t *s);
+ * Call before evaluating so an unfinished solicitation is counted as one.
+ *
+ * `now_us` is what makes "unanswered" mean anything: a solicitation younger
+ * than PH_PMKID_GRACE_US is left outstanding rather than orphaned, because the
+ * client has not had time to reply yet. Pass the same clock ph_observe() is
+ * given. */
+void ph_settle(ph_state_t *s, uint64_t now_us);
 
 void ph_evaluate(const ph_state_t *s, const ph_context_t *ctx, ph_verdict_t *out);
 

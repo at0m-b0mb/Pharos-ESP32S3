@@ -9,6 +9,13 @@
 #include "pharos_harvest.h"
 #include "test_support.h"
 
+/* ph_settle() now takes a clock, because "unanswered" is meaningless without
+ * one: a solicitation younger than PH_PMKID_GRACE_US has simply not been
+ * replied to YET. Every pre-existing call here means "the sweep ended", which
+ * is exactly what a stamp far past the grace window expresses. The cases that
+ * care about the timing say so with a real timestamp instead. */
+#define SWEEP_END 0x7FFFFFFFFFFFFFFFull
+
 /* ---- frame construction ---------------------------------------------- */
 
 static const uint8_t AP[6]  = { 0x02, 0xAA, 0xBB, 0x00, 0x00, 0x01 };
@@ -227,7 +234,7 @@ static void test_harvest_one_pmkid_is_a_tuesday(void)
 
     ph_observe(&s, ev_from_client(ap, cl), 1000);      /* audible client   */
     ph_observe(&s, ev_eapol(1, true, ap, cl), 2000);   /* one solicitation */
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
 
     ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
     ph_verdict_t v;
@@ -253,7 +260,7 @@ static void test_harvest_unheard_client_is_not_evidence(void)
     const uint8_t cl[6] = { 0xaa, 0xbb, 0xcc, 0x01, 0x02, 0x04 };
 
     ph_observe(&s, ev_eapol(1, true, ap, cl), 2000); /* nothing FROM cl */
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
 
     ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
     ph_verdict_t v;
@@ -277,7 +284,7 @@ static void test_harvest_repeated_pmkid_still_fires(void)
         ph_observe(&s, ev_from_client(ap, cl), 1000 + i);
         ph_observe(&s, ev_eapol(1, true, ap, cl), 2000 + i);
     }
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
 
     ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
     ph_verdict_t v;
@@ -457,7 +464,7 @@ static void test_harvest_one_radio_many_networks(void)
         const uint8_t ap[6] = { 0x10, 0x20, 0x30, 0x40, 0x50, (uint8_t)i };
         ph_observe(&s, ev_assoc(ap, collector), 1000000ull + i * 100000ull);
     }
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
 
     ph_context_t ctx = { .dwell_permil = 1000, .yield_permil = 1000 };
     ph_verdict_t v;
@@ -475,7 +482,7 @@ static void test_harvest_one_radio_many_networks(void)
         const uint8_t phone[6] = { 0xAA, 0xBB, 0xCC, 0x00, 0x00, (uint8_t)i };
         ph_observe(&cafe, ev_assoc(ap, phone), 1000000ull + i * 100000ull);
     }
-    ph_settle(&cafe);
+    ph_settle(&cafe, SWEEP_END);
     ph_verdict_t w;
     ph_evaluate(&cafe, &ctx, &w);
     CHECK(w.widest_reach <= 1u, "no phone reached more than one (%u)",
@@ -484,8 +491,85 @@ static void test_harvest_one_radio_many_networks(void)
           "(%u vs %u)", w.score, v.score);
 }
 
+/* THE LENS SETTLES TWENTY TIMES A SECOND.
+ *
+ * ph_settle() took no clock, so it could not tell a message 1 that was two
+ * milliseconds old from one that was ten seconds old - and it retired the
+ * pending latch and billed the orphan in the same breath. harvest_tick() calls
+ * it on every UI tick, so an ordinary roam had its solicitation retired before
+ * the client's message 2 could arrive twenty milliseconds later. Nothing
+ * decrements pmkid_orphan afterwards.
+ *
+ * A PMKID orphan is this lens' evidence that somebody solicited a key and
+ * never completed the handshake - the signature of offline credential
+ * collection. So the firmware accused ordinary clients on ordinary WPA2
+ * networks of being harvested, with twenty opportunities a second to do it. */
+static void test_harvest_a_tick_between_m1_and_m2_is_not_an_orphan(void)
+{
+    banner("harvest: settling between message 1 and 2 is not an orphan");
+
+    ph_state_t s;
+    ph_verdict_t v;
+    const ph_context_t camped = ctx_of(1000, false);
+
+    /* One phone roaming twice on a network with nobody attacking it. Each
+     * roam is association, message 1 with a PMKID, a tick, then message 2 and
+     * data - which is exactly how fast roaming works. */
+    ph_reset(&s);
+    for (unsigned i = 0; i < 2u; i++) {
+        const uint64_t base = 1000000ull + (uint64_t)i * 30000000ull;
+        ph_observe(&s, ev_assoc(AP, STA), base);
+        ph_observe(&s, ev_eapol(1, true, AP, STA), base + 100000ull);
+        /* The UI tick lands here, 50 ms later, as it does twenty times a
+         * second whether or not anything has happened. */
+        ph_settle(&s, base + 150000ull);
+        ph_observe(&s, ev_eapol(2, false, AP, STA), base + 200000ull);
+        ph_observe(&s, ev_from_client(AP, STA), base + 400000ull);
+        ph_settle(&s, base + 450000ull);
+    }
+    ph_evaluate(&s, &camped, &v);
+
+    CHECK_EQ(v.pmkid_orphans, 0);
+    CHECK((v.families & PH_FAM_PMKID) == 0,
+          "an answered PMKID must not raise the family");
+    CHECK(v.band < PH_BAND_SUSPECTED,
+          "two ordinary roams are not a harvester (got %s, score %u)",
+          ph_band_name(v.band), v.score);
+
+    /* AND THE DETECTION STILL WORKS. The grace window must not become a way
+     * to never be caught: a solicitation left outstanding past it is still
+     * orphaned, which is the whole point of the measure. */
+    ph_reset(&s);
+    for (unsigned i = 0; i < 2u; i++) {
+        const uint8_t cl[6] = { 0x0d, 0x0e, 0x0a, 0x0d, 0x00, (uint8_t)i };
+        const uint64_t base = 1000000ull + (uint64_t)i * 30000000ull;
+        ph_observe(&s, ev_from_client(AP, cl), base);
+        ph_observe(&s, ev_eapol(1, true, AP, cl), base + 100000ull);
+        /* Ticks during the grace change nothing... */
+        ph_settle(&s, base + 150000ull);
+        ph_settle(&s, base + 900000ull);
+        /* ...and once it has passed with no answer, it is an orphan. */
+        ph_settle(&s, base + 100000ull + PH_PMKID_GRACE_US + 1000ull);
+    }
+    ph_evaluate(&s, &camped, &v);
+    CHECK_EQ(v.pmkid_orphans, 2);
+    CHECK(v.families & PH_FAM_PMKID, "an unanswered PMKID is still caught");
+
+    /* A CLOCK THAT GOES BACKWARDS MUST NOT BILL EITHER. Three producers with
+     * their own clocks reach this engine; now_us earlier than the stamp would
+     * wrap the subtraction into an enormous age. */
+    ph_reset(&s);
+    ph_observe(&s, ev_from_client(AP, STA), 5000000ull);
+    ph_observe(&s, ev_eapol(1, true, AP, STA), 5100000ull);
+    ph_settle(&s, 1000ull);
+    ph_evaluate(&s, &camped, &v);
+    CHECK_EQ(v.pmkid_orphans, 0);
+}
+
+
 void test_harvest(void)
 {
+    test_harvest_a_tick_between_m1_and_m2_is_not_an_orphan();
     test_harvest_one_radio_many_networks();
     test_harvest_no_pmkid_offered_is_a_finding();
     test_harvest_touch_and_go();
@@ -517,7 +601,7 @@ void test_harvest(void)
         ph_observe(&s, ev_eapol(1, false, AP, sta), 1000000ull * (uint64_t)i);
         ph_observe(&s, ev_eapol(2, false, AP, sta), 1000000ull * (uint64_t)i + 20000ull);
     }
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
     ph_evaluate(&s, &camped, &v);
     CHECK_EQ(v.band, PH_BAND_HANDSHAKES);
     CHECK_EQ(v.forced_cycles, 0);
@@ -530,7 +614,7 @@ void test_harvest(void)
     ph_observe(&s, ev_deauth(STA, AP), 1000000ull);
     ph_observe(&s, ev_eapol(1, false, AP, STA), 1500000ull);
     ph_observe(&s, ev_eapol(2, false, AP, STA), 1520000ull);
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
     ph_evaluate(&s, &camped, &v);
     CHECK_EQ(v.forced_cycles, 1);
     CHECK(!(v.families & PH_FAM_FORCED), "a single cycle is not a family");
@@ -541,7 +625,7 @@ void test_harvest(void)
     ph_reset(&s);
     ph_observe(&s, ev_deauth(STA, AP), 1000000ull);
     ph_observe(&s, ev_eapol(1, false, AP, STA), 1000000ull + PH_FORCE_WINDOW_US + 1);
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
     ph_evaluate(&s, &camped, &v);
     CHECK_EQ(v.forced_cycles, 0);
 
@@ -553,7 +637,7 @@ void test_harvest(void)
         ph_observe(&s, ev_eapol(1, false, AP, STA), t + 400000ull);
         ph_observe(&s, ev_eapol(2, false, AP, STA), t + 420000ull);
     }
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
     ph_evaluate(&s, &camped, &v);
     CHECK_EQ(v.forced_cycles, 5);
     CHECK(v.families & PH_FAM_FORCED, "forced family raised");
@@ -573,7 +657,7 @@ void test_harvest(void)
             ph_observe(&s, ev_eapol(1, false, AP, sta), t + 300000ull);
         }
     }
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
     ph_evaluate(&s, &camped, &v);
     CHECK_EQ(v.victims, 4);
     CHECK(v.families & PH_FAM_BREADTH, "breadth family raised");
@@ -593,7 +677,7 @@ void test_harvest(void)
         ph_observe(&s, ev_from_client(AP, cl), 900000ull + i);
         ph_observe(&s, ev_eapol(1, true, AP, cl), 1000000ull + i);
     }
-    ph_settle(&s); /* the sweep ended; no message 2 ever came */
+    ph_settle(&s, SWEEP_END); /* the sweep ended; no message 2 ever came */
     ph_evaluate(&s, &camped, &v);
     CHECK_EQ(v.pmkid_orphans, 2);
     CHECK(v.families & PH_FAM_PMKID, "pmkid family raised");
@@ -605,7 +689,7 @@ void test_harvest(void)
     ph_reset(&s);
     ph_observe(&s, ev_eapol(1, true, AP, STA), 1000000ull);
     ph_observe(&s, ev_eapol(2, false, AP, STA), 1050000ull);
-    ph_settle(&s);
+    ph_settle(&s, SWEEP_END);
     ph_evaluate(&s, &camped, &v);
     CHECK_EQ(v.pmkid_orphans, 0);
     CHECK(!(v.families & PH_FAM_PMKID), "a completed PMKID is not an attack");
@@ -626,7 +710,7 @@ void test_harvest(void)
             ph_observe(&s, ev_eapol(1, false, AP, s1), t + 200000ull);
             ph_observe(&s, ev_eapol(1, false, AP, s2), t + 250000ull);
         }
-        ph_settle(&s);
+        ph_settle(&s, SWEEP_END);
         ph_evaluate(&s, &camped, &v);
         CHECK(v.forced_cycles >= 6, "broadcast disconnect arms both (%u)",
               v.forced_cycles);
@@ -645,7 +729,7 @@ void test_harvest(void)
             ph_observe(&s2, ev_deauth(STA, AP), t);
             ph_observe(&s2, ev_eapol(1, false, AP, STA), t + 400000ull);
         }
-        ph_settle(&s2);
+        ph_settle(&s2, SWEEP_END);
         ph_evaluate(&s2, &camped, &open_v);
         ph_evaluate(&s2, &mfp_ctx, &mfp_v);
         CHECK(mfp_v.score < open_v.score,
@@ -669,7 +753,7 @@ void test_harvest(void)
         ph_reset(&s3);
         for (int i = 0; i < 40; i++) {
             ph_observe(&s3, ev_eapol(1, true, AP, STA), 1000000ull * (uint64_t)i);
-            ph_settle(&s3);
+            ph_settle(&s3, SWEEP_END);
         }
         ph_evaluate(&s3, &camped, &v3);
         CHECK(v3.score <= 62, "one family alone is capped (got %u)", v3.score);
