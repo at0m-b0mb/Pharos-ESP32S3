@@ -35,6 +35,7 @@ void test_dial(void);
 
 /* Suites defined in test_privacy.c */
 void test_probe_classify(void);
+void test_probe_an_ambiguous_match_links_nobody(void);
 void test_probe_grading(void);
 void test_probe_link_needs_recency(void);
 void test_power(void);

@@ -190,6 +190,30 @@ int pp_observe(pp_engine_t *e, const pp_probe_t *p)
      * have seen, arriving on a sequence counter that carries on where the old
      * address left off. That is one device wearing a new name. */
     if (!dev && p->fingerprint) {
+        /* UNIQUENESS OR NOTHING.
+         *
+         * This took the FIRST candidate it met and stopped, so when two
+         * tracked devices both matched, the order the array happened to be
+         * filled in - which is arrival order, and arbitrary - decided which
+         * person the new address was joined to. Fingerprints are coarse
+         * (every phone of a given chipset shares one) and the sequence test
+         * accepts a 64-wide window, so two strangers in one room match far
+         * more often than the strength of the evidence suggests.
+         *
+         * A false link asserts that two people are one person. This lens'
+         * own header calls that "a worse error than missing a link and
+         * exactly the claim this lens exists to make carefully", and the
+         * sibling engine already implements the rule verbatim - see
+         * pharos_attrib.c: "Six devices at -45 dBm give six equally good
+         * answers, which is the same as none."
+         *
+         * So the whole table is scanned, and a link is claimed only when
+         * exactly one device matches. Two matches are two equally good
+         * answers, which is none: the address becomes its own device, and
+         * the operator is told the room was too ambiguous to link rather
+         * than handed a merge built out of a coincidence. */
+        pp_device_t *match = NULL;
+        unsigned hits = 0;
         for (unsigned i = 0; i < e->n_devices; i++) {
             pp_device_t *c = &e->devices[i];
             if (!c->in_use || c->fingerprint != p->fingerprint) {
@@ -203,11 +227,16 @@ int pp_observe(pp_engine_t *e, const pp_probe_t *p)
                 continue;
             }
             if (seq_continues(c->last_seq, p->seq)) {
-                dev = c;
-                dev->identities++;
-                memcpy(dev->addr, p->addr, 6);
-                break;
+                hits++;
+                match = c;
             }
+        }
+        if (hits == 1u && match) {
+            dev = match;
+            dev->identities++;
+            memcpy(dev->addr, p->addr, 6);
+        } else if (hits > 1u) {
+            e->ambiguous_links++;
         }
     }
 

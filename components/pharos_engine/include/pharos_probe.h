@@ -94,6 +94,11 @@ typedef enum {
 #define PP_NOTE_UNIQUE_NAME (1u << 2) /* a name unlikely to be shared        */
 #define PP_NOTE_THIN        (1u << 3) /* few probes: silence may be chance   */
 #define PP_NOTE_DIRECTED    (1u << 4) /* named networks, not wildcard probes */
+/* No PP_NOTE_AMBIGUOUS here on purpose. pp_grade_device() is handed a single
+ * device and cannot see the engine, so a note for it would be a constant
+ * nothing ever sets - which is how PV_NOTE_FLIPPER came to share a bit with
+ * another note and go unnoticed. The count lives on pp_engine_t instead,
+ * where the lens can read it. */
 
 /* One probe request, as handed over by the lens. */
 typedef struct {
@@ -126,6 +131,11 @@ typedef struct {
     unsigned n_devices;
     uint32_t probes_seen;
     uint32_t wildcards_seen;
+    /* How many times a new address matched MORE THAN ONE tracked device and
+     * was therefore left unlinked. Refusing to answer is a different
+     * statement from finding nothing, and this is what lets the lens say
+     * which one happened. */
+    uint32_t ambiguous_links;
 } pp_engine_t;
 
 typedef struct {

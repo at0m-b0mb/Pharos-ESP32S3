@@ -39,6 +39,92 @@ static void feed(pp_engine_t *e, const uint8_t *addr, const char *const *ssids,
     }
 }
 
+/* TWO STRANGERS MUST NOT BECOME ONE PERSON.
+ *
+ * The link search took the FIRST candidate it met and stopped, so when two
+ * tracked devices both matched, the order the array happened to be filled in
+ * - arrival order, and arbitrary - decided which person the new address was
+ * joined to.
+ *
+ * The evidence is coarser than it looks: a fingerprint is shared by every
+ * phone of a given chipset, and the sequence test accepts a wide window. Two
+ * strangers in one room match more often than the strength of that evidence
+ * suggests.
+ *
+ * A false link asserts that two people are one person. This lens' own header
+ * calls that "a worse error than missing a link and exactly the claim this
+ * lens exists to make carefully", and the sibling engine pharos_attrib
+ * already implements the rule: six equally good answers are the same as
+ * none. */
+void test_probe_an_ambiguous_match_links_nobody(void)
+{
+    banner("probe: a new address matching two devices is linked to neither");
+
+    const uint32_t FP = 0xB43Cu; /* one chipset, as every phone of it shares */
+
+    pp_engine_t e;
+    pp_reset(&e);
+
+    /* Device A speaks, then device B. B's counter starts BELOW A's last, so
+     * the two are correctly kept apart to begin with. */
+    static const uint8_t A[6] = { 0x02, 0xAA, 0xAA, 0xAA, 0xAA, 0x01 };
+    static const uint8_t B[6] = { 0x06, 0xBB, 0xBB, 0xBB, 0xBB, 0x02 };
+    for (unsigned i = 0; i < 4u; i++) {
+        pp_probe_t p = mk_probe(A, "NHS Guest", (uint16_t)(150 + i), FP,
+                                1000000ull + 100000ull * i);
+        pp_observe(&e, &p);
+    }
+    for (unsigned i = 0; i < 4u; i++) {
+        pp_probe_t p = mk_probe(B, "The Robinsons 5GHz", (uint16_t)(120 + i),
+                                FP, 2000000ull + 100000ull * i);
+        pp_observe(&e, &p);
+    }
+    CHECK_EQ(e.n_devices, 2);
+
+    /* Now a third address whose counter carries on from BOTH of them, well
+     * inside the link window. Two equally good answers. */
+    {
+        static const uint8_t C[6] = { 0x0a, 0xCC, 0xCC, 0xCC, 0xCC, 0x03 };
+        pp_probe_t p = mk_probe(C, "The Robinsons 5GHz", 160, FP, 2400000ull);
+        pp_observe(&e, &p);
+    }
+
+    CHECK_EQ(e.n_devices, 3);
+    CHECK(e.ambiguous_links >= 1u,
+          "the refusal to link is counted, not silent (%u)",
+          e.ambiguous_links);
+    for (unsigned i = 0; i < e.n_devices; i++) {
+        CHECK(e.devices[i].identities <= 1u,
+              "device %u was credited with %u identities from an ambiguous "
+              "match", i, e.devices[i].identities);
+    }
+
+    /* AND AN UNAMBIGUOUS LINK IS STILL MADE. Defeating randomisation when the
+     * evidence really does point at one device is the entire purpose of this
+     * lens - the fix must not simply make it stop answering. */
+    {
+        pp_engine_t u;
+        pp_reset(&u);
+        static const uint8_t D[6] = { 0x02, 0xDD, 0xDD, 0xDD, 0xDD, 0x04 };
+        static const uint8_t D2[6] = { 0x06, 0xEE, 0xEE, 0xEE, 0xEE, 0x05 };
+        for (unsigned i = 0; i < 4u; i++) {
+            pp_probe_t p = mk_probe(D, "Acme Corp Internal",
+                                    (uint16_t)(200 + i), FP,
+                                    1000000ull + 100000ull * i);
+            pp_observe(&u, &p);
+        }
+        pp_probe_t p = mk_probe(D2, "Acme Corp Internal", 206, FP, 1500000ull);
+        pp_observe(&u, &p);
+
+        CHECK_EQ(u.n_devices, 1);
+        CHECK(u.devices[0].identities >= 2u,
+              "one device wearing a second address is still linked (%u)",
+              u.devices[0].identities);
+        CHECK_EQ(u.ambiguous_links, 0);
+    }
+}
+
+
 void test_probe_classify(void)
 {
     banner("probe: what a network name gives away");

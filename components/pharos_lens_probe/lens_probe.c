@@ -126,6 +126,10 @@ bool pharos_lens_probe_report(char *buf, size_t cap, prt_redact_t redact, uint32
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
         prt_u32(&w, "probes_seen", s_engine.probes_seen);
         prt_u32(&w, "wildcards_seen", s_engine.wildcards_seen);
+        /* Addresses that matched several tracked devices and were therefore
+         * left unlinked. Declining to answer is a different statement from
+         * finding nothing, and this is the only place it is visible. */
+        prt_u32(&w, "ambiguous_links", s_engine.ambiguous_links);
         prt_arr_begin(&w, "devices");
         for (unsigned i = 0; i < s_engine.n_devices; i++) {
             pp_verdict_t v;

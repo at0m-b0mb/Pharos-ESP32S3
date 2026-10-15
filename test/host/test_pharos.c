@@ -492,6 +492,7 @@ int main(void)
     test_twin();
     test_report();
     test_dial();
+    test_probe_an_ambiguous_match_links_nobody();
     test_probe_classify();
     test_probe_grading();
     test_probe_link_needs_recency();
