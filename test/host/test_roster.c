@@ -471,9 +471,80 @@ static void test_roster_random_mac_has_no_vendor(void)
     CHECK(b->klass == RD_UNKNOWN, "nor a device class derived from one");
 }
 
+/* The same mistake, one radio over.
+ *
+ * The test above proves the 802.11 path. It cannot prove the Bluetooth one,
+ * because Bluetooth does not mark a privacy address with the bit that test
+ * sets. These addresses are built to the Bluetooth spec instead: the top two
+ * bits of the most significant octet are the address type (11 random static,
+ * 01 resolvable private), and the 46 bits below them are random - including
+ * the one the 802.11 test reads. */
+static void test_roster_ble_random_address_has_no_vendor(void)
+{
+    banner("roster: a BLE privacy address has no manufacturer either");
+
+    rd_roster_t r;
+    rd_reset(&r);
+
+    /* A RANDOM STATIC address (top bits 11) whose first three octets also
+     * happen to be Hikvision's OUI, with the 802.11 random bit clear. Every
+     * byte here is legal for a phone to emit. Read with the 802.11 rule this
+     * looks burned-in, so a phone hiding itself was published as a
+     * surveillance camera. */
+    const uint8_t rand_static[6] = { 0xE0, 0x50, 0x8B, 0x44, 0x55, 0x66 };
+    /* A RESOLVABLE PRIVATE address (top bits 01) colliding with Amazon. */
+    const uint8_t rand_rpa[6]    = { 0x44, 0x65, 0x0D, 0x77, 0x88, 0x99 };
+    /* And a genuine PUBLIC address: a real OUI, which must keep its vendor. */
+    const uint8_t public_[6]     = { 0x3C, 0x06, 0x30, 0xAA, 0xBB, 0xCC };
+
+    rd_observe_ble(&r, rand_static, true,  NULL, 0, NULL, 0, -50, T0);
+    rd_observe_ble(&r, rand_rpa,    true,  NULL, 0, NULL, 0, -55, T0);
+    rd_observe_ble(&r, public_,     false, NULL, 0, NULL, 0, -60, T0);
+
+    const rd_device_t *st = NULL, *rpa = NULL, *pub = NULL;
+    for (unsigned i = 0; i < r.n; i++) {
+        if (memcmp(r.dev[i].mac, rand_static, 6) == 0) st  = &r.dev[i];
+        if (memcmp(r.dev[i].mac, rand_rpa, 6)    == 0) rpa = &r.dev[i];
+        if (memcmp(r.dev[i].mac, public_, 6)     == 0) pub = &r.dev[i];
+    }
+    CHECK(st && rpa && pub, "all three addresses were admitted");
+    if (!st || !rpa || !pub) return;
+
+    CHECK(st->randomised_mac, "a random static address is known to be random");
+    CHECK(st->vendor == NULL, "and no vendor is read out of its random bytes");
+    CHECK(st->klass != RD_CAMERA, "nor is a phone published as a camera");
+    CHECK((st->exposure & RD_EXP_FIXED_MAC) == 0,
+          "and it is not called trackable");
+
+    CHECK(rpa->randomised_mac, "a resolvable private address likewise");
+    CHECK(rpa->vendor == NULL, "with no vendor invented for it");
+
+    /* THE OTHER DIRECTION MATTERS AS MUCH. Declining to guess must not turn
+     * into refusing to report what is actually known. */
+    CHECK(!pub->randomised_mac, "a public address is not called random");
+    CHECK(pub->vendor != NULL && strcmp(pub->vendor, "Apple") == 0,
+          "and keeps its real manufacturer, got '%s'",
+          pub->vendor ? pub->vendor : "(none)");
+    CHECK((pub->exposure & RD_EXP_FIXED_MAC) != 0,
+          "and IS reported as trackable, because it is");
+
+    /* A device already identified over Wi-Fi keeps what that sighting
+     * established: its vendor came from a real OUI, not from this address. */
+    rd_roster_t w;
+    rd_reset(&w);
+    const uint8_t dual[6] = { 0x3C, 0x06, 0x30, 0x01, 0x02, 0x03 };
+    const rd_secpost_t sw = sec_wpa2();
+    rd_observe_wifi(&w, dual, false, NULL, &sw, 6, -50, NULL, T0);
+    rd_observe_ble(&w, dual, true, NULL, 0, NULL, 0, -50, T0 + 1000ull);
+    rd_device_t dd;
+    CHECK(rd_at(&w, 0, &dd), "the dual-radio device is on the roster");
+    CHECK(dd.vendor != NULL, "a vendor proven over Wi-Fi is not discarded");
+}
+
 void test_roster(void)
 {
     test_roster_random_mac_has_no_vendor();
+    test_roster_ble_random_address_has_no_vendor();
     test_roster_streaming_shape();
     test_roster_export_carries_the_model();
     test_roster_tags_fit_the_row();

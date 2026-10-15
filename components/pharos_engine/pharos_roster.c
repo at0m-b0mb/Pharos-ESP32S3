@@ -126,10 +126,29 @@ rd_class_t rd_class_of_oui(const uint8_t mac[6])
 /* A locally-administered MAC (bit 1 of the first octet) is not a burned-in
  * hardware address - it is randomised, which modern phones do to resist
  * exactly this kind of tracking. Recognising it lets Roster say "this device
- * is protecting itself" rather than mistaking it for an unknown vendor. */
-static bool mac_is_random(const uint8_t mac[6])
+ * is protecting itself" rather than mistaking it for an unknown vendor.
+ *
+ * THIS TEST IS 802.11 ONLY. Bluetooth marks a privacy address differently -
+ * see rd_observe_ble, which knows the truth from the address type and
+ * corrects what this guessed. */
+static bool mac_is_random_dot11(const uint8_t mac[6])
 {
     return (mac[0] & 0x02) != 0;
+}
+
+/* Who made this device, decided from one fact: whether the address is the
+ * manufacturer's or the privacy layer's. Kept in one place because getting
+ * it wrong in either direction misreports the device - a random address
+ * given a vendor, or a real vendor thrown away. */
+static void resolve_identity(rd_device_t *d)
+{
+    if (!d->randomised_mac) {
+        d->vendor = rd_vendor(d->mac);
+        d->klass = rd_class_of_oui(d->mac);
+    } else {
+        d->vendor = NULL;
+        d->klass = RD_UNKNOWN;
+    }
 }
 
 void rd_reset(rd_roster_t *r)
@@ -176,7 +195,7 @@ static rd_device_t *admit(rd_roster_t *r, const uint8_t mac[6], uint64_t t_us)
     d->in_use = true;
     d->first_us = t_us;
     d->rssi = -128;
-    d->randomised_mac = mac_is_random(mac);
+    d->randomised_mac = mac_is_random_dot11(mac);
     /* A RANDOMISED ADDRESS HAS NO MANUFACTURER TO LOOK UP.
      *
      * The first three octets of a burned-in MAC are the OUI and identify who
@@ -194,13 +213,7 @@ static rd_device_t *admit(rd_roster_t *r, const uint8_t mac[6], uint64_t t_us)
      * Randomisation is not missing information. It IS the information: this
      * device is running a modern OS with privacy defaults on. That is worth
      * reporting, and it is worth more than a coincidence. */
-    if (!d->randomised_mac) {
-        d->vendor = rd_vendor(mac);
-        d->klass = rd_class_of_oui(mac);
-    } else {
-        d->vendor = NULL;
-        d->klass = RD_UNKNOWN;
-    }
+    resolve_identity(d);
     r->admitted++;
     return d;
 }
@@ -351,10 +364,36 @@ void rd_observe_ble(rd_roster_t *r, const uint8_t addr[6], bool addr_random,
     (void)svc_uuids16;
     (void)n_uuids;
     rd_device_t *d = admit(r, addr, t_us);
+    const bool known_on_wifi = (d->seen & RD_SEEN_WIFI) != 0;
     d->seen |= RD_SEEN_BLE;
     d->last_us = t_us;
     d->sightings++;
-    d->randomised_mac = addr_random;
+
+    /* THE 802.11 RANDOM-ADDRESS BIT MEANS NOTHING HERE.
+     *
+     * admit() has to guess from the address alone, and it guesses with the
+     * 802.11 locally-administered bit. Bluetooth does not use that bit:
+     * it marks a privacy address with the TOP TWO bits of the most
+     * significant octet (11 static, 01 resolvable, 00 non-resolvable), and
+     * the bit admit() read is simply one of the 46 random ones below them.
+     *
+     * So half of every privacy address on the air read as burned-in
+     * hardware, and admit() looked up a manufacturer in three random bytes
+     * - the exact mistake its own comment says must not happen. A phone
+     * hiding itself could be published as a named vendor and given that
+     * vendor's class, while the row next to it correctly declined to flag
+     * a fixed MAC. One device, two contradictory claims.
+     *
+     * The caller knows: NimBLE reports the address type. Where that
+     * disagrees with the guess, take the identity back. A device already
+     * heard on Wi-Fi keeps what that sighting established - its vendor came
+     * from a real OUI, not from this address. */
+    if (d->randomised_mac != addr_random) {
+        d->randomised_mac = addr_random;
+        if (!known_on_wifi) {
+            resolve_identity(d);
+        }
+    }
     if (rssi > d->rssi) {
         d->rssi = rssi;
     }
