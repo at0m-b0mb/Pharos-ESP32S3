@@ -682,15 +682,15 @@ const char *pv_kind_name(pv_kind_t k)
 {
     switch (k) {
     case PV_KIND_FINDMY:      return "Find My";
-    case PV_KIND_FINDMY_LOST: return "Find My (separated)";
+    case PV_KIND_FINDMY_LOST: return "Find My (lost)";
     case PV_KIND_TILE:        return "Tile";
     case PV_KIND_SMARTTAG:    return "SmartTag";
     case PV_KIND_CHIPOLO:     return "Chipolo";
     case PV_KIND_FINDMY_GOOGLE: return "Find My Device";
     case PV_KIND_PEBBLEBEE:   return "Pebblebee";
-    case PV_KIND_EDDYSTONE:   return "beacon (not a tracker)";
+    case PV_KIND_EDDYSTONE:   return "proximity beacon";
     case PV_KIND_FLIPPER:     return "Flipper Zero";
-    case PV_KIND_SERIAL:      return "BLE serial bridge";
+    case PV_KIND_SERIAL:      return "BLE serial link";
     case PV_KIND_GENERIC:     return "unnamed tracker";
     case PV_KIND_UNKNOWN:
     default:                  return "unknown";

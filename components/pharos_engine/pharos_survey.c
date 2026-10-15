@@ -278,7 +278,7 @@ bool psv_line(const psv_report_t *r, unsigned index, char *buf, unsigned cap)
             } else if (r->tools_present) {
                 snprintf(buf, cap, "%u pentest devices here", r->tools_present);
             } else if (r->tools == 1u) {
-                snprintf(buf, cap, "a pentest device was here");
+                snprintf(buf, cap, "pentest device was here");
             } else {
                 snprintf(buf, cap, "%u pentest seen earlier", r->tools);
             }

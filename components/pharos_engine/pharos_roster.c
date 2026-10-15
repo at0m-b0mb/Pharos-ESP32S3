@@ -74,9 +74,9 @@ static const oui_entry_t k_ouis[] = {
     { { 0xA0, 0x76, 0x4E }, "Espressif", RD_IOT },
     { { 0xB8, 0xD6, 0x1A }, "Espressif", RD_IOT },
     /* Raspberry Pi */
-    { { 0xB8, 0x27, 0xEB }, "Raspberry Pi", RD_COMPUTER },
-    { { 0xDC, 0xA6, 0x32 }, "Raspberry Pi", RD_COMPUTER },
-    { { 0xE4, 0x5F, 0x01 }, "Raspberry Pi", RD_COMPUTER },
+    { { 0xB8, 0x27, 0xEB }, "Raspberry", RD_COMPUTER },
+    { { 0xDC, 0xA6, 0x32 }, "Raspberry", RD_COMPUTER },
+    { { 0xE4, 0x5F, 0x01 }, "Raspberry", RD_COMPUTER },
     /* Intel / laptop NICs */
     { { 0x00, 0x1B, 0x77 }, "Intel", RD_COMPUTER },
     { { 0x34, 0x13, 0xE8 }, "Intel", RD_COMPUTER },
@@ -92,7 +92,7 @@ static const oui_entry_t k_ouis[] = {
     { { 0x9C, 0x3D, 0xCF }, "Netgear", RD_ROUTER },
     { { 0x2C, 0x30, 0x33 }, "Netgear", RD_ROUTER },
     { { 0xC0, 0x56, 0x27 }, "Belkin", RD_ROUTER },
-    { { 0x00, 0x18, 0x0A }, "Cisco Meraki", RD_ROUTER },
+    { { 0x00, 0x18, 0x0A }, "Meraki", RD_ROUTER },
     /* Cameras / doorbells */
     { { 0xD0, 0x3F, 0x27 }, "Wyze", RD_CAMERA },
     { { 0x2C, 0xAA, 0x8E }, "Wyze", RD_CAMERA },
@@ -102,7 +102,7 @@ static const oui_entry_t k_ouis[] = {
     { { 0x44, 0x19, 0xB6 }, "Hikvision", RD_CAMERA },
     { { 0xBC, 0xAD, 0x28 }, "Hikvision", RD_CAMERA },
     /* TV / media / speakers */
-    { { 0xB8, 0x27, 0xEB }, "Raspberry Pi", RD_COMPUTER }, /* dup ok, first wins */
+    { { 0xB8, 0x27, 0xEB }, "Raspberry", RD_COMPUTER }, /* dup ok, first wins */
     { { 0x00, 0x0E, 0x58 }, "Sonos", RD_TV_MEDIA },
     { { 0x94, 0x9F, 0x3E }, "Sonos", RD_TV_MEDIA },
     { { 0x00, 0x24, 0xE4 }, "Withings", RD_WEARABLE },
@@ -680,7 +680,7 @@ const char *rd_class_name(rd_class_t c)
     switch (c) {
     case RD_PHONE:        return "phone";
     case RD_COMPUTER:     return "computer";
-    case RD_ACCESS_POINT: return "access point";
+    case RD_ACCESS_POINT: return "access pt";
     case RD_ROUTER:       return "router";
     case RD_IOT:          return "IoT device";
     case RD_CAMERA:       return "camera";
@@ -775,37 +775,37 @@ const char *rd_exposure_headline(const rd_device_t *d)
 unsigned rd_class_cwes(rd_class_t c, const char **out, unsigned max)
 {
     static const char *cam[] = {
-        "CWE-798 hardcoded credentials",
-        "CWE-306 missing authentication",
+        "CWE-798 hardcoded creds",
+        "CWE-306 no auth at all",
         "CWE-259 default password",
         "CWE-79 web UI XSS",
     };
     static const char *iot[] = {
-        "CWE-798 hardcoded credentials",
-        "CWE-311 unencrypted transport",
-        "CWE-1188 insecure default config",
+        "CWE-798 hardcoded creds",
+        "CWE-311 cleartext link",
+        "CWE-1188 unsafe default",
     };
     static const char *rtr[] = {
-        "CWE-78 command injection in web UI",
-        "CWE-798 hardcoded credentials",
-        "CWE-306 unauthenticated admin",
+        "CWE-78 web UI cmd inject",
+        "CWE-798 hardcoded creds",
+        "CWE-306 open admin",
         "CWE-16 outdated firmware",
     };
     static const char *prn[] = {
-        "CWE-306 unauthenticated admin",
-        "CWE-200 stored-document exposure",
+        "CWE-306 open admin",
+        "CWE-200 stored docs leak",
     };
     static const char *media[] = {
-        "CWE-306 unauthenticated control API",
-        "CWE-319 cleartext streaming",
+        "CWE-306 open control API",
+        "CWE-319 cleartext video",
     };
     static const char *comp[] = {
-        "CWE-16 unpatched OS / services",
+        "CWE-16 unpatched OS",
         "CWE-522 weak credentials",
     };
     static const char *phone[] = {
         "CWE-16 outdated OS",
-        "CWE-200 name/location leakage",
+        "CWE-200 name + location",
     };
     const char **src = NULL;
     unsigned n = 0;

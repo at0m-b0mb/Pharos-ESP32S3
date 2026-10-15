@@ -21,6 +21,9 @@
 #include "pharos_lens.h"
 #include "pharos_probe.h"
 #include "pharos_watch.h"
+#include "pharos_rival.h"
+#include "pharos_vigil.h"
+#include "pharos_roster.h"
 #include "pharos_twin.h"
 #include "pharos_karma.h"
 #include "pharos_flood.h"
@@ -149,8 +152,91 @@ static void test_style_advice_fits_the_advice_page(void)
     }
 }
 
+/* THE WHOLE VOCABULARY, NOT THE ONE STRING SOMEBODY NOTICED.
+ *
+ * The block above checks Watch's forgery reasons against the why band, and
+ * states the principle: truncation is the right BEHAVIOUR for an unbounded
+ * string and the wrong OUTCOME for a fixed vocabulary somebody chose. That
+ * principle was being applied to exactly one table.
+ *
+ * A survey of every engine found seven more vocabularies with strings past
+ * the narrowest field they are drawn in, including every one of the eleven
+ * CWE references - and a CWE cut in half names a weakness the operator
+ * cannot look up, which is worse than printing nothing.
+ *
+ * The caps below are not invented here. Each is either measured from the
+ * layout, or is the precision the lens actually writes with, named at the
+ * file and line that imposes it. Where a lens had slack - Vigil was cutting
+ * at 13 in a row that holds 25 with a 9-character suffix - the precision was
+ * widened rather than the words being butchered. */
+static void test_style_every_vocabulary_fits_its_field(void)
+{
+    banner("style: every engine vocabulary fits the field it is drawn in");
+
+    /* The why band, measured. Shared by prv_kind_note and pw_forgery_name. */
+    const unsigned why_cap = ps_capacity(PS_TYPE_LABEL, PS_Y_WHY, PS_INNER_R);
+    /* A detail row's two columns, taken from the type. */
+    const size_t row_left  = sizeof(((struct pharos_lens_row *)0)->left) - 1u;
+    const size_t row_right = sizeof(((struct pharos_lens_row *)0)->right) - 1u;
+
+    CHECK(why_cap >= 20u, "the why band holds only %u characters", why_cap);
+    CHECK(row_left == 25u && row_right == 11u,
+          "the row columns are %u and %u", (unsigned)row_left,
+          (unsigned)row_right);
+
+    /* lens_roster.c: "%.11s" into right[12] - the "looks like" row. */
+    for (int c = 0; c < RD_CLASS_COUNT; c++) {
+        const char *n = rd_class_name((rd_class_t)c);
+        CHECK(n != NULL, "class %d has no name", c);
+        if (!n) continue;
+        CHECK(strlen(n) <= row_right,
+              "rd_class_name \"%s\" is %u, the column holds %u",
+              n, (unsigned)strlen(n), (unsigned)row_right);
+    }
+
+    /* lens_roster.c: "%.25s" into left[26] - the CWE checklist rows. */
+    for (int c = 0; c < RD_CLASS_COUNT; c++) {
+        const char *cwes[8];
+        const unsigned n = rd_class_cwes((rd_class_t)c, cwes,
+                                         sizeof(cwes) / sizeof(cwes[0]));
+        for (unsigned i = 0; i < n; i++) {
+            CHECK(cwes[i] != NULL, "class %d cwe %u is NULL", c, i);
+            if (!cwes[i]) continue;
+            CHECK(strlen(cwes[i]) <= row_left,
+                  "CWE line \"%s\" is %u, the row holds %u - a reference cut "
+                  "in half cannot be looked up",
+                  cwes[i], (unsigned)strlen(cwes[i]), (unsigned)row_left);
+        }
+    }
+
+    /* lens_vigil.c: "%.16s" plus a 9-character address suffix in left[26]. */
+    for (int k = 0; k < PV_KIND_COUNT; k++) {
+        const char *n = pv_kind_name((pv_kind_t)k);
+        CHECK(n != NULL, "vigil kind %d has no name", k);
+        if (!n) continue;
+        CHECK(strlen(n) <= 16u,
+              "pv_kind_name \"%s\" is %u, the slot holds 16",
+              n, (unsigned)strlen(n));
+    }
+
+    /* lens_rival.c: "%.13s %.11s" in left[26], and the why band. */
+    for (int k = 0; k < PRV_KIND_COUNT; k++) {
+        const char *n = prv_kind_name((prv_kind_t)k);
+        const char *w = prv_kind_note((prv_kind_t)k);
+        CHECK(n != NULL && w != NULL, "rival kind %d is missing a string", k);
+        if (!n || !w) continue;
+        CHECK(strlen(n) <= 13u,
+              "prv_kind_name \"%s\" is %u, the slot holds 13",
+              n, (unsigned)strlen(n));
+        CHECK(strlen(w) <= why_cap,
+              "prv_kind_note \"%s\" is %u, the why band holds %u",
+              w, (unsigned)strlen(w), why_cap);
+    }
+}
+
 void test_style(void)
 {
+    test_style_every_vocabulary_fits_its_field();
     test_style_advice_fits_the_advice_page();
     test_tone_limit_is_not_a_verdict();
     banner("style: the verdict palette is frozen");

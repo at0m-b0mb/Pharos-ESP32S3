@@ -556,7 +556,9 @@ static bool k_rival_row(unsigned index, struct pharos_lens_row *out)
      * Falls back to the address when nothing named itself, which for a passive
      * listener is most of the time. */
     if (d.name[0]) {
-        snprintf(out->left, sizeof(out->left), "%.12s %.11s",
+        /* 13 + 1 + 11 = 25, which is exactly what left[26] holds; the 12
+         * here left a character unused while cutting "serial bridge". */
+        snprintf(out->left, sizeof(out->left), "%.13s %.11s",
                  prv_kind_name(d.kind), d.name);
     } else {
         snprintf(out->left, sizeof(out->left), "%.15s %02x:%02x",

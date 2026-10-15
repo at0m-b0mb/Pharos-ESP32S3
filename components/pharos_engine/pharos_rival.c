@@ -1432,10 +1432,10 @@ const char *prv_kind_name(prv_kind_t k)
     case PRV_KIND_FLIPPER:       return "Flipper Zero";
     case PRV_KIND_PINEAPPLE:     return "rogue-AP box";
     case PRV_KIND_PWNAGOTCHI:    return "Pwnagotchi";
-    case PRV_KIND_DEAUTHER:      return "deauther board";
-    case PRV_KIND_SERIAL_BRIDGE: return "BLE serial bridge";
-    case PRV_KIND_IMPLANT:       return "cable/plug implant";
-    case PRV_KIND_ROGUE_AP:      return "open dev-board AP";
+    case PRV_KIND_DEAUTHER:      return "deauther";
+    case PRV_KIND_SERIAL_BRIDGE: return "serial bridge";
+    case PRV_KIND_IMPLANT:       return "cable implant";
+    case PRV_KIND_ROGUE_AP:      return "open dev AP";
     case PRV_KIND_DEV_BOARD:     return "dev board";
     case PRV_KIND_NONE:
     default:                     return "--";
@@ -1446,21 +1446,21 @@ const char *prv_kind_note(prv_kind_t k)
 {
     switch (k) {
     case PRV_KIND_FLIPPER:
-        return "Sub-GHz, NFC, IR - none of which this can hear";
+        return "Sub-GHz, NFC, IR unheard";
     case PRV_KIND_PINEAPPLE:
-        return "Purpose-built rogue access point";
+        return "purpose-built rogue AP";
     case PRV_KIND_PWNAGOTCHI:
-        return "Collects handshakes to crack later";
+        return "collects handshakes";
     case PRV_KIND_DEAUTHER:
-        return "Firmware named for the attack it performs";
+        return "named for its attack";
     case PRV_KIND_SERIAL_BRIDGE:
-        return "A radio on a serial port. Also in doorbells";
+        return "serial radio; doorbells";
     case PRV_KIND_IMPLANT:
-        return "A charging cable with a radio and a keyboard in it";
+        return "cable with a keyboard";
     case PRV_KIND_ROGUE_AP:
-        return "Open network from a dev board - a portal's shape";
+        return "dev board, portal shape";
     case PRV_KIND_DEV_BOARD:
-        return "A dev board. In a thousand innocent products";
+        return "a dev board, often fine";
     case PRV_KIND_NONE:
     default:
         return "";

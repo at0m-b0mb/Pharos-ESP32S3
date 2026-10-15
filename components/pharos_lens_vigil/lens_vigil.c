@@ -414,7 +414,13 @@ static bool k_vigil_row(unsigned index, struct pharos_lens_row *out)
     if (!pharos_lens_vigil_tag(index - 4u, &t, &mins)) {
         return false;
     }
-    snprintf(out->left, sizeof(out->left), "%.13s %02x:%02x:%02x",
+    /* 16, not 13. pharos_lens_row.left holds 25 characters and the address
+     * suffix costs 9, so sixteen were always available - the 13 was picked by
+     * hand and cut "BLE serial bridge" and "Find My (separated)" for no
+     * reason. The kinds that still do not fit at 16 were shortened instead,
+     * because a tracker's name mangled on an anti-stalking screen can read as
+     * a different device class entirely. */
+    snprintf(out->left, sizeof(out->left), "%.16s %02x:%02x:%02x",
              pv_kind_name(t.kind), t.addr[3], t.addr[4], t.addr[5]);
     if (t.n_locales >= 2) {
         /* The one fact that turns a neighbour into a follower. */
