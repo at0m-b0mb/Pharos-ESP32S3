@@ -35,6 +35,28 @@ static pharos_bus_t s_bus;
 EXT_RAM_BSS_ATTR static pw_engine_t s_engine;
 EXT_RAM_BSS_ATTR static pat_engine_t s_attrib;
 static pw_verdict_t s_verdict;
+/* THE ATTRIBUTION, EVALUATED ONCE PER TICK UNDER THE LOCK.
+ *
+ * The five case-file rows each used to call pat_evaluate() themselves, from
+ * the UI task, over a table the analytics task was writing with no lock on
+ * either side. Two faults followed.
+ *
+ * The torn read: both accumulators add to the sum BEFORE bumping the count,
+ * so a reader landing between the two statements divides a sum of N+1
+ * samples by N. pat_evaluate does that division twice, and the result is
+ * compared against PAT_RSSI_WINDOW, which is 4 dB - so the tear does not
+ * nudge the match, it moves radios cleanly in or out of it. With forged_n at
+ * 1 and a doubled sum, the mean of a -70 dBm attacker is -140, and
+ * (int8_t)(-140) is +116: the row printed "attacker level 116dBm", a level
+ * no receiver can observe.
+ *
+ * And five separate walks of a table being mutated between them meant rows
+ * 15 to 19 were not guaranteed to describe one verdict: one row could name a
+ * lead while the next printed "not heard".
+ *
+ * Both are fixed by evaluating once, under the lock, into this. on_tick and
+ * the rows both run on the UI task, so the rows may read it freely. */
+static pat_verdict_t s_attrib_verdict;
 static SemaphoreHandle_t s_lock;
 static bool s_camp_requested;
 static uint8_t s_camp_channel;
@@ -133,6 +155,14 @@ static void watch_event(const pharos_event_t *ev)
     if (!ev || ev->type != PHAROS_EV_DOT11) {
         return;
     }
+    /* THE ANALYTICS TASK WRITES; THE UI TASK READS. Without this the engines
+     * below were mutated on one core while being walked on the other. The
+     * wait is generous because the UI holds this only to evaluate, and
+     * dropping a frame here would lose evidence rather than merely delay
+     * it. */
+    if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return;
+    }
     pw_observe(&s_engine, &ev->u.dot11, ev->t_us);
 
     /* ATTRIBUTION RUNS ALONGSIDE, NOT INSIDE.
@@ -161,6 +191,7 @@ static void watch_event(const pharos_event_t *ev)
         pat_observe_forged(&s_attrib, d->rssi, d->seq, d->duration,
                            d->reason_or_status);
     }
+    xSemaphoreGive(s_lock);
 }
 
 /* RETUNING TEARS THE RECEIVER DOWN. IF IT DOES NOT COME BACK, SAY SO.
@@ -264,6 +295,8 @@ static void watch_tick(uint32_t dt_ms)
                  ctx.dwell_permil / 10, why ? why : "");
     }
     s_verdict = v;
+    /* Once, here, so every case-file row describes the same moment. */
+    pat_evaluate(&s_attrib, v.src, &s_attrib_verdict);
     const uint8_t pressure = v.channel;
     xSemaphoreGive(s_lock);
 
@@ -615,8 +648,7 @@ static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
 
     /* ---- who, and what were they running ---- */
     case 15: {
-        pat_verdict_t a;
-        pat_evaluate(&s_attrib, v.src, &a);
+        const pat_verdict_t a = s_attrib_verdict;
         snprintf(out->left, sizeof(out->left), "tool");
         snprintf(out->right, sizeof(out->right), "%s",
                  a.tool == PAT_TOOL_UNKNOWN ? "-" : pat_tool_name(a.tool));
@@ -626,8 +658,7 @@ static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
     }
 
     case 16: {
-        pat_verdict_t a;
-        pat_evaluate(&s_attrib, v.src, &a);
+        const pat_verdict_t a = s_attrib_verdict;
         snprintf(out->left, sizeof(out->left), "same radio as");
         if (a.have_lead) {
             snprintf(out->right, sizeof(out->right), "%02x:%02x:%02x",
@@ -658,8 +689,7 @@ static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
     }
 
     case 17: {
-        pat_verdict_t a;
-        pat_evaluate(&s_attrib, v.src, &a);
+        const pat_verdict_t a = s_attrib_verdict;
         snprintf(out->left, sizeof(out->left), "how sure of that");
         if (a.have_lead) {
             snprintf(out->right, sizeof(out->right), "%u%%", a.confidence);
@@ -671,8 +701,7 @@ static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
     }
 
     case 18: {
-        pat_verdict_t a;
-        pat_evaluate(&s_attrib, v.src, &a);
+        const pat_verdict_t a = s_attrib_verdict;
         snprintf(out->left, sizeof(out->left), "attacker level");
         if (a.forged_n_seen) {
             snprintf(out->right, sizeof(out->right), "%ddBm", a.forged_rssi);
@@ -687,8 +716,7 @@ static bool k_watch_row(unsigned index, struct pharos_lens_row *out)
     case 19: {
         /* The raw tell, so the operator can check the reasoning rather than
          * take "templated" on trust. */
-        pat_verdict_t a;
-        pat_evaluate(&s_attrib, v.src, &a);
+        const pat_verdict_t a = s_attrib_verdict;
         snprintf(out->left, sizeof(out->left), "duration field");
         if (a.forged_n_seen) {
             snprintf(out->right, sizeof(out->right), "%s0x%04x",
