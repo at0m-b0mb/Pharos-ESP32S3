@@ -270,7 +270,11 @@ enum {
 
 /* Four steps, not a slider: a round screen has no slider, and on an AMOLED the
  * difference between 100 and 90 is not worth a tap. */
-static const uint8_t k_bright_steps[] = { 100, 70, 40, 20 };
+/* 10% is here because an AMOLED at 20% is still bright in a dark room, and
+ * somebody working at night asked for lower. The panel is driven by a real
+ * backlight level, not a gamma curve, so 10 is genuinely dimmer and not a
+ * rounding of 20. */
+static const uint8_t k_bright_steps[] = { 100, 70, 40, 20, 10 };
 #define BRIGHT_N ((unsigned)(sizeof(k_bright_steps) / sizeof(k_bright_steps[0])))
 
 static const uint8_t k_vol_steps[] = { 25, 50, 75, 100 };
