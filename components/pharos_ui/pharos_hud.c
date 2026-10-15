@@ -1490,6 +1490,34 @@ static void split_two(const char *s, unsigned cap, char *a, unsigned an,
     while (cut > 0 && s[cut] != ' ') cut--;
     if (cut == 0) cut = cap; /* one very long word: hard-cut it */
 
+    /* BALANCE THE TWO LINES RATHER THAN FILLING THE FIRST.
+     *
+     * Starting at the cap and walking back to a space fills line one to the
+     * brim and leaves whatever remains on line two. A string one word past
+     * the cap therefore renders as a full line with a single orphaned word
+     * under it - Roster's "access point - tap for the" over "list". It fits,
+     * and it reads like the screen is broken.
+     *
+     * Breaking at the space nearest the middle gives both lines their share:
+     * "access point -" over "tap for the list". The greedy cut above stays as
+     * the fallback, because a string long enough that no balanced pair of
+     * halves fits still has to go somewhere, and so does one with no spaces
+     * at all. */
+    {
+        const unsigned mid = len / 2u;
+        unsigned best = 0;
+        unsigned best_d = (unsigned)-1;
+        for (unsigned i = 1; i < len; i++) {
+            if (s[i] != ' ') continue;
+            const unsigned first = i;             /* characters before it */
+            const unsigned second = len - i - 1u; /* characters after it  */
+            if (first > cap || second > cap) continue;
+            const unsigned d = (i > mid) ? (i - mid) : (mid - i);
+            if (d < best_d) { best_d = d; best = i; }
+        }
+        if (best) cut = best;
+    }
+
     unsigned na = cut < an - 1 ? cut : an - 1;
     memcpy(a, s, na); a[na] = '\0';
 
