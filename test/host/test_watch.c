@@ -910,8 +910,86 @@ static void test_watch_bip_broadcast_is_not_forgery(void)
           "a genuinely unprotected one still is");
 }
 
+/* A DETECTOR SOMEBODY ELSE CAN SWITCH OFF.
+ *
+ * The sequence-order test is the strongest accusation this lens makes, and it
+ * is gated on seq_plausible(), which refuses to conclude anything once the
+ * plausibility bound reaches 3000. The bound is four times seq_rate_peak,
+ * and seq_rate_peak was set outright by ONE sample - both halves of which
+ * (the counter advance and the interval) come from frames the sender emits,
+ * into an AP slot keyed on BSSID alone.
+ *
+ * So a forger wearing the victim's BSSID could advance the counter 400 steps
+ * across an ordinary 100 ms beacon gap, read as 4000 a second, pin the peak
+ * at its ceiling, and push the bound past the uninformative threshold. Both
+ * halves of the order test then go quiet. Two frames, and the detection is
+ * off.
+ *
+ * The rise is slew-limited now, so the peak reflects something sustained
+ * across many measured intervals rather than one chosen pair. */
+static void test_watch_two_frames_cannot_silence_the_order_test(void)
+{
+    banner("watch: two frames must not switch the order test off");
+
+    pw_engine_t e;
+    pw_verdict_t v;
+    const pw_context_t c = ctx_of(1000, 1000);
+
+    /* THE SUPPRESSION ATTEMPT.
+     *
+     * The inflation has to sit immediately before the forged frame, because
+     * the peak decays by an eighth on every slower sample - 4000 is back down
+     * to 18 after forty ordinary beacons. So the attacker interleaves: a pair
+     * claiming 4000 a second, then the forgery 250 ms later, over and over.
+     *
+     * 250 ms is the gap that turns the inflated peak into an unanswerable
+     * question. bound = peak x elapsed x 4, so 4000 a second across 250 ms
+     * gives 4096, past the 3000 at which seq_plausible() declines to
+     * conclude. At the 20 a second this access point really advances, the
+     * same gap gives 116. */
+    pw_reset(&e);
+    ap_t ap = mk_ap(0x17, -45, PHAROS_RSN_F_PRESENT, 400);
+    uint64_t t = T0;
+    for (int i = 0; i < 60; i++) {
+        ap.per_beacon = 400;              /* two frames claiming 4000/s */
+        beacon(&e, &ap, t, 0);            t += 100000ull;
+        beacon(&e, &ap, t, 0);            t += 250000ull;
+        spoofed_deauth(&e, &ap, BCAST, t, 7, (uint16_t)(50 + i), -68);
+        t += 250000ull;
+    }
+    pw_evaluate(&e, t + 100000ull, &c, &v);
+
+    CHECK(v.forgery & PW_FORGE_SEQ_ORDER,
+          "two frames silenced the order test (violations=%u)",
+          v.seq_violations);
+    CHECK(v.seq_violations >= 3,
+          "violations still counted (got %u)", v.seq_violations);
+
+    /* AND A GENUINELY BUSY ACCESS POINT STILL GETS ITS ALLOWANCE. The bound
+     * exists so a busy AP is not accused of forgery for carrying traffic -
+     * the slew limit must not take that away, only make it earned. A real AP
+     * advancing fast across MANY intervals must still end up with a high
+     * enough bound that its own large jumps are not violations. */
+    pw_engine_t busy;
+    pw_verdict_t bv;
+    pw_reset(&busy);
+    ap_t fast = mk_ap(0x18, -45, PHAROS_RSN_F_PRESENT, 300);
+    for (int i = 0; i < 40; i++) {
+        beacon(&busy, &fast, T0 + (uint64_t)i * 100000ull, 0);
+    }
+    /* Its own disconnect, its own counter, its own signal: nothing forged. */
+    genuine_deauth(&busy, &fast, BCAST, T0 + 4100000ull, 7);
+    pw_evaluate(&busy, T0 + 4200000ull, &c, &bv);
+
+    CHECK((bv.forgery & PW_FORGE_SEQ_ORDER) == 0,
+          "a busy access point was accused of forging its own frames "
+          "(violations=%u)", bv.seq_violations);
+}
+
+
 void test_watch(void)
 {
+    test_watch_two_frames_cannot_silence_the_order_test();
     test_watch_bip_broadcast_is_not_forgery();
     test_watch_ceiling();
     test_watch_quiet();

@@ -171,9 +171,31 @@ static void ap_note_seq_rate(pw_ap_t *ap, uint16_t new_seq, uint64_t t_us)
     /* Peak-hold with a slow decay. A peak rather than a mean because this feeds
      * an UPPER bound: an access point that was busy a moment ago can be busy
      * again, and a bound that tracked the mean would accuse it of forgery the
-     * next time it had traffic to carry. */
+     * next time it had traffic to carry.
+     *
+     * THE RISE IS SLEW-LIMITED, AND THAT IS A DETECTION-SUPPRESSION FIX.
+     *
+     * Both numbers here come from two frames the SENDER emits, and the AP slot
+     * is keyed on BSSID alone - so somebody wearing the victim's BSSID feeds
+     * this directly. A single pair let one sample set the peak outright:
+     * advancing the counter 400 steps across a 100 ms gap, an ordinary beacon
+     * interval, reads as 4000 a second and pins the peak at its ceiling.
+     *
+     * ap_seq_bound() multiplies that peak, and seq_plausible() REFUSES TO
+     * CONCLUDE ANYTHING once the bound reaches 3000 - which it then does after
+     * 182 ms. Both halves of the order test are gated on that call, so the
+     * strongest accusation this lens can make went silent, on demand, for the
+     * cost of two frames. A detector somebody else can switch off is worse
+     * than one that is merely wrong.
+     *
+     * Letting the peak rise by half again plus a floor means it reflects
+     * something sustained across many measured intervals instead of one chosen
+     * pair. A genuinely busy access point still gets there, over several
+     * samples; a forger cannot get there in two. The decay is untouched. */
     if (per_s > ap->seq_rate_peak) {
-        ap->seq_rate_peak = (uint16_t)per_s;
+        const uint32_t ceiling =
+            (uint32_t)ap->seq_rate_peak + (ap->seq_rate_peak / 2u) + 32u;
+        ap->seq_rate_peak = (uint16_t)(per_s < ceiling ? per_s : ceiling);
     } else {
         ap->seq_rate_peak = (uint16_t)(ap->seq_rate_peak - ap->seq_rate_peak / 8u);
     }
