@@ -427,4 +427,51 @@ void test_power(void)
         pharos_ev_ble_addr_set(back, mac);
         CHECK(memcmp(back, le, 6) == 0, "reversing twice must be the identity");
     }
+
+    banner("event: a name in somebody else's language must survive intact");
+    {
+        /* THE FIRST VERSION OF THIS FILTER KEPT ASCII AND NOTHING ELSE, which
+         * is a far worse bug than the one it fixed. Every byte of a UTF-8 name
+         * is >= 0x80, so three distinct Chinese SSIDs collapsed to the four
+         * bytes "WiFi" - byte-identical - and Census, which groups access
+         * points by exact name match and hands any group of two or more to the
+         * evil-twin scorer, named an innocent neighbour's router as an
+         * impersonator. A name with no ASCII at all came back EMPTY, which is
+         * this firmware's encoding of "hidden". */
+        char a[40], b[40], c[40];
+        /* "小明的WiFi", "张三的WiFi", "无线网络" as UTF-8 bytes. */
+        const uint8_t n1[] = { 0xE5,0xB0,0x8F,0xE6,0x98,0x8E,0xE7,0x9A,0x84,'W','i','F','i' };
+        const uint8_t n2[] = { 0xE5,0xBC,0xA0,0xE4,0xB8,0x89,0xE7,0x9A,0x84,'W','i','F','i' };
+        const uint8_t n3[] = { 0xE6,0x97,0xA0,0xE7,0xBA,0xBF,0xE7,0xBD,0x91,0xE7,0xBB,0x9C };
+
+        const unsigned la = pharos_copy_printable(a, sizeof a, n1, sizeof n1);
+        const unsigned lb = pharos_copy_printable(b, sizeof b, n2, sizeof n2);
+        const unsigned lc = pharos_copy_printable(c, sizeof c, n3, sizeof n3);
+
+        CHECK(la == sizeof n1, "a UTF-8 name lost bytes: %u of %u", la,
+              (unsigned)sizeof n1);
+        CHECK(lb == sizeof n2, "a UTF-8 name lost bytes: %u of %u", lb,
+              (unsigned)sizeof n2);
+
+        /* THE ONE THAT MATTERS: two different networks must stay different. */
+        CHECK(la != lb || memcmp(a, b, la) != 0,
+              "two distinct networks collapsed onto the same name");
+
+        /* And a name with no ASCII at all must not read as "hidden". */
+        CHECK(lc > 0, "an all-non-ASCII name came back empty, which means hidden");
+
+        /* Control bytes are still removed - that is what this is for. */
+        const uint8_t esc[] = { 'a', 0x1B, '[', '2', 'J', 'b' };
+        const unsigned le = pharos_copy_printable(a, sizeof a, esc, sizeof esc);
+        CHECK(memchr(a, 0x1B, le) == NULL, "an ESC byte survived the filter");
+        const uint8_t ctl[] = { 'x', 0x00, 0x07, 0x0A, 0x7F, 'y' };
+        const unsigned lk = pharos_copy_printable(a, sizeof a, ctl, sizeof ctl);
+        CHECK(lk == 2 && a[0] == 'x' && a[1] == 'y',
+              "control bytes were not all removed: got %u", lk);
+
+        /* Trailing padding is still trimmed. */
+        const uint8_t pad[] = { 'n', 'e', 't', ' ', ' ' };
+        CHECK(pharos_copy_printable(a, sizeof a, pad, sizeof pad) == 3,
+              "trailing spaces were not trimmed");
+    }
 }

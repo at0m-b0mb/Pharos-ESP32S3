@@ -185,23 +185,31 @@ typedef struct {
  *
  * An SSID is thirty-two bytes chosen entirely by whoever is transmitting, and
  * a BLE local name is chosen the same way. Both are drawn onto the glass, both
- * are printed to the serial console, and both go into reports.
+ * are printed to the serial console, and both go into reports. Raw, a control
+ * byte corrupts the console - and an ESC byte starts an ANSI escape sequence,
+ * which means a network name within radio range can move the operator's
+ * terminal cursor, recolour it, or clear it.
  *
- * Copied raw they do three things. A byte the font does not carry draws as an
- * empty box - "P4wnP1" appeared on the detail page as a box followed by its
- * name. Control bytes corrupt the console. And an ESC byte starts an ANSI
- * escape sequence, which means a network name within radio range can move the
- * operator's terminal cursor, recolour it, or clear it - the receive-only
- * device would be the delivery mechanism.
+ * SO IT DROPS CONTROL CHARACTERS, AND ONLY CONTROL CHARACTERS.
  *
- * pharos_wps.c has had this guard on vendor and model strings since it was
- * written. SSIDs and device names never got it; this is that same guard, in
- * one place, for everything that arrives as somebody else's text.
+ * The first version of this kept ASCII and nothing else, which was a far worse
+ * bug than the one it fixed. Every byte of a UTF-8 name is >= 0x80, so
+ * "小明的WiFi", "张三的WiFi" and "李四的WiFi" all collapsed to the four bytes
+ * "WiFi" - byte-identical. Census groups access points by exact name match and
+ * hands any group of two or more to the evil-twin scorer, so three unrelated
+ * neighbours became one name on three radios with different channels, signal
+ * levels and security, and the device named an innocent router as an
+ * impersonator and told the operator not to join it. A name with no ASCII at
+ * all came back EMPTY, which is this firmware's encoding of "hidden", so such
+ * networks vanished from Ward's adopt list entirely.
  *
- * Returns the number of characters written, which is NOT the same as the
- * number offered: a name made entirely of bytes we will not render comes back
- * empty, and a caller that says "hidden" for an empty SSID needs to be able to
- * tell that apart from a name it simply refused to draw. */
+ * An attacker picks those bytes, so they could manufacture a colliding group
+ * on purpose - and because the lens keeps only its highest-scoring group, a
+ * decoy could suppress a real evil twin.
+ *
+ * A high byte is somebody's language. The glass may not have a glyph for it
+ * and will draw a box, which is honest; silently merging distinct networks is
+ * not. Returns the number of bytes written. */
 static inline unsigned pharos_copy_printable(char *dst, unsigned cap,
                                              const uint8_t *src, unsigned len)
 {
@@ -212,9 +220,12 @@ static inline unsigned pharos_copy_printable(char *dst, unsigned cap,
     if (src) {
         for (unsigned i = 0; i < len && w + 1u < cap; i++) {
             const unsigned char c = src[i];
-            if (c >= 0x20u && c < 0x7Fu) {
-                dst[w++] = (char)c;
+            /* C0 controls, and DEL. Everything at or above 0x80 is kept: it is
+             * UTF-8, not a control code. */
+            if (c < 0x20u || c == 0x7Fu) {
+                continue;
             }
+            dst[w++] = (char)c;
         }
     }
     while (w && dst[w - 1] == ' ') {
