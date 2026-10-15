@@ -366,7 +366,7 @@ static const pharos_lens_t k_harvest = {
     .stage_report = k_harvest_stage,
     .display = k_harvest_display,
     .row = k_harvest_row,
-    .row_head_left = "HANDSHAKE FARMING",
+    .row_head_left = "HANDSHAKE HUNT",
     .row_head_right = "COUNT",
 };
 

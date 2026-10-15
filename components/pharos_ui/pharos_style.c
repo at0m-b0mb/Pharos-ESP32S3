@@ -39,7 +39,7 @@ ps_type_t ps_fit(unsigned chars, int16_t dy, int16_t r)
     return PS_TYPE_N;
 }
 
-unsigned ps_capacity(ps_type_t t, int16_t dy, int16_t r)
+unsigned ps_capacity_at(ps_type_t t, int16_t dx, int16_t dy, int16_t r)
 {
     if (t >= PS_TYPE_N) {
         return 0;
@@ -54,11 +54,23 @@ unsigned ps_capacity(ps_type_t t, int16_t dy, int16_t r)
     if (half <= 0) {
         return 0;
     }
+    /* A box centred off the axis reaches |dx| further on one side than the
+     * other, so the tight side is what it has to fit in. */
+    const int16_t ax = (dx < 0) ? (int16_t)(-dx) : dx;
+    if (half <= ax) {
+        return 0;
+    }
+    const int16_t avail = (int16_t)(half - ax);
     const int16_t cw = PS_EM_W(PS_TYPE_PX[t]);
     if (cw <= 0) {
         return 0;
     }
-    return (unsigned)((half * 2) / cw);
+    return (unsigned)((avail * 2) / cw);
+}
+
+unsigned ps_capacity(ps_type_t t, int16_t dy, int16_t r)
+{
+    return ps_capacity_at(t, 0, dy, r);
 }
 
 uint32_t ps_tint(uint32_t rgb, uint8_t pct)

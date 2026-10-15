@@ -168,7 +168,7 @@ static const pharos_lens_t k_survey = {
     .on_mount = survey_mount,
     .display = k_survey_display,
     .row = k_survey_row,
-    .row_head_left = "WHAT THIS PLACE IS LIKE",
+    .row_head_left = "WHAT IS HERE",
     .row_head_right = "",
 };
 

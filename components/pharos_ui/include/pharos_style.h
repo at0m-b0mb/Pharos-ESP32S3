@@ -113,6 +113,20 @@ int16_t ps_text_w(ps_type_t t, unsigned chars);
 ps_type_t ps_fit(unsigned chars, int16_t dy, int16_t r);
 
 /* How many characters fit at a step and offset. Use to truncate with care. */
+/* HOW MANY CHARACTERS FIT IN A BOX CENTRED AT (dx, dy) INSIDE RADIUS r.
+ *
+ * ps_capacity() below answers this for dx = 0, and answering it for dx = 0 is
+ * only right when the text IS on the vertical axis. The detail page's two
+ * column headers are drawn at -72 and +72, and were fitted against the on-axis
+ * chord: at dy = -164 that chord allows a string spanning -143..+143, which
+ * centred at -72 reaches -215 - a radius of 275 on a panel that stops at 224.
+ * Measured on the glass: "WHAT THIS PLACE IS LIKE" ran off the left edge on
+ * four different detail pages.
+ *
+ * A box at dx has only (half - |dx|) of room on its tight side, so that is
+ * what it gets. */
+unsigned ps_capacity_at(ps_type_t t, int16_t dx, int16_t dy, int16_t r);
+
 unsigned ps_capacity(ps_type_t t, int16_t dy, int16_t r);
 
 /* ---- the verdict palette --------------------------------------------

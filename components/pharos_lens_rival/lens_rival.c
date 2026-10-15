@@ -610,7 +610,7 @@ static const pharos_lens_t k_rival = {
     .ingest_aux = rival_ingest_ble,
     .display = k_rival_display,
     .row = k_rival_row,
-    .row_head_left = "HARDWARE IN RANGE",
+    .row_head_left = "HARDWARE NEARBY",
     .row_head_right = "SIGNAL",
 };
 

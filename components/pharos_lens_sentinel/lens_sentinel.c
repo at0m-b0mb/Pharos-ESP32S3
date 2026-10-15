@@ -391,7 +391,7 @@ static const pharos_lens_t k_sentinel = {
     .stage_report = k_sentinel_stage,
     .display = k_sentinel_display,
     .row = k_sentinel_row,
-    .row_head_left = "CHANGE SINCE BASELINE",
+    .row_head_left = "SINCE BASELINE",
     .row_head_right = "COUNT",
 };
 

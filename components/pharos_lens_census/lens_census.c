@@ -801,7 +801,7 @@ static const pharos_lens_t k_census = {
     .ingest = census_ingest,
     .display = k_census_display,
     .row = k_census_row,
-    .row_head_left = "NETWORK   CH  dBm",
+    .row_head_left = "NETWORK  CH dBm",
     .row_head_right = "GRADE",
     .row_expand = k_census_expand,
 };

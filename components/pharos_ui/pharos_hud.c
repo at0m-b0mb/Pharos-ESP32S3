@@ -260,6 +260,36 @@ static void set_text_fit(lv_obj_t *o, ps_type_t t, int16_t dy, const char *s)
     set_text_fit_r(o, t, dy, PR_SAFE_R, s);
 }
 
+/* FOR A LABEL THAT IS NOT ON THE VERTICAL AXIS.
+ *
+ * set_text_fit() measures the chord at dx = 0, which is the right question
+ * only for text centred on the axis. The detail page's column headers sit at
+ * -72 and +72 and were fitted with the on-axis version, so a header long
+ * enough to use its full allowance reached 72 px further left than the chord
+ * had room for and ran off the glass. See ps_capacity_at(). */
+static void set_text_fit_off(lv_obj_t *o, ps_type_t t, int16_t dx, int16_t dy,
+                             const char *s)
+{
+    if (!o) return;
+    if (!s || !*s) { set_text(o, ""); return; }
+
+    const unsigned cap = ps_capacity_at(t, dx, dy, PR_SAFE_R);
+    const unsigned len = (unsigned)strlen(s);
+    if (cap == 0u) { set_text(o, ""); return; }
+    if (len <= cap) { set_text(o, s); return; }
+
+    char buf[64];
+    unsigned n = cap < sizeof(buf) - 2u ? cap : (unsigned)sizeof(buf) - 2u;
+    /* TWO dots, not one: a single full stop at the end of a truncated header
+     * reads as the end of a sentence rather than as "there was more". */
+    if (n > 2u) n -= 2u;
+    memcpy(buf, s, n);
+    buf[n] = '.';
+    buf[n + 1u] = '.';
+    buf[n + 2u] = '\0';
+    set_text(o, buf);
+}
+
 static void set_fg(lv_obj_t *o, uint32_t rgb)
 {
     if (!o) return;
@@ -1678,8 +1708,9 @@ void pharos_hud_detail(const char *lens, const char *head_left,
     toast_tick();
 
     set_text_fit(s_d_title, PS_TYPE_LABEL, -196, lens);
-    set_text_fit(s_d_hl, PS_TYPE_MICRO, -164, head_left);
-    set_text_fit(s_d_hr, PS_TYPE_MICRO, -164, head_right);
+    /* Fitted where they are DRAWN, not where the axis is. */
+    set_text_fit_off(s_d_hl, PS_TYPE_MICRO, -72, -164, head_left);
+    set_text_fit_off(s_d_hr, PS_TYPE_MICRO,  72, -164, head_right);
 
     if (n > PHAROS_HUD_ROWS) n = PHAROS_HUD_ROWS;
     show(s_d_empty, n == 0);

@@ -482,4 +482,71 @@ void test_style(void)
                   page[used - 1u]);
         }
     }
+
+    banner("style: text that is not on the axis must be fitted where it sits");
+    {
+        /* THE DETAIL PAGE'S COLUMN HEADERS ARE DRAWN AT -72 AND +72.
+         *
+         * Fitted with the on-axis capacity, a header using its full allowance
+         * at dy=-164 spans -143..+143; centred at -72 that reaches -215, a
+         * radius of 275 on a panel that stops at 224. Measured on the glass:
+         * the left header ran off the edge on four different detail pages. */
+        const int16_t DY = -164, DX = -72;
+
+        const unsigned on_axis = ps_capacity(PS_TYPE_MICRO, DY, PR_SAFE_R);
+        const unsigned at_dx = ps_capacity_at(PS_TYPE_MICRO, DX, DY, PR_SAFE_R);
+        CHECK(at_dx < on_axis,
+              "an off-axis box must get LESS room than an on-axis one (%u vs %u)",
+              at_dx, on_axis);
+
+        /* The property that actually matters: a string of exactly the allowed
+         * length, centred at dx, keeps all four corners inside the glass. */
+        for (int16_t dx = -140; dx <= 140; dx = (int16_t)(dx + 20)) {
+            const unsigned cap = ps_capacity_at(PS_TYPE_MICRO, dx, DY, PR_SAFE_R);
+            if (cap == 0u) {
+                continue; /* refused outright, which is also safe */
+            }
+            const int16_t w = ps_text_w(PS_TYPE_MICRO, cap);
+            const int16_t h = PS_TYPE_PX[PS_TYPE_MICRO];
+            const int16_t x0 = (int16_t)(dx - w / 2), x1 = (int16_t)(dx + w / 2);
+            const int16_t y0 = (int16_t)(DY - h / 2), y1 = (int16_t)(DY + h / 2);
+            const int16_t cx[4] = { x0, x1, x0, x1 };
+            const int16_t cy[4] = { y0, y0, y1, y1 };
+            for (unsigned k = 0; k < 4u; k++) {
+                const long rr = (long)cx[k] * cx[k] + (long)cy[k] * cy[k];
+                CHECK(rr <= (long)PR_SAFE_R * PR_SAFE_R,
+                      "a full-width header at dx=%d escaped: corner r=%d",
+                      (int)dx, (int)(long)(rr > 0 ? (long)(rr) : 0) / 1000);
+            }
+        }
+
+        /* On the axis the two must agree exactly - this is a generalisation,
+         * not a replacement. */
+        for (int16_t dy = -200; dy <= 200; dy = (int16_t)(dy + 25)) {
+            CHECK(ps_capacity_at(PS_TYPE_LABEL, 0, dy, PR_SAFE_R) ==
+                  ps_capacity(PS_TYPE_LABEL, dy, PR_SAFE_R),
+                  "on-axis capacity disagreed with itself at dy=%d", (int)dy);
+        }
+
+
+        /* EVERY DETAIL HEADER MUST FIT WHERE IT IS DRAWN.
+         *
+         * At dx=-72, dy=-164 the glass allows sixteen characters at
+         * PS_TYPE_MICRO. Six headers in the tree were longer than that, and
+         * four of them were measured running off the panel on real captures.
+         * They were shortened rather than truncated - the backstop exists for
+         * a string nobody anticipated, not as a licence to write long ones. */
+        {
+            const unsigned hdr = ps_capacity_at(PS_TYPE_MICRO, -72, -164,
+                                                PR_SAFE_R);
+            CHECK(hdr >= 16u, "the header slot shrank to %u characters", hdr);
+            /* The longest header shipped, as a literal, so adding a longer one
+             * fails here rather than on the glass. */
+            CHECK(strlen("CHANNEL ACTIVITY") <= hdr,
+                  "the longest detail header no longer fits (%u allowed)", hdr);
+        }
+        /* A box pushed past the chord gets nothing rather than a negative. */
+        CHECK(ps_capacity_at(PS_TYPE_MICRO, 300, 0, PR_SAFE_R) == 0,
+              "a box outside the circle must get no room");
+    }
 }

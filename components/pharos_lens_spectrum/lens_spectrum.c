@@ -294,7 +294,7 @@ static const pharos_lens_t k_spectrum = {
     .ingest = spectrum_ingest,
     .display = k_spectrum_display,
     .row = k_spectrum_row,
-    .row_head_left = "CHANNEL  ACTIVITY",
+    .row_head_left = "CHANNEL ACTIVITY",
     .row_head_right = "PEAK",
 };
 
