@@ -39,6 +39,25 @@ static SemaphoreHandle_t s_lock;
 static bool s_camp_requested;
 static uint8_t s_camp_channel;
 
+/* THE OPERATOR'S STANDING CHOICE, KEPT APART FROM THE LENS' OWN LOCK-ON.
+ *
+ * s_camp_requested is written by TWO things: the operator, through
+ * pharos_lens_watch_camp(), and the lens itself, through watch_camp_on() when
+ * the rate family fires. Only the first is a standing choice.
+ *
+ * Making the whole flag survive a mount wedged the radio. The auto-lock sets
+ * s_camp_requested and a 20 s timer; the timer is session state and mount
+ * clears it, but the flag was not, so a lock-on interrupted by ANY navigation
+ * away from Watch came back camped with no timer left to expire it - and the
+ * tick cannot undo that, because every path that clears the camp is guarded by
+ * s_lock_ms being non-zero or by the radio not already being camped. Every
+ * Watch turn for the rest of the session then listened to one channel.
+ *
+ * So the operator's choice is held separately and mount restores the lens to
+ * it, which erases an auto-lock and preserves a `watch camp 6`. */
+static bool s_operator_camp;
+static uint8_t s_operator_channel;
+
 /* ---- the lock-on -----------------------------------------------------
  *
  * The confidence ceiling is a function of how much of the channel this
@@ -70,6 +89,11 @@ static bool watch_mount(void)
     memset(&s_verdict, 0, sizeof(s_verdict));
     s_lock_ms = 0;
     s_survey_ms = 0;
+    /* Back to whatever the OPERATOR last asked for - which erases an auto
+     * lock-on and keeps a `watch camp 6`. See s_operator_camp. */
+    s_camp_requested = s_operator_camp;
+    s_camp_channel = s_operator_channel;
+    s_manual = s_operator_camp;
     /* WHAT THE OPERATOR ASKED FOR IS NOT SESSION STATE.
      *
      * s_manual and s_camp_requested are a standing choice - "watch THIS
@@ -269,12 +293,18 @@ static void watch_select(void)
         }
         s_manual = true;
         s_lock_ms = 0;
+        /* A tap on the glass is the operator too, so it is a standing choice
+         * and survives a mount - unlike the automatic lock-on, which does not.
+         * See s_operator_camp. */
+        s_operator_camp = true;
+        s_operator_channel = ch;
         watch_camp_on(ch);
         ESP_LOGI(TAG, "operator camped on channel %u", ch);
     } else {
         s_manual = false;
         s_lock_ms = 0;
         s_survey_ms = 0;
+        s_operator_camp = false;
         watch_survey_now();
         ESP_LOGI(TAG, "operator released the camp; surveying");
     }
@@ -305,6 +335,9 @@ void pharos_lens_watch_camp(uint8_t channel)
     s_lock_ms = 0;
     s_camp_requested = true;
     s_camp_channel = channel;
+    /* The operator's own, so it survives a mount. */
+    s_operator_camp = true;
+    s_operator_channel = channel;
     /* STATE ONLY. The radio is restarted by whoever owns the lens lifecycle
      * - see the note in console_glue.c. Tearing the Wi-Fi driver down and
      * bringing it back up here ran that on the caller's task, which for the
@@ -318,6 +351,7 @@ void pharos_lens_watch_survey(void)
     s_lock_ms = 0;
     s_survey_ms = 0;
     s_camp_requested = false;
+    s_operator_camp = false;
     ESP_LOGI(TAG, "survey requested (operator); lock-on re-armed");
 }
 
