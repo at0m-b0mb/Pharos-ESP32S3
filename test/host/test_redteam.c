@@ -174,8 +174,71 @@ static void test_flood_beacon_poverty(void)
     CHECK(u.ie_measured == 0, "and it says so (%u)", (unsigned)u.ie_measured);
 }
 
+/* AN UNMEASURED WINDOW IS NOT A TEN-SECOND WINDOW.
+ *
+ * window_ms of 0 means the caller never timed the sweep - the same "not
+ * measured" convention pf_observe_ies uses for ie_count, where the header is
+ * explicit that a detector must not read its own missing instrumentation as a
+ * finding. Zero was being substituted with ten seconds and then used as the
+ * denominator of a churn rate, so the engine published SUSPICIOUS off a
+ * window nobody had timed, with nothing in the verdict to say so. */
+static void test_flood_unmeasured_window_is_not_a_rate(void)
+{
+    banner("flood: an unmeasured window cannot produce a confident rate");
+
+    pf_engine_t e;
+    pf_verdict_t v;
+
+    /* Enough distinct names, spread over a long span, that the rate machinery
+     * would otherwise be confident - and a context that admits it never
+     * measured how long it was listening. */
+    pf_context_t blind = fctx(1000);
+    blind.window_ms = 0;
+
+    pf_reset(&e);
+    for (unsigned i = 0; i < 24u; i++) {
+        uint8_t b[6];
+        real_bssid(b, i, 1);
+        char name[20];
+        snprintf(name, sizeof(name), "pwn-%u", i);
+        pf_observe(&e, b, name, (uint8_t)strlen(name), 1000000ull * i);
+    }
+    pf_evaluate(&e, &blind, &v);
+
+    CHECK((v.notes & PF_NOTE_SHORT) != 0,
+          "a window of zero must be reported as unjudgeable");
+    CHECK(v.score <= 49,
+          "an unmeasured window scored %u, past the short-window cap",
+          v.score);
+    CHECK(v.band < PF_BAND_FLOOD_LIKELY,
+          "and it must not call a flood likely (got %s)",
+          pf_band_name(v.band));
+
+    /* AND THE SAME EVIDENCE WITH A MEASURED WINDOW IS STILL JUDGED. The point
+     * is not to make the engine timid - it is to stop it being confident
+     * about arithmetic it invented. */
+    pf_context_t timed = fctx(1000);
+    timed.window_ms = 24000;
+    pf_verdict_t t;
+    pf_reset(&e);
+    for (unsigned i = 0; i < 24u; i++) {
+        uint8_t b[6];
+        real_bssid(b, i, 1);
+        char name[20];
+        snprintf(name, sizeof(name), "pwn-%u", i);
+        pf_observe(&e, b, name, (uint8_t)strlen(name), 1000000ull * i);
+    }
+    pf_evaluate(&e, &timed, &t);
+    CHECK((t.notes & PF_NOTE_SHORT) == 0,
+          "a 24-second window is not short");
+    CHECK(t.score >= v.score,
+          "the timed reading (%u) should not be lower than the blind one (%u)",
+          t.score, v.score);
+}
+
 void test_flood(void)
 {
+    test_flood_unmeasured_window_is_not_a_rate();
     test_flood_beacon_poverty();
     test_flood_rate_needs_a_real_denominator();
 

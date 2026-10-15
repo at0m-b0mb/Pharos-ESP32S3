@@ -35,12 +35,31 @@
 #include "pharos_aegis.h"
 #include "pharos_census.h"
 #include "pharos_dot11.h"
+#include "pharos_flood.h"
 #include "pharos_twin.h"
+#include "pharos_vigil.h"
 
 static unsigned g_checks;
 static unsigned g_fails;
 static uint64_t g_seed;
 static uint64_t g_state;
+
+/* HOW OFTEN EACH GUARDED INVARIANT WAS ACTUALLY TESTED.
+ *
+ * An invariant behind an `if` proves nothing if the condition never holds, and
+ * a fuzzer that never reaches the interesting state passes silently and looks
+ * like evidence. These are printed at the end so a vacuous run is visible
+ * rather than reassuring. */
+static struct {
+    unsigned aegis_single;
+    unsigned twin_tie;
+    unsigned census_uncapped;
+    unsigned flood_short_window;
+    unsigned flood_thin_dwell;
+    unsigned vigil_no_move;
+    unsigned vigil_following;
+    unsigned top_band;
+} g_hit;
 
 #define CHECK(cond, ...)                                                       \
     do {                                                                       \
@@ -144,6 +163,7 @@ static void drive_aegis(void)
         /* SINGLE means exactly that. If correlation added nothing because
          * only one stage spoke, two stages must not be raised. */
         if (v.notes & PA_NOTE_SINGLE) {
+            g_hit.aegis_single++;
             CHECK(v.n_raised <= 1u, "aegis says SINGLE with %u raised",
                   v.n_raised);
         }
@@ -363,6 +383,7 @@ static void drive_census(void)
           "census graded one beacon two ways: %u then %u", g.score,
           again.score);
 
+    if (g.caps_applied == 0u) { g_hit.census_uncapped++; }
     if (g.caps_applied == 0u && g.grade != PC_GRADE_UNGRADED &&
         (unsigned)g.grade <= (unsigned)PC_GRADE_A_PLUS) {
         const unsigned k = (unsigned)g.grade;
@@ -394,6 +415,194 @@ static void check_grade_monotonicity(void)
     }
 }
 
+
+static void drive_flood(void)
+{
+    pf_engine_t e;
+    pf_reset(&e);
+
+    uint64_t t = (uint64_t)rnd_below(1000000);
+    const unsigned steps = 1u + rnd_below(40);
+    /* Whether this stream measured information elements at all. A caller that
+     * cannot count them passes 0 for every frame, and that must read as
+     * missing instrumentation rather than as a finding. */
+    const bool measured = rnd_below(2) != 0;
+
+    for (unsigned i = 0; i < steps; i++) {
+        uint8_t bssid[6];
+        for (unsigned k = 0; k < 6u; k++) { bssid[k] = (uint8_t)rnd(); }
+        char ssid[33];
+        const unsigned len = rnd_below(33);
+        for (unsigned k = 0; k < len; k++) {
+            ssid[k] = (char)(0x20u + rnd_below(0x5Fu));
+        }
+        ssid[len] = '\0';
+        t = hostile_time(t);
+        const uint8_t ies = measured ? (uint8_t)(1u + rnd_below(30)) : 0u;
+        pf_observe_ies(&e, bssid, ssid, (uint8_t)len, ies, t);
+    }
+
+    pf_context_t ctx;
+    ctx.dwell_permil     = (uint16_t)rnd_below(1200); /* past 1000 on purpose */
+    ctx.bus_yield_permil = (uint16_t)rnd_below(1200);
+    ctx.window_ms        = (uint32_t)rnd_below(20000);
+
+    pf_verdict_t v;
+    memset(&v, 0xAA, sizeof(v));
+    pf_evaluate(&e, &ctx, &v);
+
+    check_honest(v.score, v.raw_score, v.ceiling, "flood");
+    if (v.band == PF_BAND_FLOOD_LIKELY) { g_hit.top_band++; }
+    CHECK(pf_band_name(v.band) != NULL, "flood band %u has no name",
+          (unsigned)v.band);
+    CHECK(pf_band_advice(v.band) != NULL, "flood band %u has no advice",
+          (unsigned)v.band);
+    CHECK((unsigned)v.band <= (unsigned)PF_BAND_FLOOD_LIKELY,
+          "flood band %u is not a band", (unsigned)v.band);
+
+    /* A WINDOW TOO SHORT TO JUDGE A RATE MUST SAY SO.
+     *
+     * "No rate from under three seconds" - extrapolating churn from a
+     * fraction of a second is arithmetic, not evidence, and the number it
+     * produces is the one somebody acts on. */
+    if (ctx.window_ms < PF_MIN_WINDOW_MS) {
+        g_hit.flood_short_window++;
+        CHECK((v.notes & PF_NOTE_SHORT) != 0 || v.score == 0u,
+              "flood judged a %u ms window at %u without marking it short",
+              ctx.window_ms, v.score);
+        CHECK(v.band != PF_BAND_FLOOD_LIKELY,
+              "flood called a flood likely from a %u ms window",
+              ctx.window_ms);
+    }
+
+    /* A THIN DWELL MUST WEAKEN THE CLAIM, NOT STRENGTHEN IT. While the
+     * receiver is hopping it sees a fraction of the air, so a churn claim
+     * built from it cannot be the confident one. */
+    if (ctx.dwell_permil < PF_MIN_DWELL_PERMIL && v.score > 0u) {
+        g_hit.flood_thin_dwell++;
+        CHECK((v.notes & PF_NOTE_THIN_DWELL) != 0 ||
+              v.band != PF_BAND_FLOOD_LIKELY,
+              "flood called a flood likely on %u permil dwell without "
+              "marking the dwell thin", ctx.dwell_permil);
+    }
+}
+
+/* A TRACKER-SHAPED ADVERTISEMENT.
+ *
+ * Vigil keys on the manufacturer-specific element and its company ID, and it
+ * counts how many locales each ADDRESS has been heard in. Six fresh random
+ * bytes per advert therefore produce a crowd of strangers that is never heard
+ * twice, and the engine correctly concludes nothing - which made the
+ * "FOLLOWING needs a move" invariant vacuous, since FOLLOWING was
+ * unreachable. The generator has to produce the interesting shape or the
+ * assertion below is decoration. */
+static unsigned gen_tracker_adv(uint8_t *b, unsigned cap)
+{
+    unsigned n = 0;
+    if (cap < 8u) { return 0u; }
+    /* Flags, as nearly every advert carries. */
+    b[n++] = 0x02; b[n++] = 0x01; b[n++] = (uint8_t)rnd();
+    /* Manufacturer specific, company ID little-endian. Apple's 0x004C most
+     * of the time, because that is the population being followed. */
+    const unsigned payload = 2u + rnd_below(12);
+    if (n + 2u + payload > cap) { return n; }
+    b[n++] = (uint8_t)(1u + payload);
+    b[n++] = 0xFF;
+    const uint16_t company = (rnd_below(4) == 0) ? (uint16_t)rnd()
+                                                 : (uint16_t)0x004C;
+    b[n++] = (uint8_t)(company & 0xFFu);
+    b[n++] = (uint8_t)(company >> 8);
+    for (unsigned i = 2; i < payload; i++) { b[n++] = (uint8_t)rnd(); }
+    return n;
+}
+
+static void drive_vigil(void)
+{
+    pv_state_t st;
+    pv_reset(&st);
+
+    /* Whether the person actually went anywhere. This is the hinge of the
+     * whole engine: a tracker that is merely NEARBY is not following you. */
+    const bool moved = rnd_below(2) != 0;
+    pv_set_moved(&st, moved);
+
+    /* A SMALL POOL OF RECURRING ADDRESSES. One of these is the tag that keeps
+     * turning up; the rest are the ordinary population of a public place. */
+    uint8_t pool[4][6];
+    const unsigned n_pool = 1u + rnd_below(4);
+    for (unsigned i = 0; i < n_pool; i++) {
+        for (unsigned k = 0; k < 6u; k++) { pool[i][k] = (uint8_t)rnd(); }
+    }
+
+    uint64_t t = (uint64_t)rnd_below(1000000);
+    const unsigned locales = 1u + rnd_below(5);
+
+    for (unsigned l = 0; l < locales; l++) {
+        /* Somewhere new, then the same tags heard again there - which is what
+         * being followed looks like from the receiver's side. */
+        t = (rnd_below(10) == 0) ? hostile_time(t)
+                                 : t + (uint64_t)rnd_below(90000000) + 1ull;
+        pv_observe_locale(&st, (uint32_t)rnd(), t);
+
+        const unsigned steps = 1u + rnd_below(8);
+        for (unsigned i = 0; i < steps; i++) {
+            uint8_t data[40];
+            /* Minutes, not milliseconds. Being followed is measured over a
+             * walk between places, so a stream of two-second steps never
+             * reaches the windows this engine reasons in - and an invariant
+             * about its top band would then be guarding a state the fuzzer
+             * cannot produce. */
+            const unsigned len = (rnd_below(8) == 0)
+                                     ? rnd_below(sizeof(data) + 1u)
+                                     : gen_tracker_adv(data, sizeof(data));
+            if (len > sizeof(data)) { continue; }
+            if (rnd_below(8) == 0) {
+                for (unsigned k = 0; k < len; k++) { data[k] = (uint8_t)rnd(); }
+            }
+            t = (rnd_below(12) == 0) ? hostile_time(t)
+                                     : t + (uint64_t)rnd_below(45000000) + 1ull;
+            pv_observe_adv(&st, pool[rnd_below(n_pool)], (uint8_t)rnd_below(5),
+                           (int8_t)(-(int)rnd_below(100)), data, (uint8_t)len,
+                           t);
+        }
+        /* Re-assert what the caller knows: a lens sets this each tick, and an
+         * engine must not quietly forget it across observations. */
+        pv_set_moved(&st, moved);
+    }
+
+    pv_verdict_t v;
+    memset(&v, 0xAA, sizeof(v));
+    pv_evaluate(&st, hostile_time(t), &v);
+
+    check_honest(v.score, v.raw_score, v.ceiling, "vigil");
+    CHECK(pv_band_name(v.band) != NULL, "vigil band %u has no name",
+          (unsigned)v.band);
+    CHECK((unsigned)v.band < (unsigned)PV_BAND_COUNT,
+          "vigil band %u is not a band", (unsigned)v.band);
+
+    if (v.band == PV_BAND_FOLLOWING) { g_hit.vigil_following++; }
+
+    /* FOLLOWING NEEDS EVIDENCE THE PERSON ACTUALLY MOVED.
+     *
+     * Everything else this engine can see - a tag nearby, a tag nearby for a
+     * long time - is equally consistent with sitting in a cafe next to
+     * somebody else's headphones. Only presence ACROSS A MOVE distinguishes
+     * being followed from being near, so without a move the top band must be
+     * unreachable however loud and persistent the advertiser is. */
+    if (!moved) {
+        g_hit.vigil_no_move++;
+        /* The gate is a CEILING, not a deletion: the sightings still happened
+         * and are still reported. What changes is what may be concluded from
+         * them - and because the ceiling is reached by every stream, this is
+         * the form of the invariant that is never vacuous. */
+        CHECK(v.ceiling <= 69u,
+              "without a move the ceiling allowed FOLLOWING (%u)", v.ceiling);
+        CHECK(v.band != PV_BAND_FOLLOWING,
+              "vigil said FOLLOWING at %u without the person having moved",
+              v.score);
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned long iters = (argc > 1) ? strtoul(argv[1], NULL, 10) : 50000ul;
@@ -412,11 +621,37 @@ int main(int argc, char **argv)
         drive_aegis();
         drive_twin();
         drive_census();
+        drive_flood();
+        drive_vigil();
     }
 
     check_grade_monotonicity();
 
     printf("%u invariants checked, %u failures\n", g_checks, g_fails);
+
+    /* The reachability report. A zero here means the invariant above it was
+     * never exercised, which makes the run worth less than it looks. */
+    printf("  states reached: aegis-single=%u census-uncapped=%u "
+           "flood-short-window=%u flood-thin-dwell=%u\n",
+           g_hit.aegis_single, g_hit.census_uncapped,
+           g_hit.flood_short_window, g_hit.flood_thin_dwell);
+    printf("  states reached: vigil-no-move=%u vigil-following=%u "
+           "flood-likely=%u\n",
+           g_hit.vigil_no_move, g_hit.vigil_following, g_hit.top_band);
+    /* Each of these guards an invariant that would otherwise pass by never
+     * being evaluated. vigil-following is reported but NOT required: random
+     * streams do not reach that band, because it needs one tag heard across
+     * three locales over several minutes, and the engine is right to withhold
+     * it otherwise. The band itself is proven deterministically in the host
+     * suite (test_vigil_movement_gates_following); what this harness proves
+     * is the mechanism underneath it - that without a move the CEILING never
+     * permits the accusation, across every stream it can build. */
+    if (g_hit.aegis_single == 0u || g_hit.census_uncapped == 0u ||
+        g_hit.flood_short_window == 0u || g_hit.flood_thin_dwell == 0u ||
+        g_hit.vigil_no_move == 0u) {
+        printf("  WARNING: a guarded invariant was never exercised\n");
+        return 1;
+    }
     if (g_fails) {
         printf("replay one with: make replay-state SEED=<the seed above>\n");
     }

@@ -41,7 +41,9 @@ HDRS := $(wildcard $(ROOT)/components/pharos_engine/include/*.h) \
 STATE_SRCS := fuzz_state.c \
   $(ROOT)/components/pharos_engine/pharos_aegis.c \
   $(ROOT)/components/pharos_engine/pharos_census.c \
-  $(ROOT)/components/pharos_engine/pharos_twin.c
+  $(ROOT)/components/pharos_engine/pharos_twin.c \
+  $(ROOT)/components/pharos_engine/pharos_flood.c \
+  $(ROOT)/components/pharos_engine/pharos_vigil.c
 
 ITERS ?= 200000
 STATE_ITERS ?= 50000

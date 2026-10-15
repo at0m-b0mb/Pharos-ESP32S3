@@ -206,7 +206,12 @@ misbehaving, because the Wi-Fi driver callback, the NimBLE host task and the
 dwell ring are three producers with their own clocks reaching one consumer.
 Timestamps arrive out of order, repeat, and jump by an hour.
 
-It has already paid for itself three times:
+It also reports which guarded states it actually reached, and fails if one was
+never exercised — an invariant behind an `if` proves nothing when the condition
+never holds, and a fuzzer that never reaches the interesting state passes
+silently and looks like evidence.
+
+It has already paid for itself four times:
 
 - **Twin's verdict depended on the order the scan filled its table.** Three
   tie-breaks resolved to whichever access point sat earlier in the array, so
@@ -219,6 +224,12 @@ It has already paid for itself three times:
   and went straight to the glass. The numbers are clamped at the door now, and
   the aggregate ceiling is bounded by `PA_CEILING_MAX`, which is 99 and not
   100 on purpose.
+- **Flood treated an unmeasured window as a ten-second one.** A `window_ms`
+  of 0 means the caller never timed the sweep, and it was being substituted
+  with ten seconds and then used as the denominator of a churn rate — so the
+  engine published SUSPICIOUS off a window nobody had timed. The clearest
+  statement of it is in the test: the same 24 networks scored **58 blind and
+  51 timed**, so failing to measure made the detector *more* confident.
 - **Two of its own first invariants were wrong**, which is worth recording:
   one assumed Census's four component scores were ceilings, and one assumed a
   uniformly badly configured roaming group must score zero. Both were my

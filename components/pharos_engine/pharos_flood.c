@@ -171,7 +171,22 @@ void pf_evaluate(const pf_engine_t *e, const pf_context_t *ctx, pf_verdict_t *ou
     /* --- VOLUME: how fast do brand-new names appear? --------------------
      * Corrected for dwell and yield so a hopping receiver's thin sample is
      * extrapolated to a true rate, then held honest by the ceiling. */
-    uint32_t elapsed_ms = ctx->window_ms ? ctx->window_ms : 10000u;
+    /* A WINDOW OF ZERO IS NOT A WINDOW.
+     *
+     * window_ms of 0 means the caller never measured one - the same "not
+     * measured" convention pf_observe_ies uses for ie_count, where the header
+     * is explicit that a detector must not read its own missing
+     * instrumentation as a finding. Substituting ten seconds and dividing by
+     * it does precisely that: the rate below becomes "new names per ten
+     * seconds nobody timed", and it published 65 and 68 - SUSPICIOUS - off a
+     * denominator it invented, with nothing in the verdict to say so.
+     *
+     * The substitution stays, because some denominator is needed to produce
+     * any reading at all. What it may not do is produce a confident one, so
+     * the window is marked short: that is what PF_NOTE_SHORT means, and it
+     * is what holds the score to 49 below. */
+    const bool window_measured = ctx->window_ms != 0u;
+    uint32_t elapsed_ms = window_measured ? ctx->window_ms : 10000u;
     if (e->last_us > e->first_us) {
         const uint64_t span = (e->last_us - e->first_us) / 1000ull;
         if (span > 0 && span < elapsed_ms) {
@@ -193,6 +208,9 @@ void pf_evaluate(const pf_engine_t *e, const pf_context_t *ctx, pf_verdict_t *ou
     if (elapsed_ms < PF_MIN_WINDOW_MS) {
         elapsed_ms = (ctx->window_ms > PF_MIN_WINDOW_MS) ? ctx->window_ms
                                                          : PF_MIN_WINDOW_MS;
+        out->notes |= PF_NOTE_SHORT;
+    }
+    if (!window_measured) {
         out->notes |= PF_NOTE_SHORT;
     }
 
