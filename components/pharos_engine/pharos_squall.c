@@ -102,8 +102,41 @@ static void classify(pq_channel_t *c)
      * condition worth naming. */
     const bool barren = fps < 10;
 
-    if (very_loud && barren) {
-        /* Power in the band that will not resolve into frames. */
+    /* ENERGY THAT WILL NOT RESOLVE, MEASURED FROM WHAT WILL NOT RESOLVE.
+     *
+     * The denial test used to be `very_loud && barren` - busy airtime with
+     * nothing decoding - and on this radio that could never both be true.
+     * There is no airtime register on the ESP32-S3, so pharos_radio
+     * ESTIMATES busy by adding a nominal 400 us per DECODED frame, which
+     * makes busy_permil exactly 0.4 x fps. `very_loud` therefore means fps
+     * >= 1625 and `barren` means fps < 10: the jam branch was arithmetically
+     * unreachable, and Squall could not report a jam on real hardware at all.
+     *
+     * The signature was being collected and ignored. A jammed channel is one
+     * the radio HEARS and cannot decode, and frames that arrive and fail
+     * their checksum are exactly that - fcs_fail_total, "frames heard but not
+     * resolvable", already accumulated per channel because the lens asks the
+     * driver for FCS failures.
+     *
+     * So denial is now: a channel where most of what arrived did not resolve,
+     * and almost nothing did. The old `loud` branches remain for the airtime
+     * reading they can still support, which is congestion. */
+    const uint32_t heard = c->frames_total + c->fcs_fail_total;
+    const uint32_t broken =
+        heard ? (uint32_t)(((uint64_t)c->fcs_fail_total * 1000ull) / heard) : 0u;
+    /* Enough arrivals to say anything at all. A handful of corrupt frames is
+     * ordinary radio, not an attack. */
+    const bool measurable = heard >= 40u;
+    const bool unresolvable = broken >= 500u;
+
+    if (measurable && unresolvable && barren) {
+        /* Heard, and would not resolve. */
+        c->state = PQ_STATE_DENIAL;
+        c->severity = (uint8_t)clamp_u32(70u + (broken - 500u) / 25u, 70, 95);
+    } else if (very_loud && barren) {
+        /* Kept for a radio that can report true airtime. On this one the
+         * condition cannot arise; it is not reachable arithmetic, and it
+         * costs nothing to leave correct. */
         c->state = PQ_STATE_DENIAL;
         c->severity = (uint8_t)clamp_u32(70u + (busy - 650u) / 12u, 70, 95);
     } else if (loud && productive) {

@@ -201,8 +201,80 @@ static void test_squall_a_long_camp_is_not_a_jam(void)
 }
 
 
+/* A JAM THE RADIO CAN ACTUALLY SEE.
+ *
+ * The denial test was "busy airtime with nothing decoding", and on this
+ * hardware that could never both be true. There is no airtime register on
+ * the ESP32-S3, so the radio estimates busy by adding a nominal 400 us per
+ * DECODED frame - which makes busy_permil exactly 0.4 x fps. very_loud
+ * (busy >= 650) therefore means fps >= 1625, and barren means fps < 10. The
+ * branch was arithmetically unreachable: Squall could not report a jam on
+ * the real device at all, and the operator reading CONGESTED or QUIET would
+ * never learn otherwise.
+ *
+ * The signature was being collected and ignored. A jammed channel is one the
+ * radio HEARS and cannot decode, and frames that arrive and fail their
+ * checksum are exactly that. */
+static void test_squall_a_jam_is_what_will_not_decode(void)
+{
+    banner("squall: a jam is energy that arrives and will not resolve");
+
+    const pq_context_t camped = ctx_of(1000, true);
+
+    /* What the radio really reports on a jammed channel: a trickle decoded,
+     * and a flood of frames that failed their checksum. busy_permil is left
+     * where the radio would put it - 0.4 x fps, which is nearly nothing. */
+    {
+        pq_state_table_t t;
+        pq_verdict_t v;
+        pq_reset(&t);
+        for (unsigned i = 0; i < 20u; i++) {
+            pq_dwell_t d = dw(6, 500, 2, 0, 1); /* 4 fps decoded, busy ~1 */
+            d.fcs_fail = 400;                   /* and 800 a second that did not */
+            pq_observe(&t, &d);
+        }
+        pq_evaluate(&t, &camped, &v);
+        CHECK(v.n_denial >= 1u,
+              "a channel heard loudly and decoding nothing is a jam "
+              "(n_denial=%u worst=%s)", v.n_denial, pq_state_name(v.worst));
+    }
+
+    /* AND ORDINARY RADIO IS NOT A JAM. A few corrupt frames among many good
+     * ones is every real channel; it must not reach the alarm. */
+    {
+        pq_state_table_t t;
+        pq_verdict_t v;
+        pq_reset(&t);
+        for (unsigned i = 0; i < 20u; i++) {
+            pq_dwell_t d = dw(6, 500, 500, 50, 200);
+            d.fcs_fail = 12;
+            pq_observe(&t, &d);
+        }
+        pq_evaluate(&t, &camped, &v);
+        CHECK_EQ(v.n_denial, 0);
+    }
+
+    /* AND A HANDFUL OF CORRUPT FRAMES ON A NEARLY SILENT CHANNEL IS NOT ONE
+     * EITHER - that is a quiet channel with some noise in it, and calling it
+     * an attack would be the false positive this engine refuses to make. */
+    {
+        pq_state_table_t t;
+        pq_verdict_t v;
+        pq_reset(&t);
+        for (unsigned i = 0; i < 20u; i++) {
+            pq_dwell_t d = dw(11, 500, 0, 0, 1);
+            d.fcs_fail = 1;
+            pq_observe(&t, &d);
+        }
+        pq_evaluate(&t, &camped, &v);
+        CHECK_EQ(v.n_denial, 0);
+    }
+}
+
+
 void test_squall(void)
 {
+    test_squall_a_jam_is_what_will_not_decode();
     test_squall_a_long_camp_is_not_a_jam();
     test_squall_broken_frames();
     banner("squall: busy, broken, or denied");
