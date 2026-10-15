@@ -491,11 +491,20 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
                             w[k + 6] == ':' && w[k + 7] == '"') {
                             uint8_t j = (uint8_t)(k + 8u);
                             uint8_t n = 0;
+                            uint8_t raw[PHAROS_EV_SSID_MAX];
                             while (j < w_len && w[j] != '"' &&
                                    n < PHAROS_EV_SSID_MAX) {
-                                ev.u.dot11.ssid[n++] = (char)w[j++];
+                                raw[n++] = w[j++];
                             }
-                            ev.u.dot11.ssid_len = n;
+                            /* THROUGH THE SAME DOOR AS AN SSID. This wrote the
+                             * bytes straight into the field, which is the one
+                             * path into ev.u.dot11.ssid that skipped the
+                             * sanitiser - and this name is JSON an attacker
+                             * wrote, so it can carry the ESC byte that drives
+                             * the operator's terminal. */
+                            ev.u.dot11.ssid_len = (uint8_t)pharos_copy_printable(
+                                ev.u.dot11.ssid,
+                                (unsigned)sizeof ev.u.dot11.ssid, raw, n);
                             break;
                         }
                     }
