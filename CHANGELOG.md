@@ -2,7 +2,7 @@
 
 ## v3.6.0 - the verdicts get fuzzed, and seven bugs fall out
 
-Seven commits since v3.5.1. v3.5.0 and v3.5.1 came out of an adversarial audit
+Ten commits since v3.5.1. v3.5.0 and v3.5.1 came out of an adversarial audit
 reading the code. This release comes from asking a different question: not "is
 this line wrong" but "what must be true of every input, and is it?"
 
@@ -75,6 +75,23 @@ second line between the two was budgeted as if it fitted and then silently
 ellipsized by the label underneath. The splitter also filled line one to the
 brim, stranding single words - "access point - tap for the" over "list". Each
 row now carries its own cap and the break is balanced between them.
+
+**And ten of fifty-six vendor prefixes named the wrong company.** Nobody had
+checked `k_ouis` against the IEEE registry. Hikvision and Dahua were each
+other, so each vendor's cameras were reported as the other's. 00:05:5D is
+D-Link not Netgear, 00:0F:7C is ACTi not Axis, CC:F7:35 is Amazon not Roku,
+30:05:5C is Brother not HP. C8:3F:26 belongs to Microsoft and was labelled
+Fitbit; D8:8C:79 belongs to Google and was labelled Garmin, and both carried
+`RD_WEARABLE`, so the device class was derived from a vendor that was not
+there. 00:62:6E is in no registry at all, and DA:A1:19 cannot be in one - DA
+has the locally-administered bit set, so the table was naming a RANDOMISED
+address as a Google media device.
+
+`tools/check_ouis.py` keeps it honest, and is worth running before trusting a
+new row: 57 entries, 57 confirmed. The idea came from SquachWatch, which
+published the same audit of its own table and found a prefix labelled
+"Vigilant" for eleven releases that is registered to Sonos. Checked against
+the registry, not against their table.
 
 Every fix was verified by reverting it and watching the tests name the failure.
 Two of the new harness's own invariants were wrong and were caught the same way
