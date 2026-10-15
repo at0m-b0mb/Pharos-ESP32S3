@@ -53,7 +53,9 @@
 #include "pharos_bus.h"
 #include "pharos_lens_census.h"
 #include "pharos_pulse.h"
+#include "pharos_census.h"
 #include "pharos_lens.h"
+#include "pharos_twin.h"
 #include "pharos_lens_census.h"
 #include "pharos_radio.h"
 #include "pharos_watch.h"
@@ -72,7 +74,31 @@ static SemaphoreHandle_t s_lock;
  * network's own BSSID. See frame_wears_my_name(). Bounded: a name being worn
  * by more radios than this is already the finding. */
 #define WARD_MAX_IMPOSTORS 4
-static uint8_t s_impostor[WARD_MAX_IMPOSTORS][6];
+
+/* THE GROUP WEARING THE GUARDED NAME, AND WHY IT IS A GROUP RATHER THAN A
+ * COUNT.
+ *
+ * This used to be a list of BSSIDs, and any entry in it was reported as an
+ * impostor in alarm red. An Extended Service Set is by definition one SSID on
+ * several BSSIDs, so that told an operator their own mesh node, extender or
+ * second office access point was impersonating their network - permanently,
+ * with no way to clear it short of re-adopting.
+ *
+ * pharos_twin.h opens by refusing exactly this claim: "a normal corporate
+ * network has one SSID on twenty BSSIDs, and that is not an attack, it is
+ * roaming. So in this engine BSSID multiplicity scores exactly zero." Ward was
+ * making the bare-multiplicity claim that engine exists to avoid, with none of
+ * its posture, identity or behaviour families to qualify it.
+ *
+ * So Ward stops answering this question itself and hands the group to the
+ * engine that already answers it - and hands it something Twin usually has to
+ * do without: a profile. The operator ADOPTED a BSSID, so the known-good
+ * member is not a guess here. */
+#define WARD_GROUP_MAX (WARD_MAX_IMPOSTORS + 1u)
+EXT_RAM_BSS_ATTR static pc_ap_t s_group[WARD_GROUP_MAX];
+static unsigned s_group_n;
+static pt_verdict_t s_twin;
+static bool s_twin_valid;
 
 /* Set when a tap found nothing to adopt, so the screen can say so. */
 static bool s_adopt_failed;
@@ -232,6 +258,54 @@ static bool frame_is_mine(const pharos_ev_dot11_t *d)
  *
  * Hidden and unnamed networks are excluded: an empty SSID matches every other
  * empty SSID, which would report the whole neighbourhood as impostors. */
+/* Fold one beacon into the same-SSID group Twin will be asked about. The
+ * fields are the ones pc_ap_t needs to compare members against each other:
+ * posture (rsn/privacy), identity (the address itself) and behaviour (channel,
+ * level, how richly dressed the beacon is). */
+static void ward_note_group(const pharos_ev_dot11_t *d)
+{
+    pc_ap_t *ap = 0;
+    for (unsigned i = 0; i < s_group_n; i++) {
+        if (memcmp(s_group[i].bssid, d->a3, 6) == 0) {
+            ap = &s_group[i];
+            break;
+        }
+    }
+    if (!ap) {
+        if (s_group_n >= WARD_GROUP_MAX) {
+            return; /* a name worn by more radios than this is already the finding */
+        }
+        ap = &s_group[s_group_n];
+        memset(ap, 0, sizeof(*ap));
+        memcpy(ap->bssid, d->a3, 6);
+        const uint8_t n = d->ssid_len > PC_SSID_MAX ? PC_SSID_MAX : d->ssid_len;
+        memcpy(ap->ssid, d->ssid, n);
+        ap->ssid[n] = '\0';
+        ap->ssid_len = n;
+        s_group_n++;
+    }
+    if (ap->beacons < 0xFFFFu) {
+        ap->beacons++;
+    }
+    ap->channel = d->channel;
+    ap->rssi = d->rssi;
+    ap->ie_count = d->ie_count;
+    ap->privacy = (d->flags & PHAROS_DOT11_F_PROTECTED) != 0;
+    if (d->rsn_flags & PHAROS_RSN_F_PRESENT) {
+        ap->rsn.has_rsn = true;
+        ap->rsn.mfp_capable  = (d->rsn_flags & PHAROS_RSN_F_MFP_CAPABLE) != 0;
+        ap->rsn.mfp_required = (d->rsn_flags & PHAROS_RSN_F_MFP_REQUIRED) != 0;
+        ap->rsn.has_sae = (d->rsn_flags & PHAROS_RSN_F_SAE) != 0;
+        ap->rsn.has_psk = (d->rsn_flags & PHAROS_RSN_F_PSK) != 0;
+        ap->rsn.has_owe = (d->rsn_flags & PHAROS_RSN_F_OWE) != 0;
+        ap->ccmp_pairwise = true;
+    }
+    ap->wps_present = (d->rsn_flags & PHAROS_RSN_F_WPS) != 0;
+    if (d->flags & PHAROS_DOT11_F_MFP_SEEN) {
+        ap->rsn.mfp_capable = true;
+    }
+}
+
 static bool frame_wears_my_name(const pharos_ev_dot11_t *d)
 {
     if (!s_target_ssid[0] || d->ssid_len == 0) {
@@ -277,14 +351,7 @@ static void ward_event(const pharos_event_t *ev)
          * measures volume on one BSSID and a second radio's beacons would
          * corrupt exactly the number it exists to compute. */
         if (frame_wears_my_name(&ev->u.dot11)) {
-            const uint8_t *b = ev->u.dot11.a3;
-            bool known = false;
-            for (unsigned i = 0; i < s_n_impostors; i++) {
-                if (memcmp(s_impostor[i], b, 6) == 0) { known = true; break; }
-            }
-            if (!known && s_n_impostors < WARD_MAX_IMPOSTORS) {
-                memcpy(s_impostor[s_n_impostors++], b, 6);
-            }
+            ward_note_group(&ev->u.dot11);
             s_impostor_frames++;
             s_impostor_rssi = ev->u.dot11.rssi;
         }
@@ -292,6 +359,12 @@ static void ward_event(const pharos_event_t *ev)
     }
     s_frames_mine++;
     s_last_mine_us = ev->t_us;
+    /* The guarded network is a member of its own group - Twin compares the
+     * suspect against its siblings, so the sibling has to be in the table. */
+    if (ev->u.dot11.subtype == PHAROS_ST_BEACON ||
+        ev->u.dot11.subtype == PHAROS_ST_PROBE_RESP) {
+        ward_note_group(&ev->u.dot11);
+    }
     pw_observe(&s_engine, &ev->u.dot11, ev->t_us);
 }
 
@@ -303,6 +376,8 @@ void pharos_lens_ward_guard(const uint8_t bssid[6], const char *ssid,
 {
     s_n_impostors = 0;
     s_impostor_frames = 0;
+    s_group_n = 0;
+    s_twin_valid = false;
     if (!bssid) {
         return;
     }
@@ -419,6 +494,31 @@ static void ward_tick(uint32_t dt_ms)
         .window_ms = 15000,
     };
     pw_evaluate(&s_engine, now, &ctx, &s_verdict);
+
+    /* AND ASK TWIN ABOUT THE GROUP WEARING THIS NAME.
+     *
+     * Ward does not decide this itself - see the note on s_group. The profile
+     * is the one BSSID the operator adopted, which is the strongest input Twin
+     * can be given and the one it normally has to do without. */
+    if (s_have_target && s_group_n > 0u) {
+        /* NO PROFILE, and that is deliberate.
+         *
+         * A pt_profile_t is a SITE BASELINE - every BSSID that is supposed to
+         * carry this SSID. The adopted address is one of them, not all of
+         * them, and handing Twin a profile of one tells it that every other
+         * member wears an address it should not: a six-node mesh came back
+         * with the identity family lit against five of its own nodes. That is
+         * the same false accusation this change exists to remove, arriving by
+         * a different route.
+         *
+         * Without a profile Twin applies the roaming rule it was written for,
+         * which is exactly what is wanted here. */
+        const pt_context_t tctx = { .dwell_permil = pharos_radio_dwell_permil(chan) };
+        pt_evaluate(s_group, s_group_n, 0, &tctx, &s_twin);
+        s_twin_valid = true;
+    } else {
+        s_twin_valid = false;
+    }
     xSemaphoreGive(s_lock);
 }
 
@@ -564,17 +664,28 @@ static bool k_ward_row(unsigned index, struct pharos_lens_row *out)
         if (!s_have_target) {
             snprintf(out->right, sizeof(out->right), "-");
             out->tone = PHAROS_TONE_DIM;
-        } else if (s_n_impostors == 0u) {
+        } else if (!s_twin_valid || s_group_n <= 1u) {
             snprintf(out->right, sizeof(out->right), "no one");
             out->tone = PHAROS_TONE_GOOD;
+        } else if ((s_twin.notes & PT_NOTE_ROAMING) ||
+                   s_twin.band <= PT_BAND_CONSISTENT) {
+            /* SEVERAL RADIOS, ONE NETWORK. That is what an Extended Service
+             * Set IS, and saying so plainly is the whole point of routing this
+             * through Twin: the operator's own mesh node is not an impostor. */
+            snprintf(out->right, sizeof(out->right), "%u, one net",
+                     s_group_n > 9u ? 9u : s_group_n);
+            out->tone = PHAROS_TONE_GOOD;
         } else {
-            if (s_n_impostors == 1u) {
-                snprintf(out->right, sizeof(out->right), "1 radio");
-            } else {
-                snprintf(out->right, sizeof(out->right), "%u radios",
-                         s_n_impostors > 9u ? 9u : s_n_impostors);
-            }
-            out->tone = PHAROS_TONE_BAD;
+            /* NOT pt_band_name(): "MIXED ESTATE" is twelve characters against
+             * a field of eleven, so it would arrive here already cut. These
+             * are the same bands said short enough to survive the contract,
+             * and test_ward asserts every one of them fits. */
+            const char *w = (s_twin.band >= PT_BAND_TWIN_LIKELY) ? "TWIN LIKELY"
+                          : (s_twin.band == PT_BAND_ANOMALOUS)   ? "ODD ONE OUT"
+                                                                 : "MIXED";
+            snprintf(out->right, sizeof(out->right), "%s", w);
+            out->tone = (s_twin.band >= PT_BAND_TWIN_LIKELY) ? PHAROS_TONE_BAD
+                                                             : PHAROS_TONE_WARN;
         }
         return true;
     case 1:

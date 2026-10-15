@@ -4,6 +4,7 @@
 
 #include "pharos_census.h"
 #include "pharos_dial.h"
+#include "pharos_lens.h"
 #include "pharos_report.h"
 #include "pharos_twin.h"
 #include "test_support.h"
@@ -239,6 +240,57 @@ void test_twin(void)
     CHECK_EQ(v.families, 0);
     CHECK(v.score <= 19, "six BSSIDs on one SSID is not an attack (got %u)", v.score);
     CHECK_EQ(v.members, 6);
+
+    /* WARD ASKS THE SAME ENGINE NOW, AND WITH A BETTER INPUT.
+     *
+     * Ward used to call any BSSID carrying the guarded SSID an impostor and
+     * lead with it in alarm red - the bare-multiplicity claim this engine
+     * opens by refusing. So an operator guarding a mesh network was told their
+     * own second node was impersonating it, permanently.
+     *
+     * Ward hands the group here instead, with a profile of one: the BSSID the
+     * operator ADOPTED. That is the strongest input this engine takes and the
+     * one it usually has to do without, so a guarded mesh must come out at
+     * least as calm as the same group with no profile at all. */
+    {
+        /* NO PROFILE. A profile is a SITE BASELINE - every BSSID that should
+         * carry this name - and the adopted address is one of them, not all.
+         * Handed a profile of one, this engine lights the identity family
+         * against every other member: measured at families=2 on a six-node
+         * mesh, which is the same false accusation by another route. */
+        pt_verdict_t w;
+        pt_evaluate(roam, 6, NULL, &ctx, &w);
+        CHECK_EQ(w.band, PT_BAND_CONSISTENT);
+        CHECK(w.score <= 19,
+              "a guarded mesh is still not an attack (got %u)", w.score);
+        CHECK_EQ(w.families, 0);
+
+        /* Two nodes is the ordinary home case, and the one that used to read
+         * as "1 radio wearing your name" in alarm red. */
+        pt_verdict_t two;
+        pt_evaluate(roam, 2, NULL, &ctx, &two);
+        CHECK(two.band <= PT_BAND_CONSISTENT,
+              "a second mesh node is not an impostor (band %d, score %u)",
+              (int)two.band, two.score);
+    }
+
+    /* AND THE STRINGS WARD PRINTS MUST FIT THE ROW IT PRINTS THEM IN.
+     *
+     * pharos_lens_row::right is twelve bytes - eleven characters. The engine's
+     * own pt_band_name() returns "MIXED ESTATE", which is twelve, so routing
+     * it straight to the row would have arrived already cut. Ward says these
+     * instead, and this is what stops a longer one being added quietly. */
+    {
+        struct pharos_lens_row probe;
+        const char *shown[] = { "TWIN LIKELY", "ODD ONE OUT", "MIXED",
+                                "9, one net" };
+        for (unsigned i = 0; i < sizeof shown / sizeof shown[0]; i++) {
+            CHECK(strlen(shown[i]) < sizeof probe.right,
+                  "'%s' is %u chars and the row holds %u",
+                  shown[i], (unsigned)strlen(shown[i]),
+                  (unsigned)sizeof probe.right - 1u);
+        }
+    }
 
     /* An open member of a protected SSID, on a software address, on its own
      * channel, far louder than the infrastructure. */
